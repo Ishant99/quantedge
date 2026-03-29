@@ -4,6 +4,8 @@ A production-grade AI trading agent for Indian stock markets (NSE/BSE).
 Scans 200 stocks daily, generates signals using TA + sentiment + LLM,
 and executes trades via Zerodha Kite API.
 
+<!-- CI/CD test: 2026-03-29 -->
+
 ---
 
 ## 🚀 Quick Start
