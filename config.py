@@ -9,24 +9,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# Helper: read from user_settings.json first, then env var, then default.
+# This lets the dashboard configure everything without touching .env or SSH.
+# ---------------------------------------------------------------------------
+def _S(key: str, env_key: str = None, default=None):
+    """Priority: user_settings.json > env var > hardcoded default."""
+    try:
+        from settings.manager import get as _get
+        v = _get(key)
+        if v is not None and v != "":
+            return v
+    except Exception:
+        pass
+    return os.getenv(env_key or key, default)
+
 # -----------------------------------------------------------------------------
 # TRADING MODE — the single flag that controls everything
 # "paper" → no real orders, virtual portfolio, yfinance data
 # "live"  → real Zerodha orders, Kite WebSocket data
 # -----------------------------------------------------------------------------
-TRADING_MODE = os.getenv("TRADING_MODE", "paper")   # paper | live
+TRADING_MODE = _S("TRADING_MODE", "TRADING_MODE", "paper")   # paper | live
 
 # -----------------------------------------------------------------------------
 # VIRTUAL PORTFOLIO (paper mode)
 # -----------------------------------------------------------------------------
-VIRTUAL_CAPITAL = 1_000_000          # ₹10 Lakh starting virtual balance
+VIRTUAL_CAPITAL = int(_S("VIRTUAL_CAPITAL", "VIRTUAL_CAPITAL", 1_000_000))
 VIRTUAL_PORTFOLIO_FILE = "logs/virtual_portfolio.json"
 
 # -----------------------------------------------------------------------------
 # ZERODHA KITE API (live mode — fill via .env file)
 # -----------------------------------------------------------------------------
-KITE_API_KEY    = os.getenv("KITE_API_KEY", "")
-KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
+KITE_API_KEY    = _S("KITE_API_KEY",    "KITE_API_KEY",    "")
+KITE_API_SECRET = _S("KITE_API_SECRET", "KITE_API_SECRET", "")
 KITE_ACCESS_TOKEN_FILE = "logs/kite_access_token.txt"
 
 # -----------------------------------------------------------------------------
@@ -56,7 +71,7 @@ SMA_SHORT        = 20
 SMA_MID          = 50
 SMA_LONG         = 200
 VOLUME_AVG_DAYS  = 20
-MIN_TA_SCORE     = 5.0               # Minimum TA score to consider a stock
+MIN_TA_SCORE     = float(_S("MIN_TA_SCORE", "MIN_TA_SCORE", 5.0))
 # New indicators (ADX, Stochastic, OBV)
 ADX_PERIOD          = 14
 STOCH_K_PERIOD      = 14
@@ -83,27 +98,27 @@ SENTIMENT_DECAY_FACTOR    = 0.5        # weight halved for each extra 6h window
 # -----------------------------------------------------------------------------
 # STRATEGY ENGINE (M4)
 # -----------------------------------------------------------------------------
-TA_WEIGHT        = 0.50              # Weight of TA score in final signal
-SENTIMENT_WEIGHT = 0.30              # Weight of sentiment score
-TREND_WEIGHT     = 0.20              # Weight of broader trend
-MIN_CONFIDENCE   = 0.60             # Min confidence to generate BUY/SELL
-TOP_N_SIGNALS    = 10               # Top N stocks output each morning
+TA_WEIGHT        = float(_S("TA_WEIGHT",        "TA_WEIGHT",        0.50))
+SENTIMENT_WEIGHT = float(_S("SENTIMENT_WEIGHT", "SENTIMENT_WEIGHT", 0.30))
+TREND_WEIGHT     = 0.20
+MIN_CONFIDENCE   = float(_S("MIN_CONFIDENCE",   "MIN_CONFIDENCE",   0.60))
+TOP_N_SIGNALS    = int(  _S("TOP_N_SIGNALS",    "TOP_N_SIGNALS",    10))
 
 # -----------------------------------------------------------------------------
 # RISK MANAGEMENT (M5)
 # -----------------------------------------------------------------------------
-RISK_PER_TRADE_PCT   = 0.02         # 2% of portfolio per trade
-MAX_OPEN_POSITIONS   = 5            # Hard cap on concurrent positions
-REWARD_RISK_RATIO    = 2.0          # Take profit = 2× stop loss distance
-MAX_DRAWDOWN_PCT     = 0.10         # Agent pauses if portfolio drops 10%
-ATR_SL_MULTIPLIER    = 1.5          # ATR multiplier for stop-loss distance
-MAX_DAILY_LOSS_PCT   = 0.03         # Daily circuit breaker threshold (3%)
-MAX_WEEKLY_LOSS_PCT  = 0.07         # Weekly circuit breaker threshold (7%)
-TRAIL_PCT            = 0.02         # Trailing stop percentage (2%)
-CORRELATION_THRESHOLD= 0.75         # Max allowed correlation between positions
-MAX_SAME_SECTOR      = 2            # Max positions in same sector
-SECTOR_HOT_MULT      = 1.2          # Position size boost for hot sectors
-SECTOR_COLD_MULT     = 0.7          # Position size reduction for cold sectors
+RISK_PER_TRADE_PCT   = float(_S("RISK_PER_TRADE_PCT",   default=0.02))
+MAX_OPEN_POSITIONS   = int(  _S("MAX_OPEN_POSITIONS",   default=5))
+REWARD_RISK_RATIO    = float(_S("REWARD_RISK_RATIO",    default=2.0))
+MAX_DRAWDOWN_PCT     = 0.10
+ATR_SL_MULTIPLIER    = float(_S("ATR_SL_MULTIPLIER",   default=1.5))
+MAX_DAILY_LOSS_PCT   = float(_S("MAX_DAILY_LOSS_PCT",   default=0.03))
+MAX_WEEKLY_LOSS_PCT  = float(_S("MAX_WEEKLY_LOSS_PCT",  default=0.07))
+TRAIL_PCT            = float(_S("TRAIL_PCT",            default=0.02))
+CORRELATION_THRESHOLD= float(_S("CORRELATION_THRESHOLD",default=0.75))
+MAX_SAME_SECTOR      = int(  _S("MAX_SAME_SECTOR",      default=2))
+SECTOR_HOT_MULT      = float(_S("SECTOR_HOT_MULT",      default=1.2))
+SECTOR_COLD_MULT     = float(_S("SECTOR_COLD_MULT",     default=0.7))
 
 # -----------------------------------------------------------------------------
 # PORTFOLIO MEMORY — ChromaDB (M6)
@@ -125,20 +140,24 @@ BACKTEST_RESULTS_DIR = "logs/backtest_results/"
 # -----------------------------------------------------------------------------
 # "copilot"   → signals shown, user manually executes via dashboard
 # "autopilot" → scheduler auto-executes on schedule
-AGENT_MODE = os.getenv("AGENT_MODE", "copilot")
+AGENT_MODE = _S("AGENT_MODE", "AGENT_MODE", "copilot")
 
 # -----------------------------------------------------------------------------
 # DASHBOARD (M9)
 # -----------------------------------------------------------------------------
 DASHBOARD_PORT        = 8501
-DASHBOARD_REFRESH_SEC = 30
-SECTOR_HEATMAP_TOP_N  = 5    # top N stocks shown per sector in heatmap drilldown
+DASHBOARD_REFRESH_SEC = int(_S("DASHBOARD_REFRESH_SEC", default=30))
+SECTOR_HEATMAP_TOP_N  = 5
+
+# Scheduler scan times (IST) — configurable from dashboard
+SCAN_TIME_1 = _S("SCAN_TIME_1", default="09:15")
+SCAN_TIME_2 = _S("SCAN_TIME_2", default="15:00")
 
 # -----------------------------------------------------------------------------
 # ALERTS — Telegram (M9)
 # -----------------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN  = _S("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID    = _S("TELEGRAM_CHAT_ID",   "TELEGRAM_CHAT_ID",   "")
 
 # -----------------------------------------------------------------------------
 # LOGGING

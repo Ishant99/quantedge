@@ -99,25 +99,33 @@ def send_telegram_message(text: str):
 
 
 if __name__ == "__main__":
+    # Read scan times from user settings (configurable from dashboard)
+    from config import SCAN_TIME_1, SCAN_TIME_2
+
+    def _parse_time(t: str):
+        h, m = t.split(":")
+        return int(h), int(m)
+
+    h1, m1 = _parse_time(SCAN_TIME_1)
+    h2, m2 = _parse_time(SCAN_TIME_2)
+
     scheduler = BlockingScheduler(timezone=IST)
 
-    # Main scan — 9:15 AM IST, Monday to Friday
     scheduler.add_job(
         run_daily_scan,
-        CronTrigger(hour=9, minute=15, day_of_week="mon-fri", timezone=IST),
-        id="daily_scan",
-        name="Daily NSE Scan",
+        CronTrigger(hour=h1, minute=m1, day_of_week="mon-fri", timezone=IST),
+        id="scan_1",
+        name=f"Scan 1 ({SCAN_TIME_1} IST)",
     )
 
-    # Optional: afternoon check at 3:00 PM IST
     scheduler.add_job(
         run_daily_scan,
-        CronTrigger(hour=15, minute=0, day_of_week="mon-fri", timezone=IST),
-        id="afternoon_scan",
-        name="Afternoon NSE Scan",
+        CronTrigger(hour=h2, minute=m2, day_of_week="mon-fri", timezone=IST),
+        id="scan_2",
+        name=f"Scan 2 ({SCAN_TIME_2} IST)",
     )
 
-    logger.info("Scheduler started — agent will run at 9:15 AM and 3:00 PM IST (Mon-Fri)")
+    logger.info(f"Scheduler started — scans at {SCAN_TIME_1} and {SCAN_TIME_2} IST (Mon-Fri)")
     logger.info("Press Ctrl+C to stop")
 
     try:
