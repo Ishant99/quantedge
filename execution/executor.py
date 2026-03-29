@@ -1,0 +1,285 @@
+# =============================================================================
+# execution/executor.py — M7: Execution Layer
+#
+# THE most important safety boundary in the entire agent.
+# TRADING_MODE = "paper" → logs to CSV, no real orders ever
+# TRADING_MODE = "live"  → calls Zerodha Kite API
+#
+# Both modes use identical interfaces so switching is one config change.
+# =============================================================================
+
+import json, os, csv
+from datetime import datetime
+from dataclasses import asdict
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import (
+    TRADING_MODE, VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE,
+    KITE_API_KEY, KITE_API_SECRET, KITE_ACCESS_TOKEN_FILE,
+    SQLITE_DB_FILE
+)
+from strategy.engine import TradeSignal
+from utils import get_logger
+
+logger = get_logger("Executor")
+
+
+class PaperExecutor:
+    """
+    Simulates order execution. Updates a virtual portfolio JSON file.
+    Identical interface to LiveExecutor — swap by changing config only.
+    """
+
+    def __init__(self):
+        self.portfolio = self._load_portfolio()
+        logger.info(f"Paper executor ready — virtual capital: ₹{self.portfolio['cash']:,.0f}")
+
+    def execute(self, signal: TradeSignal) -> dict:
+        """Simulate placing an order."""
+        if signal.action not in ("BUY", "SELL"):
+            return {"status": "skipped", "reason": "HOLD signal"}
+
+        if signal.position_size <= 0:
+            return {"status": "skipped", "reason": "position size is 0"}
+
+        result = {}
+
+        if signal.action == "BUY":
+            cost = signal.entry_price * signal.position_size
+            if cost > self.portfolio["cash"]:
+                return {"status": "rejected", "reason": "insufficient cash"}
+
+            self.portfolio["cash"] -= cost
+            self.portfolio["positions"][signal.symbol] = {
+                "qty":        signal.position_size,
+                "entry":      signal.entry_price,
+                "stop_loss":  signal.stop_loss,
+                "take_profit":signal.take_profit,
+                "timestamp":  datetime.now().isoformat(),
+            }
+            result = {
+                "status":  "filled",
+                "action":  "BUY",
+                "symbol":  signal.symbol,
+                "qty":     signal.position_size,
+                "price":   signal.entry_price,
+                "cost":    round(cost, 2),
+                "mode":    "paper",
+            }
+            logger.info(f"PAPER BUY  {signal.symbol} × {signal.position_size} @ ₹{signal.entry_price}")
+
+        elif signal.action == "SELL":
+            pos = self.portfolio["positions"].get(signal.symbol)
+            if not pos:
+                return {"status": "skipped", "reason": "no open position to sell"}
+
+            proceeds = signal.entry_price * pos["qty"]
+            pnl      = proceeds - (pos["entry"] * pos["qty"])
+            self.portfolio["cash"] += proceeds
+            del self.portfolio["positions"][signal.symbol]
+            self.portfolio["total_trades"] += 1
+            if pnl > 0:
+                self.portfolio["wins"] += 1
+
+            result = {
+                "status":   "filled",
+                "action":   "SELL",
+                "symbol":   signal.symbol,
+                "qty":      pos["qty"],
+                "price":    signal.entry_price,
+                "pnl":      round(pnl, 2),
+                "mode":     "paper",
+            }
+            logger.info(f"PAPER SELL {signal.symbol} × {pos['qty']} @ ₹{signal.entry_price} | PnL ₹{pnl:+,.0f}")
+
+        self._save_portfolio()
+        self._log_trade(signal, result)
+        return result
+
+    def get_portfolio_value(self) -> float:
+        """Cash + mark-to-market value of open positions."""
+        total = self.portfolio["cash"]
+        for sym, pos in self.portfolio["positions"].items():
+            total += pos["entry"] * pos["qty"]   # use entry as proxy in paper mode
+        return round(total, 2)
+
+    def get_open_positions_count(self) -> int:
+        return len(self.portfolio["positions"])
+
+    def get_portfolio_summary(self) -> dict:
+        total    = self.get_portfolio_value()
+        initial  = VIRTUAL_CAPITAL
+        pnl      = total - initial
+        trades   = self.portfolio["total_trades"]
+        wins     = self.portfolio["wins"]
+        return {
+            "mode":           "paper",
+            "cash":           round(self.portfolio["cash"], 2),
+            "portfolio_value":total,
+            "pnl":            round(pnl, 2),
+            "pnl_pct":        round((pnl / initial) * 100, 2),
+            "open_positions": self.get_open_positions_count(),
+            "total_trades":   trades,
+            "win_rate":       round((wins / trades * 100) if trades else 0, 1),
+        }
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _load_portfolio(self) -> dict:
+        os.makedirs("logs", exist_ok=True)
+        if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
+            with open(VIRTUAL_PORTFOLIO_FILE) as f:
+                return json.load(f)
+        return {
+            "cash":         VIRTUAL_CAPITAL,
+            "positions":    {},
+            "total_trades": 0,
+            "wins":         0,
+            "created":      datetime.now().isoformat(),
+        }
+
+    def _save_portfolio(self):
+        with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
+            json.dump(self.portfolio, f, indent=2)
+
+    def _log_trade(self, signal: TradeSignal, result: dict):
+        os.makedirs("logs", exist_ok=True)
+        log_file = "logs/paper_trades.csv"
+        fieldnames = [
+            "timestamp","symbol","action","qty","price","confidence",
+            "ta_score","sentiment","stop_loss","take_profit",
+            "pnl","status","reasoning"
+        ]
+        row = {
+            "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "symbol":     signal.symbol,
+            "action":     signal.action,
+            "qty":        result.get("qty", 0),
+            "price":      result.get("price", signal.entry_price),
+            "confidence": signal.confidence,
+            "ta_score":   signal.ta_score,
+            "sentiment":  signal.sentiment,
+            "stop_loss":  signal.stop_loss,
+            "take_profit":signal.take_profit,
+            "pnl":        result.get("pnl", ""),
+            "status":     result.get("status"),
+            "reasoning":  signal.reasoning,
+        }
+        write_header = not os.path.exists(log_file)
+        with open(log_file, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+
+
+class LiveExecutor:
+    """
+    Real Zerodha Kite execution. Only instantiated when TRADING_MODE=live.
+    Requires kiteconnect package: pip install kiteconnect
+    """
+
+    def __init__(self):
+        try:
+            from kiteconnect import KiteConnect
+            self.kite = KiteConnect(api_key=KITE_API_KEY)
+            token = self._load_token()
+            self.kite.set_access_token(token)
+            profile = self.kite.profile()
+            logger.info(f"Kite connected — user: {profile['user_name']}")
+        except ImportError:
+            raise RuntimeError("Install kiteconnect: pip install kiteconnect")
+        except Exception as e:
+            raise RuntimeError(f"Kite connection failed: {e}")
+
+    def execute(self, signal: TradeSignal) -> dict:
+        if signal.action not in ("BUY", "SELL"):
+            return {"status": "skipped", "reason": "HOLD signal"}
+
+        from kiteconnect import KiteConnect
+        transaction = (
+            self.kite.TRANSACTION_TYPE_BUY
+            if signal.action == "BUY"
+            else self.kite.TRANSACTION_TYPE_SELL
+        )
+        try:
+            order_id = self.kite.place_order(
+                tradingsymbol = signal.symbol,
+                exchange      = "NSE",
+                transaction_type = transaction,
+                quantity      = signal.position_size,
+                order_type    = self.kite.ORDER_TYPE_MARKET,
+                product       = self.kite.PRODUCT_CNC,   # delivery (not intraday)
+                variety       = self.kite.VARIETY_REGULAR,
+            )
+            # Place GTT stop-loss
+            if signal.action == "BUY":
+                self._place_gtt_sl(signal, order_id)
+
+            logger.info(f"LIVE {signal.action} {signal.symbol} × {signal.position_size} — order_id: {order_id}")
+            return {"status": "filled", "order_id": order_id, "mode": "live"}
+
+        except Exception as e:
+            logger.error(f"Order failed for {signal.symbol}: {e}")
+            return {"status": "failed", "error": str(e)}
+
+    def _place_gtt_sl(self, signal: TradeSignal, parent_order_id: str):
+        """Place a GTT (Good Till Triggered) stop-loss order."""
+        try:
+            self.kite.place_gtt(
+                trigger_type  = self.kite.GTT_TYPE_SINGLE,
+                tradingsymbol = signal.symbol,
+                exchange      = "NSE",
+                trigger_values= [signal.stop_loss],
+                last_price    = signal.entry_price,
+                orders=[{
+                    "transaction_type": self.kite.TRANSACTION_TYPE_SELL,
+                    "quantity":         signal.position_size,
+                    "order_type":       self.kite.ORDER_TYPE_LIMIT,
+                    "price":            signal.stop_loss,
+                    "product":          self.kite.PRODUCT_CNC,
+                }]
+            )
+            logger.info(f"GTT SL placed for {signal.symbol} @ ₹{signal.stop_loss}")
+        except Exception as e:
+            logger.error(f"GTT SL failed for {signal.symbol}: {e}")
+
+    def get_portfolio_value(self) -> float:
+        margins = self.kite.margins()
+        return float(margins["equity"]["net"])
+
+    def get_open_positions_count(self) -> int:
+        return len(self.kite.positions()["net"])
+
+    def get_portfolio_summary(self) -> dict:
+        positions = self.kite.positions()["net"]
+        holdings  = self.kite.holdings()
+        return {
+            "mode":           "live",
+            "open_positions": len(positions),
+            "holdings":       len(holdings),
+        }
+
+    def _load_token(self) -> str:
+        if os.path.exists(KITE_ACCESS_TOKEN_FILE):
+            with open(KITE_ACCESS_TOKEN_FILE) as f:
+                return f.read().strip()
+        raise FileNotFoundError(
+            f"Access token not found at {KITE_ACCESS_TOKEN_FILE}.\n"
+            f"Run: python execution/kite_auth.py to generate it."
+        )
+
+
+def get_executor():
+    """
+    Factory function — returns the correct executor based on TRADING_MODE.
+    This is the ONLY place in the codebase that reads TRADING_MODE for execution.
+    """
+    if TRADING_MODE == "live":
+        logger.warning("LIVE MODE ACTIVE — real orders will be placed")
+        return LiveExecutor()
+    else:
+        logger.info("Paper mode — no real orders will be placed")
+        return PaperExecutor()

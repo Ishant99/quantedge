@@ -1,0 +1,70 @@
+# =============================================================================
+# .gitignore — NSE Trading Agent
+# =============================================================================
+
+# ----- Secrets & Environment -----
+.env
+.env.*
+!.env.example
+logs/kite_access_token.txt
+
+# ----- Logs & Generated Data -----
+logs/
+!logs/.gitkeep
+
+# ----- Market Data (large CSVs regenerated on run) -----
+data/__pycache__/
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# ----- Virtual Environments -----
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# ----- IDEs -----
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+*.ipynb
+
+# ----- Testing -----
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ----- Docker -----
+# (keep Dockerfile and docker-compose.yml)
+
+# ----- OS -----
+*.tmp
+*.bak
+*.orig

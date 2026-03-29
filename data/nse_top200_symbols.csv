@@ -1,0 +1,195 @@
+symbol,name,sector
+RELIANCE,Reliance Industries,Energy
+TCS,Tata Consultancy Services,IT
+HDFCBANK,HDFC Bank,Banking
+INFY,Infosys,IT
+ICICIBANK,ICICI Bank,Banking
+HINDUNILVR,Hindustan Unilever,FMCG
+SBIN,State Bank of India,Banking
+BHARTIARTL,Bharti Airtel,Telecom
+ITC,ITC Limited,FMCG
+KOTAKBANK,Kotak Mahindra Bank,Banking
+LT,Larsen & Toubro,Infrastructure
+AXISBANK,Axis Bank,Banking
+ASIANPAINT,Asian Paints,Chemicals
+MARUTI,Maruti Suzuki,Auto
+SUNPHARMA,Sun Pharmaceutical,Pharma
+TITAN,Titan Company,Consumer
+BAJFINANCE,Bajaj Finance,NBFC
+WIPRO,Wipro,IT
+ULTRACEMCO,UltraTech Cement,Cement
+NESTLEIND,Nestle India,FMCG
+POWERGRID,Power Grid Corporation,Power
+NTPC,NTPC Limited,Power
+TECHM,Tech Mahindra,IT
+HCLTECH,HCL Technologies,IT
+BAJAJFINSV,Bajaj Finserv,NBFC
+M&M,Mahindra & Mahindra,Auto
+TATAMOTORS,Tata Motors,Auto
+ADANIENT,Adani Enterprises,Conglomerate
+ADANIPORTS,Adani Ports,Infrastructure
+JSWSTEEL,JSW Steel,Steel
+TATASTEEL,Tata Steel,Steel
+HINDALCO,Hindalco Industries,Metals
+COALINDIA,Coal India,Mining
+ONGC,Oil & Natural Gas Corp,Energy
+BPCL,Bharat Petroleum,Energy
+IOC,Indian Oil Corporation,Energy
+GRASIM,Grasim Industries,Cement
+CIPLA,Cipla,Pharma
+DRREDDY,Dr Reddy's Laboratories,Pharma
+DIVISLAB,Divi's Laboratories,Pharma
+APOLLOHOSP,Apollo Hospitals,Healthcare
+EICHERMOT,Eicher Motors,Auto
+BAJAJ-AUTO,Bajaj Auto,Auto
+HEROMOTOCO,Hero MotoCorp,Auto
+TATACONSUM,Tata Consumer Products,FMCG
+BRITANNIA,Britannia Industries,FMCG
+PIDILITIND,Pidilite Industries,Chemicals
+BERGEPAINT,Berger Paints,Chemicals
+HAVELLS,Havells India,Electricals
+VOLTAS,Voltas,Electricals
+INDUSINDBK,IndusInd Bank,Banking
+FEDERALBNK,Federal Bank,Banking
+BANDHANBNK,Bandhan Bank,Banking
+IDFCFIRSTB,IDFC First Bank,Banking
+PNB,Punjab National Bank,Banking
+BANKBARODA,Bank of Baroda,Banking
+CANBK,Canara Bank,Banking
+UNIONBANK,Union Bank of India,Banking
+MAHABANK,Bank of Maharashtra,Banking
+INDIANB,Indian Bank,Banking
+IDEA,Vodafone Idea,Telecom
+ZOMATO,Zomato,Consumer Tech
+NYKAA,FSN E-Commerce (Nykaa),Consumer Tech
+PAYTM,One97 Communications,Fintech
+POLICYBZR,PB Fintech,Fintech
+DELHIVERY,Delhivery,Logistics
+IRCTC,Indian Railway Catering,Travel
+INDIGO,InterGlobe Aviation,Aviation
+TATAPOWER,Tata Power,Power
+ADANIGREEN,Adani Green Energy,Renewable
+TORNTPOWER,Torrent Power,Power
+JSWENERGY,JSW Energy,Power
+NHPC,NHPC Limited,Power
+SJVN,SJVN Limited,Power
+CESC,CESC Limited,Power
+SUZLON,Suzlon Energy,Renewable
+RPOWER,Reliance Power,Power
+RECLTD,REC Limited,NBFC
+PFC,Power Finance Corporation,NBFC
+IRFC,Indian Railway Finance,NBFC
+M&MFIN,Mahindra & Mahindra Financial,NBFC
+CHOLAFIN,Cholamandalam Investment,NBFC
+MUTHOOTFIN,Muthoot Finance,NBFC
+MANAPPURAM,Manappuram Finance,NBFC
+SBICARD,SBI Cards,NBFC
+HDFCLIFE,HDFC Life Insurance,Insurance
+SBILIFE,SBI Life Insurance,Insurance
+ICICIPRULI,ICICI Prudential Life,Insurance
+ICICIGI,ICICI Lombard General Insurance,Insurance
+NIACL,New India Assurance,Insurance
+STARHEALTH,Star Health Insurance,Insurance
+GICRE,General Insurance Corp,Insurance
+LICI,Life Insurance Corporation,Insurance
+HINDPETRO,Hindustan Petroleum,Energy
+MRPL,Mangalore Refinery,Energy
+CASTROLIND,Castrol India,Energy
+GAIL,GAIL India,Energy
+PETRONET,Petronet LNG,Energy
+ATGL,Adani Total Gas,Energy
+IGL,Indraprastha Gas,Energy
+MGL,Mahanagar Gas,Energy
+GSPL,Gujarat State Petronet,Energy
+AEGISLOG,Aegis Logistics,Energy
+ZYDUSLIFE,Zydus Lifesciences,Pharma
+LUPIN,Lupin,Pharma
+AUROPHARMA,Aurobindo Pharma,Pharma
+BIOCON,Biocon,Pharma
+ALKEM,Alkem Laboratories,Pharma
+TORNTPHARM,Torrent Pharmaceuticals,Pharma
+ABBOTINDIA,Abbott India,Pharma
+PFIZER,Pfizer,Pharma
+GLAXO,GSK Pharmaceuticals,Pharma
+SANOFI,Sanofi India,Pharma
+FORTIS,Fortis Healthcare,Healthcare
+MAXHEALTH,Max Healthcare,Healthcare
+ASTERDM,Aster DM Healthcare,Healthcare
+KIMS,Krishna Institute of Medical,Healthcare
+METROPOLIS,Metropolis Healthcare,Healthcare
+LALPATHLAB,Dr Lal Pathlabs,Healthcare
+THYROCARE,Thyrocare Technologies,Healthcare
+DLF,DLF Limited,Realty
+GODREJPROP,Godrej Properties,Realty
+OBEROIRLTY,Oberoi Realty,Realty
+PRESTIGE,Prestige Estates,Realty
+BRIGADE,Brigade Enterprises,Realty
+PHOENIXLTD,Phoenix Mills,Realty
+SOBHA,Sobha Limited,Realty
+MAHLIFE,Mahindra Lifespace,Realty
+SUNTV,Sun TV Network,Media
+ZEEL,Zee Entertainment,Media
+PVRINOX,PVR Inox,Media
+NAZARA,Nazara Technologies,Media
+INOXWIND,Inox Wind,Renewable
+CUMMINSIND,Cummins India,Engineering
+ABB,ABB India,Engineering
+SIEMENS,Siemens,Engineering
+BHEL,Bharat Heavy Electricals,Engineering
+BEL,Bharat Electronics,Defence
+HAL,Hindustan Aeronautics,Defence
+BEML,BEML Limited,Defence
+MAZDOCK,Mazagon Dock,Defence
+COCHINSHIP,Cochin Shipyard,Defence
+GRSE,Garden Reach Shipbuilders,Defence
+SAIL,Steel Authority of India,Steel
+NMDC,NMDC Limited,Mining
+MOIL,MOIL Limited,Mining
+VEDL,Vedanta Limited,Metals
+HINDZINC,Hindustan Zinc,Metals
+NATIONALUM,National Aluminium,Metals
+RATNAMANI,Ratnamani Metals,Metals
+APLLTD,APL Apollo Tubes,Metals
+WELCORP,Welspun Corp,Steel
+SHYAMMETL,Shyam Metalics,Metals
+GODREJCP,Godrej Consumer Products,FMCG
+DABUR,Dabur India,FMCG
+MARICO,Marico,FMCG
+COLPAL,Colgate-Palmolive,FMCG
+EMAMILTD,Emami,FMCG
+JYOTHYLAB,Jyothy Labs,FMCG
+VBL,Varun Beverages,FMCG
+RADICO,Radico Khaitan,FMCG
+UBL,United Breweries,FMCG
+UNITDSPR,United Spirits,FMCG
+HDFCAMC,HDFC AMC,Financial Services
+NAM-INDIA,Nippon India AMC,Financial Services
+UTIAMC,UTI AMC,Financial Services
+ANGELONE,Angel One,Financial Services
+5PAISA,5Paisa Capital,Financial Services
+IIFL,IIFL Finance,Financial Services
+MOTILALOFS,Motilal Oswal Financial,Financial Services
+LTIM,LTIMindtree,IT
+MPHASIS,Mphasis,IT
+COFORGE,Coforge,IT
+PERSISTENT,Persistent Systems,IT
+LTTS,L&T Technology Services,IT
+KPITTECH,KPIT Technologies,IT
+TATAELXSI,Tata Elxsi,IT
+ZENSARTECH,Zensar Technologies,IT
+MASTEK,Mastek,IT
+SONACOMS,Sona BLW Precision,Auto Ancillary
+MOTHERSON,Samvardhana Motherson,Auto Ancillary
+BOSCHLTD,Bosch,Auto Ancillary
+BHARATFORG,Bharat Forge,Auto Ancillary
+APOLLOTYRE,Apollo Tyres,Auto Ancillary
+MRF,MRF,Auto Ancillary
+CEATLTD,CEAT,Auto Ancillary
+BALKRISIND,Balkrishna Industries,Auto Ancillary
+EXIDEIND,Exide Industries,Auto Ancillary
+AMARARAJABAT,Amara Raja Energy,Auto Ancillary
+DMART,Avenue Supermarts,Retail
+TRENT,Trent,Retail
+ABFRL,Aditya Birla Fashion,Retail
+SHOPERSTOP,Shopper's Stop,Retail
+VMART,V-Mart Retail,Retail

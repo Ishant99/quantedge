@@ -1,0 +1,326 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import json
+from datetime import datetime
+import pandas as pd
+
+from config import TRADING_MODE, TOP_N_SIGNALS, VIRTUAL_CAPITAL
+from data.market_scanner import MarketScanner
+from analysis.technical_agent import TechnicalAgent
+from analysis.sentiment_agent import SentimentAgent
+from analysis.market_regime import MarketRegimeFilter
+from analysis.support_resistance import SupportResistanceAnalyser
+from analysis.multi_timeframe import MultiTimeframeAnalyser
+from analysis.pattern_recognition import PatternRecogniser
+from analysis.sector_rotation import SectorRotationAnalyser
+from analysis.volume_profile import VolumeProfileAnalyser
+from analysis.fii_dii import FIIDIIAnalyser
+from analysis.pcr_signal import PCRAnalyser
+from analysis.earnings_guard import EarningsGuard
+from strategy.engine import StrategyEngine
+from execution.executor import get_executor
+from memory.portfolio_memory import PortfolioMemory
+from risk.trailing_stop import TrailingStopMonitor
+from risk.circuit_breaker import CircuitBreaker
+from risk.correlation_filter import CorrelationFilter
+from risk.dynamic_sizing import DynamicPositionSizer
+from utils import get_logger
+from utils.telegram import send_signals, send
+
+logger = get_logger("Main")
+
+
+def run_agent(dry_run: bool = False) -> list:
+    start_time = datetime.now()
+    logger.info("=" * 60)
+    logger.info(f"  TRADING AGENT -- MODE: {TRADING_MODE.upper()}")
+    logger.info(f"  {start_time.strftime('%Y-%m-%d %H:%M:%S IST')}")
+    logger.info("=" * 60)
+
+    executor        = get_executor()
+    portfolio_value = executor.get_portfolio_value()
+    open_positions  = executor.get_open_positions_count()
+
+    # ------------------------------------------------------------------
+    # 1. CIRCUIT BREAKER
+    # ------------------------------------------------------------------
+    cb_ok, cb_reason = CircuitBreaker().check(portfolio_value)
+    if not cb_ok:
+        logger.warning(f"[CB] {cb_reason}")
+        send(f"*Circuit Breaker*\n_{cb_reason}_")
+        _run_trailing_stop()
+        return []
+
+    # ------------------------------------------------------------------
+    # 2. MARKET REGIME
+    # ------------------------------------------------------------------
+    logger.info("[REGIME] Checking market...")
+    regime = MarketRegimeFilter().get_regime()
+    logger.info(f"[REGIME] {regime.message}")
+    if not regime.allow_buys:
+        send(f"*Bear Market*\n_{regime.message}_")
+        _run_trailing_stop()
+        return []
+
+    # ------------------------------------------------------------------
+    # 3. MARKET-WIDE SIGNALS (PCR + FII/DII + Sector Rotation)
+    # ------------------------------------------------------------------
+    logger.info("[MARKET] Fetching market-wide signals...")
+    pcr_result     = PCRAnalyser().get_signal()
+    fii_result     = FIIDIIAnalyser().get_signal()
+    sector_result  = SectorRotationAnalyser().analyse()
+    logger.info(f"[PCR] {pcr_result.message}")
+    logger.info(f"[FII] {fii_result.message}")
+    logger.info(f"[SECTOR] {sector_result.message}")
+
+    # If both PCR and FII are strongly bearish, block all buys
+    if pcr_result.signal == "strong_sell" and fii_result.signal in ("sell","strong_sell"):
+        logger.warning("PCR + FII both bearish — blocking buys today")
+        send(f"*Market Warning*\nPCR: {pcr_result.pcr:.2f} + FII selling\nNo new positions today.")
+        _run_trailing_stop()
+        return []
+
+    # ------------------------------------------------------------------
+    # 4. MARKET SCANNER
+    # ------------------------------------------------------------------
+    logger.info("[M1] Scanning NSE stocks...")
+    scanner     = MarketScanner(lookback_days=400)
+    market_data = scanner.run(max_workers=10)
+    logger.info(f"[M1] {len(market_data)} stocks loaded")
+
+    symbol_sectors = {r["symbol"]: r["sector"] for _, r in scanner.symbols_df.iterrows()}
+    symbol_names   = {r["symbol"]: r["name"]   for _, r in scanner.symbols_df.iterrows()}
+
+    # ------------------------------------------------------------------
+    # 5. TECHNICAL ANALYSIS
+    # ------------------------------------------------------------------
+    logger.info("[M2] Technical analysis...")
+    ta_results = TechnicalAgent().analyse_all(market_data)
+    tradeable  = {sym: r for sym, r in ta_results.items() if r.tradeable}
+    logger.info(f"[M2] {len(tradeable)}/{len(ta_results)} tradeable")
+
+    tradeable_data = {sym: market_data[sym] for sym in tradeable}
+
+    # ------------------------------------------------------------------
+    # 6. EARNINGS GUARD
+    # ------------------------------------------------------------------
+    logger.info("[EARNINGS] Checking earnings calendar...")
+    earnings_guard = EarningsGuard()
+
+    # ------------------------------------------------------------------
+    # 7. SUPPORT & RESISTANCE
+    # ------------------------------------------------------------------
+    logger.info("[S/R] Support/resistance analysis...")
+    sr_results = SupportResistanceAnalyser().analyse_all(tradeable_data)
+    tradeable  = {sym: r for sym, r in tradeable.items()
+                  if sr_results.get(sym, None) and
+                  sr_results[sym].recommendation != "sell_zone"}
+    logger.info(f"[S/R] {len(tradeable)} pass S/R filter")
+
+    # ------------------------------------------------------------------
+    # 8. MULTI-TIMEFRAME CONFIRMATION
+    # ------------------------------------------------------------------
+    logger.info("[MTF] Weekly confirmation...")
+    tradeable_data = {sym: market_data[sym] for sym in tradeable}
+    mtf_results    = MultiTimeframeAnalyser().analyse_all(tradeable_data)
+    tradeable      = {sym: r for sym, r in tradeable.items()
+                      if mtf_results.get(sym, None) and mtf_results[sym].confirmed}
+    logger.info(f"[MTF] {len(tradeable)} confirmed by weekly")
+
+    # ------------------------------------------------------------------
+    # 9. VOLUME PROFILE
+    # ------------------------------------------------------------------
+    logger.info("[VP] Volume profile analysis...")
+    tradeable_data = {sym: market_data[sym] for sym in tradeable}
+    vp_results     = VolumeProfileAnalyser().analyse_all(tradeable_data)
+
+    # ------------------------------------------------------------------
+    # 10. PATTERN RECOGNITION
+    # ------------------------------------------------------------------
+    logger.info("[PATTERN] Chart pattern detection...")
+    pattern_results = PatternRecogniser().analyse_all(tradeable_data)
+
+    # ------------------------------------------------------------------
+    # 11. SENTIMENT
+    # ------------------------------------------------------------------
+    logger.info("[M3] Sentiment analysis...")
+    sent_results = SentimentAgent().analyse_all(
+        list(tradeable.keys()),
+        symbol_names=symbol_names,
+        symbol_sectors=symbol_sectors,
+    )
+
+    # ------------------------------------------------------------------
+    # 12. STRATEGY ENGINE
+    # ------------------------------------------------------------------
+    logger.info("[M4/M5] Generating signals...")
+    strategy = StrategyEngine()
+    signals  = strategy.generate_all(
+        ta_results               = tradeable,
+        sent_results             = sent_results,
+        market_data              = market_data,
+        portfolio_value          = portfolio_value,
+        open_positions           = open_positions,
+        position_size_multiplier = regime.position_size_multiplier,
+    )
+    buy_signals = [s for s in signals if s.action == "BUY"]
+
+    # ------------------------------------------------------------------
+    # 13. DYNAMIC POSITION SIZING + SIGNAL ENRICHMENT
+    # ------------------------------------------------------------------
+    sizer = DynamicPositionSizer()
+    enriched = []
+    for sig in buy_signals:
+        pat  = pattern_results.get(sig.symbol)
+        sr   = sr_results.get(sig.symbol)
+        mtf  = mtf_results.get(sig.symbol)
+        vp   = vp_results.get(sig.symbol)
+        sec  = symbol_sectors.get(sig.symbol, "Unknown")
+        sec_mult = sector_result.get_sector_multiplier(sec, sector_result)
+
+        # Boost confidence for bullish patterns, S/R, VP
+        extra = 0.0
+        if pat and pat.bias == "bullish":
+            extra += 0.05
+            sig.reasoning += f". Pattern: {pat.primary_pattern}"
+        if sr and sr.near_support:
+            extra += 0.03
+            sig.reasoning += f". Near support Rs.{sr.nearest_support:,.0f}"
+        if vp and vp.signal == "buy":
+            extra += 0.02
+            sig.reasoning += f". POC Rs.{vp.poc:,.0f}"
+        if mtf:
+            sig.reasoning += f". Weekly: {mtf.weekly_trend}"
+        if fii_result.signal in ("buy", "strong_buy"):
+            extra += 0.02
+
+        sig.confidence = min(0.99, sig.confidence + extra)
+
+        # Dynamic sizing
+        df  = market_data.get(sig.symbol)
+        atr = _atr(df) if df is not None else sig.entry_price * 0.02
+        sizing = sizer.calculate(
+            symbol            = sig.symbol,
+            confidence        = sig.confidence,
+            entry_price       = sig.entry_price,
+            atr               = atr,
+            portfolio_value   = portfolio_value,
+            pattern_bias      = pat.bias if pat else "neutral",
+            sr_near_support   = sr.near_support if sr else False,
+            sector_multiplier = sec_mult,
+            regime_multiplier = regime.position_size_multiplier,
+            fii_score         = fii_result.score,
+        )
+        sig.position_size   = sizing.position_size
+        sig.capital_at_risk = sizing.capital_at_risk
+        sig.stop_loss       = sizing.stop_loss
+        sig.take_profit     = sizing.take_profit
+        enriched.append(sig)
+
+    buy_signals = enriched
+
+    # ------------------------------------------------------------------
+    # 14. EARNINGS GUARD FILTER
+    # ------------------------------------------------------------------
+    buy_signals, blocked_earnings = earnings_guard.filter_signals(buy_signals)
+    if blocked_earnings:
+        logger.info(f"[EARNINGS] Blocked {len(blocked_earnings)} signals near earnings")
+
+    # ------------------------------------------------------------------
+    # 15. CORRELATION FILTER
+    # ------------------------------------------------------------------
+    logger.info("[CORR] Correlation filter...")
+    buy_signals = CorrelationFilter().filter(buy_signals, market_data, symbol_sectors)
+
+    # Final sort
+    buy_signals = sorted(buy_signals, key=lambda x: x.confidence, reverse=True)
+    logger.info(f"Final: {len(buy_signals)} BUY signals after all 13 filters")
+
+    _print_signals(buy_signals[:TOP_N_SIGNALS], regime)
+
+    # ------------------------------------------------------------------
+    # 16. MEMORY + TELEGRAM + EXECUTE
+    # ------------------------------------------------------------------
+    memory = PortfolioMemory()
+    for sig in buy_signals[:TOP_N_SIGNALS]:
+        memory.save_signal(sig)
+
+    stats = memory.get_stats()
+    send_signals(buy_signals[:TOP_N_SIGNALS], stats, mode=TRADING_MODE, dry_run=dry_run)
+
+    if dry_run:
+        logger.info("[M7] DRY RUN -- not executed")
+    else:
+        for sig in buy_signals[:TOP_N_SIGNALS]:
+            result = executor.execute(sig)
+            logger.info(f"  {sig.symbol}: {result.get('status','unknown')}")
+
+    _run_trailing_stop()
+    summary = executor.get_portfolio_summary()
+    memory.save_snapshot(summary)
+
+    # Readiness check
+    try:
+        from readiness.checker import ReadinessChecker
+        report = ReadinessChecker().check()
+        logger.info(f"Phase 2: {report.passed_count}/{report.total_gates} gates")
+    except Exception as e:
+        logger.debug(f"Readiness skipped: {e}")
+
+    elapsed = (datetime.now() - start_time).seconds
+    logger.info(f"\nDone in {elapsed}s | "
+                f"Signals: {len(buy_signals)} | "
+                f"Trades: {stats['total_trades']} | "
+                f"Win rate: {stats['win_rate_pct']:.1f}%")
+    logger.info("=" * 60)
+    return buy_signals[:TOP_N_SIGNALS]
+
+
+def _atr(df: pd.DataFrame, period: int = 14) -> float:
+    try:
+        hi, lo, cl = df["high"], df["low"], df["close"]
+        tr = pd.concat([hi-lo, (hi-cl.shift()).abs(),
+                        (lo-cl.shift()).abs()], axis=1).max(axis=1)
+        return float(tr.rolling(period).mean().iloc[-1])
+    except Exception:
+        return float(df["close"].iloc[-1]) * 0.02
+
+
+def _run_trailing_stop():
+    try:
+        TrailingStopMonitor().run()
+    except Exception as e:
+        logger.debug(f"Trailing stop: {e}")
+
+
+def _print_signals(signals: list, regime=None):
+    if not signals:
+        print("\n  No BUY signals today.\n")
+        return
+    if regime:
+        print(f"\n  Market: {regime.regime.upper()} | "
+              f"Nifty RSI: {regime.nifty_rsi} | "
+              f"1M: {regime.nifty_1m_return:+.1f}%")
+    print("\n" + "=" * 70)
+    print(f"  TOP {len(signals)} SIGNALS -- {datetime.now().strftime('%d %b %Y')}")
+    print("=" * 70)
+    for i, s in enumerate(signals, 1):
+        print(f"\n#{i}  {s.symbol}")
+        print(f"    Confidence : {s.confidence:.0%}")
+        print(f"    Entry      : Rs.{s.entry_price:,.2f}")
+        print(f"    Stop Loss  : Rs.{s.stop_loss:,.2f}")
+        print(f"    Take Profit: Rs.{s.take_profit:,.2f}")
+        print(f"    Position   : {s.position_size} shares")
+        print(f"    TA Score   : {s.ta_score}/10")
+        print(f"    Sentiment  : {s.sentiment}")
+        print(f"    Reason     : {s.reasoning}")
+    print("\n" + "=" * 70 + "\n")
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    run_agent(dry_run=args.dry_run)

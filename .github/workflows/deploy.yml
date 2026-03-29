@@ -1,0 +1,176 @@
+# =============================================================================
+# .github/workflows/deploy.yml — CI/CD for NSE Trading Agent
+#
+# Trigger: push to main branch
+# Pipeline:
+#   1. Lint & basic sanity checks
+#   2. SSH into Oracle VM
+#   3. Pull latest code from GitHub
+#   4. Rebuild Docker image
+#   5. Restart containers with zero-downtime strategy
+#   6. Smoke-test dashboard health endpoint
+#
+# Required GitHub Secrets:
+#   ORACLE_HOST        — VM IP (e.g. 144.24.143.86)
+#   ORACLE_SSH_KEY     — private SSH key (PEM, paste full content)
+#   GH_PAT             — GitHub Personal Access Token (repo scope)
+#   TELEGRAM_BOT_TOKEN — Telegram bot token for deploy notifications
+#   TELEGRAM_CHAT_ID   — Telegram chat ID for deploy notifications
+# =============================================================================
+
+name: Deploy to Oracle VM
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:       # allow manual trigger from GitHub UI
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Lint (fast sanity check before deploying)
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax (all .py files)
+        run: |
+          find . -name "*.py" -not -path "./.venv/*" | while read f; do
+            python -m py_compile "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Verify critical files exist
+        run: |
+          for f in main.py config.py requirements.txt Dockerfile docker-compose.yml; do
+            [ -f "$f" ] && echo "OK: $f" || { echo "MISSING: $f"; exit 1; }
+          done
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Deploy to Oracle Free Tier VM
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to Oracle VM
+    runs-on: ubuntu-latest
+    needs: lint          # only deploy if lint passes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ORACLE_SSH_KEY }}" > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          ssh-keyscan -H "${{ secrets.ORACLE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to Oracle VM
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ssh -i ~/.ssh/oracle_key \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=30 \
+              ubuntu@$ORACLE_HOST << 'ENDSSH'
+
+          set -e
+          echo "========================================"
+          echo "  QuantEdge Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "========================================"
+
+          # --- Directory setup ---
+          DEPLOY_DIR="/home/ubuntu/quantedge"
+          mkdir -p "$DEPLOY_DIR"
+          cd "$DEPLOY_DIR"
+
+          # --- Pull latest code ---
+          if [ -d ".git" ]; then
+            echo "[GIT] Pulling latest..."
+            git fetch origin main
+            git reset --hard origin/main
+          else
+            echo "[GIT] Fresh clone..."
+            git clone https://x-access-token:$GH_PAT@github.com/Ishant99/quantedge.git .
+          fi
+
+          # --- Write .env from GitHub Secrets (injected via SSH env) ---
+          cat > .env << 'EOF'
+          TRADING_MODE=paper
+          KITE_API_KEY=
+          KITE_API_SECRET=
+          TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+          TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
+          EOF
+
+          # --- Enable swap if not already set (helps on 1GB RAM) ---
+          if ! swapon --show | grep -q "/swapfile"; then
+            echo "[SWAP] Setting up 1GB swapfile..."
+            sudo fallocate -l 1G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab > /dev/null
+            echo "[SWAP] Done — $(free -h | grep Swap)"
+          else
+            echo "[SWAP] Already active — $(free -h | grep Swap)"
+          fi
+
+          # --- Build Docker image ---
+          echo "[DOCKER] Building image..."
+          docker compose build --no-cache
+
+          # --- Zero-downtime restart ---
+          echo "[DOCKER] Restarting containers..."
+          docker compose up -d --remove-orphans
+
+          # --- Cleanup old images to save disk space ---
+          docker image prune -f
+
+          # --- Verify containers are running ---
+          sleep 10
+          echo "[STATUS] Container status:"
+          docker compose ps
+
+          echo "========================================"
+          echo "  Deploy complete!"
+          echo "========================================"
+
+          ENDSSH
+
+      - name: Smoke test — dashboard health
+        run: |
+          echo "Waiting 20s for Streamlit to start..."
+          sleep 20
+          curl --fail --silent --max-time 15 \
+            "http://${{ secrets.ORACLE_HOST }}:8501/_stcore/health" \
+            && echo "Dashboard is healthy" \
+            || echo "Warning: health check did not respond (Streamlit may still be starting)"
+
+      - name: Notify Telegram on success
+        if: success()
+        run: |
+          MSG="✅ *QuantEdge Deployed*%0ACommit: ${{ github.sha }}%0ABranch: ${{ github.ref_name }}%0ABy: ${{ github.actor }}"
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=${MSG}&parse_mode=Markdown" \
+            > /dev/null
+
+      - name: Notify Telegram on failure
+        if: failure()
+        run: |
+          MSG="❌ *QuantEdge Deploy FAILED*%0ACommit: ${{ github.sha }}%0ABy: ${{ github.actor }}%0ACheck GitHub Actions for details."
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=${MSG}&parse_mode=Markdown" \
+            > /dev/null
