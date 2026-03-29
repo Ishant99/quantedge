@@ -16,14 +16,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import yfinance as yf
 from datetime import datetime
-from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE
+from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE, TRAIL_PCT
 from utils import get_logger
 from utils.telegram import send
 
 logger = get_logger("TrailingStop")
-
-# Trail by this % — if stock rises 2%, SL moves up 2%
-TRAIL_PCT = 0.02   # 2% trailing
 
 
 class TrailingStopMonitor:

@@ -49,6 +49,9 @@ class BacktestResult:
     avg_trade_pnl:    float
     best_trade_pnl:   float
     worst_trade_pnl:  float
+    avg_hold_days:    float        = 0.0
+    equity_curve:     list        = None   # daily portfolio values
+    monthly_returns:  dict        = None   # {"2024-01": 3.5, ...}
 
 
 class BacktestEngine:
@@ -71,10 +74,12 @@ class BacktestEngine:
 
     def run(
         self,
-        symbol:     str,
-        start_date: str = BACKTEST_START_DATE,
-        end_date:   str = BACKTEST_END_DATE,
-        capital:    float = BACKTEST_CAPITAL,
+        symbol:         str,
+        start_date:     str   = BACKTEST_START_DATE,
+        end_date:       str   = BACKTEST_END_DATE,
+        capital:        float = BACKTEST_CAPITAL,
+        commission_pct: float = 0.0003,   # 0.03% per side (typical NSE brokerage)
+        slippage_pct:   float = 0.0005,   # 0.05% slippage on entry/exit
     ) -> BacktestResult:
         """Run backtest for a single symbol."""
         logger.info(f"Backtesting {symbol} | {start_date} to {end_date} | capital: {capital:,.0f}")
@@ -84,12 +89,12 @@ class BacktestEngine:
             logger.warning(f"{symbol}: insufficient history for backtest")
             return None
 
-        trades, equity_curve = self._simulate(df, capital)
+        trades, equity_curve, dates = self._simulate(df, capital, commission_pct, slippage_pct)
 
         if not trades:
             logger.warning(f"{symbol}: no trades generated in backtest period")
 
-        result = self._metrics(symbol, start_date, end_date, capital, trades, equity_curve)
+        result = self._metrics(symbol, start_date, end_date, capital, trades, equity_curve, dates)
         self._save(result, trades)
         self._print(result)
         return result
@@ -135,22 +140,28 @@ class BacktestEngine:
     # Simulation
     # ------------------------------------------------------------------
 
-    def _simulate(self, df: pd.DataFrame, capital: float):
+    def _simulate(
+        self, df: pd.DataFrame, capital: float,
+        commission_pct: float = 0.0003, slippage_pct: float = 0.0005
+    ):
         """
         Walk-forward simulation. For each day:
           1. Calculate TA on data up to that day
           2. If signal is bullish and no open position — enter
           3. Each subsequent day check if SL or TP hit
+        Returns (trades, equity_curve, dates).
         """
-        trades     = []
-        equity     = [capital]
-        cash       = capital
-        position   = None   # {entry, sl, tp, qty, entry_date}
+        trades   = []
+        equity   = [capital]
+        dates_eq = [str(df.index[SMA_LONG - 1].date())]
+        cash     = capital
+        position = None   # {entry, sl, tp, qty, entry_date}
 
         for i in range(SMA_LONG, len(df)):
             window = df.iloc[:i]
             today  = df.iloc[i]
             date   = df.index[i]
+            cost_factor = 1 + commission_pct + slippage_pct
 
             # Check exit conditions for open position
             if position:
@@ -159,33 +170,37 @@ class BacktestEngine:
 
                 # Stop-loss hit
                 if lo <= position["sl"]:
-                    pnl   = (position["sl"] - position["entry"]) * position["qty"]
-                    cash += position["sl"] * position["qty"]
+                    exit_px = position["sl"] * (1 - commission_pct - slippage_pct)
+                    pnl     = (exit_px - position["entry"]) * position["qty"]
+                    cash   += exit_px * position["qty"]
+                    hold_d  = (date - pd.Timestamp(position["entry_date"])).days
                     trades.append({
                         "entry_date": position["entry_date"],
                         "exit_date":  str(date.date()),
-                        "symbol":     df["symbol"].iloc[0] if "symbol" in df.columns else "",
                         "entry":      position["entry"],
-                        "exit":       position["sl"],
+                        "exit":       round(exit_px, 2),
                         "qty":        position["qty"],
                         "pnl":        round(pnl, 2),
                         "exit_type":  "stop_loss",
+                        "hold_days":  hold_d,
                     })
                     position = None
 
                 # Take-profit hit
                 elif hi >= position["tp"]:
-                    pnl   = (position["tp"] - position["entry"]) * position["qty"]
-                    cash += position["tp"] * position["qty"]
+                    exit_px = position["tp"] * (1 - commission_pct - slippage_pct)
+                    pnl     = (exit_px - position["entry"]) * position["qty"]
+                    cash   += exit_px * position["qty"]
+                    hold_d  = (date - pd.Timestamp(position["entry_date"])).days
                     trades.append({
                         "entry_date": position["entry_date"],
                         "exit_date":  str(date.date()),
-                        "symbol":     df["symbol"].iloc[0] if "symbol" in df.columns else "",
                         "entry":      position["entry"],
-                        "exit":       position["tp"],
+                        "exit":       round(exit_px, 2),
                         "qty":        position["qty"],
                         "pnl":        round(pnl, 2),
                         "exit_type":  "take_profit",
+                        "hold_days":  hold_d,
                     })
                     position = None
 
@@ -193,11 +208,12 @@ class BacktestEngine:
             if position is None:
                 ta = self.ta.analyse("BT", window)
                 if ta and ta.tradeable and ta.signal == "bullish":
-                    entry  = today["close"]
-                    atr    = self._atr(window)
-                    sl     = entry - (1.5 * atr)
-                    tp     = entry + (REWARD_RISK_RATIO * 1.5 * atr)
-                    sl_dist= entry - sl
+                    raw_entry = today["close"]
+                    entry     = raw_entry * cost_factor   # include slippage on entry
+                    atr       = self._atr(window)
+                    sl        = entry - (1.5 * atr)
+                    tp        = entry + (REWARD_RISK_RATIO * 1.5 * atr)
+                    sl_dist   = entry - sl
 
                     if sl_dist > 0:
                         risk_amt = cash * RISK_PER_TRADE_PCT
@@ -207,9 +223,9 @@ class BacktestEngine:
                         if qty > 0 and cost <= cash:
                             cash    -= cost
                             position = {
-                                "entry":      entry,
-                                "sl":         sl,
-                                "tp":         tp,
+                                "entry":      round(entry, 2),
+                                "sl":         round(sl, 2),
+                                "tp":         round(tp, 2),
                                 "qty":        qty,
                                 "entry_date": str(date.date()),
                             }
@@ -219,30 +235,34 @@ class BacktestEngine:
             if position:
                 mtm += today["close"] * position["qty"]
             equity.append(mtm)
+            dates_eq.append(str(date.date()))
 
         # Close any open position at end
         if position:
-            last = df.iloc[-1]["close"]
-            pnl  = (last - position["entry"]) * position["qty"]
-            cash += last * position["qty"]
+            last    = df.iloc[-1]["close"]
+            exit_px = last * (1 - commission_pct - slippage_pct)
+            pnl     = (exit_px - position["entry"]) * position["qty"]
+            cash   += exit_px * position["qty"]
+            hold_d  = (df.index[-1] - pd.Timestamp(position["entry_date"])).days
             trades.append({
                 "entry_date": position["entry_date"],
                 "exit_date":  str(df.index[-1].date()),
                 "entry":      position["entry"],
-                "exit":       last,
+                "exit":       round(exit_px, 2),
                 "qty":        position["qty"],
                 "pnl":        round(pnl, 2),
                 "exit_type":  "end_of_period",
+                "hold_days":  hold_d,
             })
 
-        return trades, equity
+        return trades, equity, dates_eq
 
     # ------------------------------------------------------------------
     # Metrics
     # ------------------------------------------------------------------
 
     def _metrics(
-        self, symbol, start, end, initial, trades, equity
+        self, symbol, start, end, initial, trades, equity, dates
     ) -> BacktestResult:
         final     = equity[-1] if equity else initial
         ret_pct   = ((final - initial) / initial) * 100
@@ -260,6 +280,10 @@ class BacktestEngine:
         best      = max(all_pnl)  if all_pnl else 0
         worst     = min(all_pnl)  if all_pnl else 0
 
+        # Average hold duration
+        hold_days  = [t.get("hold_days", 0) for t in trades if t.get("hold_days")]
+        avg_hold   = np.mean(hold_days) if hold_days else 0
+
         # Sharpe ratio (annualised, daily returns)
         eq        = pd.Series(equity)
         daily_ret = eq.pct_change().dropna()
@@ -269,6 +293,17 @@ class BacktestEngine:
         # Max drawdown
         peak  = eq.cummax()
         dd    = ((peak - eq) / peak * 100).max()
+
+        # Monthly returns
+        monthly: dict[str, float] = {}
+        if dates and len(dates) == len(equity):
+            eq_series = pd.Series(equity, index=pd.to_datetime(dates))
+            monthly_eq = eq_series.resample("ME").last()
+            for i in range(1, len(monthly_eq)):
+                prev = monthly_eq.iloc[i-1]
+                curr = monthly_eq.iloc[i]
+                key  = monthly_eq.index[i].strftime("%Y-%m")
+                monthly[key] = round((curr - prev) / prev * 100, 2) if prev > 0 else 0.0
 
         return BacktestResult(
             symbol           = symbol,
@@ -287,6 +322,9 @@ class BacktestEngine:
             avg_trade_pnl    = round(avg_pnl, 2),
             best_trade_pnl   = round(best, 2),
             worst_trade_pnl  = round(worst, 2),
+            avg_hold_days    = round(float(avg_hold), 1),
+            equity_curve     = [round(v, 2) for v in equity],
+            monthly_returns  = monthly,
         )
 
     # ------------------------------------------------------------------
@@ -313,11 +351,29 @@ class BacktestEngine:
         tr = pd.concat([hi-lo, (hi-cl.shift()).abs(), (lo-cl.shift()).abs()], axis=1).max(axis=1)
         return float(tr.rolling(period).mean().iloc[-1])
 
+    def get_historical_win_rate(self, symbol: str) -> float | None:
+        """
+        Returns win_rate_pct from the most recent saved backtest for this symbol.
+        Returns None if no backtest result exists yet.
+        """
+        path = os.path.join(BACKTEST_RESULTS_DIR, f"{symbol}_backtest.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return float(data["result"].get("win_rate_pct", 0))
+        except Exception:
+            return None
+
     def _save(self, result: BacktestResult, trades: list):
         os.makedirs(BACKTEST_RESULTS_DIR, exist_ok=True)
         path = os.path.join(BACKTEST_RESULTS_DIR, f"{result.symbol}_backtest.json")
+        # Don't serialise the full equity curve into JSON — can be large; keep summary only
+        result_dict = {k: v for k, v in result.__dict__.items()
+                       if k not in ("equity_curve",)}
         with open(path, "w") as f:
-            json.dump({"result": result.__dict__, "trades": trades}, f, indent=2)
+            json.dump({"result": result_dict, "trades": trades}, f, indent=2)
 
     def _print(self, r: BacktestResult):
         print(f"\n{'='*55}")

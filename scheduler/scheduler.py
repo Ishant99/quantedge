@@ -36,12 +36,17 @@ def run_daily_scan():
         for sig in signals:
             memory.save_signal(sig)
         summary = memory.get_stats()
+
+        from execution.executor import get_executor
+        from config import VIRTUAL_CAPITAL
+        exec_ = get_executor()
+        pv    = exec_.get_portfolio_value()
         memory.save_snapshot({
-            "portfolio_value": 1_000_000,
-            "cash":            1_000_000,
-            "pnl":             0,
-            "pnl_pct":         0,
-            "open_positions":  0,
+            "portfolio_value": pv,
+            "cash":            pv,
+            "pnl":             pv - VIRTUAL_CAPITAL,
+            "pnl_pct":         (pv - VIRTUAL_CAPITAL) / VIRTUAL_CAPITAL * 100,
+            "open_positions":  exec_.get_open_positions_count(),
             "total_trades":    summary["total_trades"],
             "win_rate":        summary["win_rate_pct"],
         })

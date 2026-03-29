@@ -13,11 +13,16 @@ import feedparser
 import requests
 import json
 import re
+import email.utils
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import RSS_FEEDS, SENTIMENT_MODEL, OLLAMA_BASE_URL
+from config import (
+    RSS_FEEDS, SENTIMENT_MODEL, OLLAMA_BASE_URL,
+    SENTIMENT_FRESHNESS_HOURS, SENTIMENT_DECAY_FACTOR,
+)
 from utils import get_logger
 
 logger = get_logger("SentimentAgent")
@@ -92,14 +97,15 @@ class SentimentAgent:
 
     def analyse(self, symbol: str, company_name: str = "",
                 sector: str = "") -> SentimentResult:
-        # Fetch stock-specific headlines
-        stock_headlines = self._fetch_headlines(symbol, company_name)
+        # Fetch stock-specific headlines with freshness weights
+        stock_headlines, stock_weights = self._fetch_headlines(symbol, company_name)
 
-        # Add sector headlines
+        # Add sector headlines (flat weight — sector news is always "now")
         sector_headlines = self._fetch_sector_headlines(sector)
 
-        # Combine — stock news weighted more than sector news
+        # Combine — stock news first, then up to 3 sector headlines
         all_headlines = stock_headlines + sector_headlines[:3]
+        all_weights   = stock_weights   + [0.6] * len(sector_headlines[:3])
 
         if not all_headlines:
             # No news = slightly positive bias (no bad news = good news in markets)
@@ -111,7 +117,7 @@ class SentimentAgent:
         if self.ollama_available and stock_headlines:
             score, confidence = self._llm_sentiment(all_headlines, symbol, company_name)
         else:
-            score, confidence = self._keyword_sentiment(all_headlines)
+            score, confidence = self._keyword_sentiment(all_headlines, all_weights)
 
         # Boost confidence when we have more headlines
         confidence = min(0.95, confidence + len(stock_headlines) * 0.05)
@@ -197,16 +203,21 @@ Return ONLY a JSON object, nothing else:
     # Keyword sentiment — expanded
     # ------------------------------------------------------------------
 
-    def _keyword_sentiment(self, headlines: list[str]) -> tuple[float, float]:
-        pos = neg = 0
-        for h in headlines:
-            words = h.lower()
-            for w in self.POSITIVE_WORDS:
-                if w in words:
-                    pos += 1
-            for w in self.NEGATIVE_WORDS:
-                if w in words:
-                    neg += 1
+    def _keyword_sentiment(
+        self, headlines: list[str], weights: list[float] = None
+    ) -> tuple[float, float]:
+        if weights is None:
+            weights = [1.0] * len(headlines)
+
+        pos = neg = 0.0
+        for h, w in zip(headlines, weights):
+            text = h.lower()
+            for kw in self.POSITIVE_WORDS:
+                if kw in text:
+                    pos += w
+            for kw in self.NEGATIVE_WORDS:
+                if kw in text:
+                    neg += w
 
         total = pos + neg
         if total == 0:
@@ -221,38 +232,88 @@ Return ONLY a JSON object, nothing else:
     # ------------------------------------------------------------------
 
     def _fetch_all_feeds(self) -> list[dict]:
-        """Fetch all RSS feeds once and cache. Returns list of {title, summary}."""
+        """Fetch all RSS feeds once. Returns deduplicated list of {title, summary, published}."""
         items = []
+        seen_titles: set[str] = set()
+
         for url in RSS_FEEDS:
             try:
                 feed = feedparser.parse(url)
                 for entry in feed.entries[:60]:
+                    title = entry.get("title", "").strip()
+                    if not title:
+                        continue
+                    # Deduplicate across feeds (normalize: lowercase + strip punctuation)
+                    key = re.sub(r"[^a-z0-9 ]", "", title.lower()).strip()
+                    if key in seen_titles:
+                        continue
+                    seen_titles.add(key)
                     items.append({
-                        "title":   entry.get("title", ""),
-                        "summary": entry.get("summary", ""),
+                        "title":     title,
+                        "summary":   entry.get("summary", ""),
+                        "published": entry.get("published", ""),
                     })
             except Exception as e:
                 logger.debug(f"RSS fetch error {url}: {e}")
         return items
 
-    def _fetch_headlines(self, symbol: str, company_name: str) -> list[str]:
-        """Match cached headlines to this stock."""
+    def _headline_age_hours(self, item: dict) -> float:
+        """Parse RFC 2822 published date → age in hours. Returns 0.0 if unparseable."""
+        pub = item.get("published", "")
+        if not pub:
+            return 0.0
+        try:
+            ts = email.utils.parsedate_to_datetime(pub)
+            now = datetime.now(timezone.utc)
+            return (now - ts).total_seconds() / 3600
+        except Exception:
+            return 0.0
+
+    def _freshness_weight(self, item: dict) -> float:
+        """
+        Weight headline contribution by recency.
+        Fresh (<= SENTIMENT_FRESHNESS_HOURS h) = 1.0, then decays.
+        """
+        age = self._headline_age_hours(item)
+        if age <= SENTIMENT_FRESHNESS_HOURS:
+            return 1.0
+        elif age <= SENTIMENT_FRESHNESS_HOURS * 2:
+            return SENTIMENT_DECAY_FACTOR
+        elif age <= SENTIMENT_FRESHNESS_HOURS * 3:
+            return SENTIMENT_DECAY_FACTOR ** 2
+        else:
+            return SENTIMENT_DECAY_FACTOR ** 3
+
+    def _fetch_headlines(self, symbol: str, company_name: str) -> tuple[list[str], list[float]]:
+        """
+        Match cached headlines to this stock.
+        Returns (titles, freshness_weights).
+        """
         if self._market_headlines is None:
             self._market_headlines = self._fetch_all_feeds()
 
         search_terms = {symbol.lower()}
         if company_name:
-            # Add first word of company name (e.g. "Reliance" from "Reliance Industries")
             search_terms.add(company_name.lower())
-            search_terms.add(company_name.split()[0].lower())
+            # Add every meaningful word (len > 3) so "Tata Consultancy Services"
+            # matches on "tata", "consultancy", "services" individually
+            words = [w.lower() for w in company_name.split() if len(w) > 3]
+            search_terms.update(words[:3])
 
-        matched = []
+        matched_titles: list[str]  = []
+        matched_weights: list[float] = []
+        seen: set[str] = set()
+
         for item in self._market_headlines:
             text = (item["title"] + " " + item["summary"]).lower()
             if any(term in text for term in search_terms):
-                matched.append(item["title"])
+                title = item["title"]
+                if title not in seen:
+                    seen.add(title)
+                    matched_titles.append(title)
+                    matched_weights.append(self._freshness_weight(item))
 
-        return list(set(matched))[:8]
+        return matched_titles[:8], matched_weights[:8]
 
     def _fetch_sector_headlines(self, sector: str) -> list[str]:
         """Get headlines relevant to the stock's sector."""

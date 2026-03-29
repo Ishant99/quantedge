@@ -1,0 +1,502 @@
+symbol,name,sector,market_cap_rank,index_membership
+RELIANCE,Reliance Industries,Energy,1,NIFTY50
+TCS,Tata Consultancy Services,IT,2,NIFTY50
+HDFCBANK,HDFC Bank,Banking,3,NIFTY50
+INFY,Infosys,IT,4,NIFTY50
+ICICIBANK,ICICI Bank,Banking,5,NIFTY50
+HINDUNILVR,Hindustan Unilever,FMCG,6,NIFTY50
+SBIN,State Bank of India,Banking,7,NIFTY50
+BHARTIARTL,Bharti Airtel,Telecom,8,NIFTY50
+ITC,ITC,FMCG,9,NIFTY50
+KOTAKBANK,Kotak Mahindra Bank,Banking,10,NIFTY50
+LT,Larsen & Toubro,Infrastructure,11,NIFTY50
+AXISBANK,Axis Bank,Banking,12,NIFTY50
+ASIANPAINT,Asian Paints,Consumer Durables,13,NIFTY50
+MARUTI,Maruti Suzuki,Auto,14,NIFTY50
+SUNPHARMA,Sun Pharmaceutical,Pharma,15,NIFTY50
+TITAN,Titan Company,Consumer Durables,16,NIFTY50
+BAJFINANCE,Bajaj Finance,NBFC,17,NIFTY50
+WIPRO,Wipro,IT,18,NIFTY50
+ULTRACEMCO,UltraTech Cement,Cement,19,NIFTY50
+NESTLEIND,Nestle India,FMCG,20,NIFTY50
+ADANIENT,Adani Enterprises,Diversified,21,NIFTY50
+ADANIPORTS,Adani Ports,Logistics,22,NIFTY50
+HCLTECH,HCL Technologies,IT,23,NIFTY50
+BAJAJFINSV,Bajaj Finserv,NBFC,24,NIFTY50
+JSWSTEEL,JSW Steel,Metals,25,NIFTY50
+TATASTEEL,Tata Steel,Metals,26,NIFTY50
+HINDALCO,Hindalco Industries,Metals,27,NIFTY50
+TECHM,Tech Mahindra,IT,28,NIFTY50
+POWERGRID,Power Grid Corporation,Power,29,NIFTY50
+NTPC,NTPC,Power,30,NIFTY50
+ONGC,Oil & Natural Gas Corporation,Energy,31,NIFTY50
+M&M,Mahindra & Mahindra,Auto,32,NIFTY50
+COALINDIA,Coal India,Energy,33,NIFTY50
+BPCL,Bharat Petroleum,Energy,34,NIFTY50
+GRASIM,Grasim Industries,Diversified,35,NIFTY50
+DIVISLAB,Divi's Laboratories,Pharma,36,NIFTY50
+DRREDDY,Dr Reddy's Laboratories,Pharma,37,NIFTY50
+CIPLA,Cipla,Pharma,38,NIFTY50
+BAJAJ-AUTO,Bajaj Auto,Auto,39,NIFTY50
+EICHERMOT,Eicher Motors,Auto,40,NIFTY50
+APOLLOHOSP,Apollo Hospitals,Healthcare,41,NIFTY50
+HEROMOTOCO,Hero MotoCorp,Auto,42,NIFTY50
+TATACONSUM,Tata Consumer Products,FMCG,43,NIFTY50
+BRITANNIA,Britannia Industries,FMCG,44,NIFTY50
+INDUSINDBK,IndusInd Bank,Banking,45,NIFTY50
+PIDILITIND,Pidilite Industries,Chemicals,46,NIFTY100
+BERGEPAINT,Berger Paints,Consumer Durables,47,NIFTY100
+HAVELLS,Havells India,Consumer Durables,48,NIFTY100
+ADANIGREEN,Adani Green Energy,Power,49,NIFTY100
+ADANIPOWER,Adani Power,Power,50,NIFTY100
+SIEMENS,Siemens,Capital Goods,51,NIFTY100
+ABB,ABB India,Capital Goods,52,NIFTY100
+HDFCLIFE,HDFC Life Insurance,Insurance,53,NIFTY100
+SBILIFE,SBI Life Insurance,Insurance,54,NIFTY100
+ICICIPRULIFE,ICICI Prudential Life,Insurance,55,NIFTY100
+ICICIPRULI,ICICI Prudential Life,Insurance,55,NIFTY100
+SBICARD,SBI Cards and Payment,NBFC,56,NIFTY100
+CHOLAFIN,Cholamandalam Finance,NBFC,57,NIFTY100
+MUTHOOTFIN,Muthoot Finance,NBFC,58,NIFTY100
+PFC,Power Finance Corporation,Power,59,NIFTY100
+RECLTD,REC Limited,Power,60,NIFTY100
+BANKBARODA,Bank of Baroda,Banking,61,NIFTY100
+CANBK,Canara Bank,Banking,62,NIFTY100
+PNB,Punjab National Bank,Banking,63,NIFTY100
+FEDERALBNK,Federal Bank,Banking,64,NIFTY100
+IDFCFIRSTB,IDFC First Bank,Banking,65,NIFTY100
+BANDHANBNK,Bandhan Bank,Banking,66,NIFTY100
+INDIANB,Indian Bank,Banking,67,NIFTY100
+MAHABANK,Bank of Maharashtra,Banking,68,NIFTY200
+UNIONBANK,Union Bank of India,Banking,69,NIFTY200
+IOC,Indian Oil Corporation,Energy,70,NIFTY100
+IRCTC,Indian Railway Catering,Infrastructure,71,NIFTY100
+NYKAA,FSN E-Commerce (Nykaa),Retail,72,NIFTY100
+PAYTM,One97 Communications,Fintech,73,NIFTY100
+DELHIVERY,Delhivery,Logistics,74,NIFTY100
+POLICYBZR,PB Fintech (PolicyBazaar),Fintech,75,NIFTY100
+INDIGO,IndiGo (InterGlobe Aviation),Aviation,76,NIFTY100
+JSWENERGY,JSW Energy,Power,77,NIFTY100
+NHPC,NHPC,Power,78,NIFTY100
+CESC,CESC,Power,79,NIFTY200
+VOLTAS,Voltas,Consumer Durables,80,NIFTY100
+IDEA,Vodafone Idea,Telecom,81,NIFTY200
+ADANIENSOL,Adani Energy Solutions,Power,82,NIFTY200
+DABUR,Dabur India,FMCG,83,NIFTY100
+MARICO,Marico,FMCG,84,NIFTY100
+GODREJCP,Godrej Consumer Products,FMCG,85,NIFTY100
+COLPAL,Colgate-Palmolive India,FMCG,86,NIFTY100
+EMAMILTD,Emami,FMCG,87,NIFTY200
+PGHH,Procter & Gamble Hygiene,FMCG,88,NIFTY200
+TATAMOTORS,Tata Motors,Auto,89,NIFTY100
+TVSMOTOR,TVS Motor Company,Auto,90,NIFTY100
+ASHOKLEY,Ashok Leyland,Auto,91,NIFTY100
+MOTHERSON,Samvardhana Motherson,Auto Ancillary,92,NIFTY100
+BHARATFORG,Bharat Forge,Auto Ancillary,93,NIFTY100
+MINDAIND,Minda Industries,Auto Ancillary,94,NIFTY200
+BOSCHLTD,Bosch,Auto Ancillary,95,NIFTY100
+BALKRISIND,Balkrishna Industries,Auto Ancillary,96,NIFTY100
+APOLLOTYRE,Apollo Tyres,Auto Ancillary,97,NIFTY200
+MRF,MRF,Auto Ancillary,98,NIFTY100
+CEAT,CEAT,Auto Ancillary,99,NIFTY200
+EXIDEIND,Exide Industries,Auto Ancillary,100,NIFTY200
+AUROPHARMA,Aurobindo Pharma,Pharma,101,NIFTY100
+LUPIN,Lupin,Pharma,102,NIFTY100
+TORNTPHARM,Torrent Pharmaceuticals,Pharma,103,NIFTY100
+BIOCON,Biocon,Pharma,104,NIFTY100
+ALKEM,Alkem Laboratories,Pharma,105,NIFTY200
+ABBOTINDIA,Abbott India,Pharma,106,NIFTY200
+IPCALAB,IPCA Laboratories,Pharma,107,NIFTY200
+GRANULES,Granules India,Pharma,108,NIFTY200
+NATCOPHARM,Natco Pharma,Pharma,109,NIFTY500
+GLENMARK,Glenmark Pharmaceuticals,Pharma,110,NIFTY200
+LAURUSLABS,Laurus Labs,Pharma,111,NIFTY200
+MAXHEALTH,Max Healthcare Institute,Healthcare,112,NIFTY100
+FORTIS,Fortis Healthcare,Healthcare,113,NIFTY200
+RAINBOW,Rainbow Children's Medicare,Healthcare,114,NIFTY500
+METROPOLIS,Metropolis Healthcare,Healthcare,115,NIFTY500
+THYROCARE,Thyrocare Technologies,Healthcare,116,NIFTY500
+HAL,Hindustan Aeronautics,Defence,117,NIFTY100
+BEL,Bharat Electronics,Defence,118,NIFTY100
+BEML,BEML,Defence,119,NIFTY200
+COCHINSHIP,Cochin Shipyard,Defence,120,NIFTY200
+MAZDOCK,Mazagon Dock Shipbuilders,Defence,121,NIFTY200
+GRSE,Garden Reach Shipbuilders,Defence,122,NIFTY500
+BHEL,Bharat Heavy Electricals,Capital Goods,123,NIFTY100
+THERMAX,Thermax,Capital Goods,124,NIFTY200
+CUMMINSIND,Cummins India,Capital Goods,125,NIFTY200
+TIINDIA,Tube Investments of India,Capital Goods,126,NIFTY200
+SKFINDIA,SKF India,Capital Goods,127,NIFTY500
+SCHAEFFLER,Schaeffler India,Capital Goods,128,NIFTY500
+KEC,KEC International,Capital Goods,129,NIFTY200
+KALPATPOWR,Kalpataru Projects,Capital Goods,130,NIFTY500
+POLYCAB,Polycab India,Capital Goods,131,NIFTY100
+APLAPOLLO,APL Apollo Tubes,Capital Goods,132,NIFTY200
+NATIONALUM,National Aluminium,Metals,133,NIFTY200
+SAIL,Steel Authority of India,Metals,134,NIFTY200
+HINDCOPPER,Hindustan Copper,Metals,135,NIFTY200
+NMDC,NMDC,Metals,136,NIFTY200
+WELCORP,Welspun Corp,Metals,137,NIFTY500
+RATNAMANI,Ratnamani Metals,Metals,138,NIFTY500
+JINDALSAW,Jindal SAW,Metals,139,NIFTY500
+SHYAMMETL,Shyam Metalics,Metals,140,NIFTY500
+TATACHEM,Tata Chemicals,Chemicals,141,NIFTY200
+DEEPAKNTR,Deepak Nitrite,Chemicals,142,NIFTY200
+PIIND,PI Industries,Chemicals,143,NIFTY200
+AARTIIND,Aarti Industries,Chemicals,144,NIFTY200
+VINATI,Vinati Organics,Chemicals,145,NIFTY200
+CLEAN,Clean Science and Technology,Chemicals,146,NIFTY500
+NAVINFLUOR,Navin Fluorine,Chemicals,147,NIFTY500
+FINEORG,Fine Organic Industries,Chemicals,148,NIFTY500
+GALAXYSURF,Galaxy Surfactants,Chemicals,149,NIFTY500
+SRF,SRF,Chemicals,150,NIFTY200
+COROMANDEL,Coromandel International,Agri,151,NIFTY200
+CHAMBLFERT,Chambal Fertilizers,Agri,152,NIFTY200
+GNFC,Gujarat Narmada Valley Fert,Agri,153,NIFTY500
+RALLIS,Rallis India,Agri,154,NIFTY500
+DHANUKA,Dhanuka Agritech,Agri,155,NIFTY500
+KAVVERITEL,Kavveri Telecom Products,Telecom,156,NIFTY500
+TATACOMM,Tata Communications,Telecom,157,NIFTY200
+HFCL,HFCL,Telecom,158,NIFTY500
+LTIM,LTIMindtree,IT,159,NIFTY100
+MPHASIS,Mphasis,IT,160,NIFTY200
+PERSISTENT,Persistent Systems,IT,161,NIFTY200
+COFORGE,Coforge,IT,162,NIFTY200
+LTTS,L&T Technology Services,IT,163,NIFTY200
+KPITTECH,KPIT Technologies,IT,164,NIFTY200
+TATAELXSI,Tata Elxsi,IT,165,NIFTY200
+SONATSOFTW,Sonata Software,IT,166,NIFTY500
+MASTEK,Mastek,IT,167,NIFTY500
+ZENSAR,Zensar Technologies,IT,168,NIFTY500
+HEXAWARE,Hexaware Technologies,IT,169,NIFTY200
+NAUKRI,Info Edge (Naukri),Internet,170,NIFTY100
+ZOMATO,Zomato,Internet,171,NIFTY100
+SWIGGY,Swiggy,Internet,172,NIFTY200
+DMART,Avenue Supermarts (DMart),Retail,173,NIFTY100
+TRENT,Trent,Retail,174,NIFTY100
+VMART,V-Mart Retail,Retail,175,NIFTY500
+SHOPPERSSTOP,Shoppers Stop,Retail,176,NIFTY500
+ABFRL,Aditya Birla Fashion,Retail,177,NIFTY200
+PAGEIND,Page Industries,Textiles,178,NIFTY200
+VARDHMAN,Vardhman Textiles,Textiles,179,NIFTY200
+TRIDENT,Trident,Textiles,180,NIFTY500
+WELSPUNIND,Welspun India,Textiles,181,NIFTY200
+SPORTKING,Sportking India,Textiles,182,NIFTY500
+RAYMOND,Raymond,Textiles,183,NIFTY500
+INDIANHOTEL,Indian Hotels (Taj),Hospitality,184,NIFTY200
+LEMERIDIEN,Le Meridien Hotels,Hospitality,185,NIFTY500
+EIHOTEL,EIH (Oberoi Hotels),Hospitality,186,NIFTY500
+CHALET,Chalet Hotels,Hospitality,187,NIFTY500
+LEMONTREE,Lemon Tree Hotels,Hospitality,188,NIFTY500
+JINDALSTPOW,Jindal Steel & Power,Metals,189,NIFTY200
+AIAENG,AIA Engineering,Capital Goods,190,NIFTY200
+CARBORUNIV,Carborundum Universal,Capital Goods,191,NIFTY500
+GRINDWELL,Grindwell Norton,Capital Goods,192,NIFTY500
+SUZLON,Suzlon Energy,Power,193,NIFTY200
+TORNTPOWER,Torrent Power,Power,194,NIFTY200
+TATAPOWER,Tata Power,Power,195,NIFTY200
+ADANITRANS,Adani Transmission,Power,196,NIFTY200
+INOXWIND,Inox Wind,Power,197,NIFTY500
+IREDA,Indian Renewable Energy Dev,Power,198,NIFTY200
+GPPL,Gujarat Pipavav Port,Logistics,199,NIFTY500
+BLUEDART,Blue Dart Express,Logistics,200,NIFTY200
+CONCOR,Container Corporation,Logistics,201,NIFTY200
+MAHLOG,Mahindra Logistics,Logistics,202,NIFTY500
+GATI,Gati,Logistics,203,NIFTY500
+TVSSCS,TVS Supply Chain Solutions,Logistics,204,NIFTY500
+ZEEL,Zee Entertainment,Media,205,NIFTY200
+SUNTV,Sun TV Network,Media,206,NIFTY200
+PVRINOX,PVR INOX,Media,207,NIFTY200
+NETWORK18,Network18 Media,Media,208,NIFTY500
+NAZARA,Nazara Technologies,Media,209,NIFTY500
+SAREGAMA,Saregama India,Media,210,NIFTY500
+OBEROIRLTY,Oberoi Realty,Realty,211,NIFTY200
+DLF,DLF,Realty,212,NIFTY100
+GODREJPROP,Godrej Properties,Realty,213,NIFTY100
+MACROTECH,Macrotech Developers (Lodha),Realty,214,NIFTY100
+PRESTIGE,Prestige Estates,Realty,215,NIFTY200
+PHOENIXLTD,Phoenix Mills,Realty,216,NIFTY200
+SOBHA,Sobha,Realty,217,NIFTY500
+BRIGADE,Brigade Enterprises,Realty,218,NIFTY500
+PURVA,Puravankara,Realty,219,NIFTY500
+NUVOCO,Nuvoco Vistas,Cement,220,NIFTY500
+JKCEMENT,JK Cement,Cement,221,NIFTY200
+SHREECEM,Shree Cement,Cement,222,NIFTY100
+AMBUJACEMENT,Ambuja Cements,Cement,223,NIFTY100
+ACCLTD,ACC,Cement,224,NIFTY100
+RAMCOCEM,Ramco Cements,Cement,225,NIFTY200
+HEIDELBERG,Heidelberg Materials India,Cement,226,NIFTY500
+ORIENTCEM,Orient Cement,Cement,227,NIFTY500
+STARCEMENT,Star Cement,Cement,228,NIFTY500
+ISGEC,ISGEC Heavy Engineering,Capital Goods,229,NIFTY500
+ELECON,Elecon Engineering,Capital Goods,230,NIFTY500
+GMRAIRPORT,GMR Airports Infrastructure,Infrastructure,231,NIFTY200
+IRFC,Indian Railway Finance Corp,Infrastructure,232,NIFTY200
+RVNL,Rail Vikas Nigam,Infrastructure,233,NIFTY200
+NCC,NCC,Infrastructure,234,NIFTY200
+HCC,Hindustan Construction,Infrastructure,235,NIFTY500
+PNCINFRA,PNC Infratech,Infrastructure,236,NIFTY500
+KNRCON,KNR Constructions,Infrastructure,237,NIFTY500
+HGINFRA,HG Infra Engineering,Infrastructure,238,NIFTY500
+AHLUWALIA,Ahluwalia Contracts,Infrastructure,239,NIFTY500
+GAPL,G R Infraprojects,Infrastructure,240,NIFTY500
+RITES,RITES,Infrastructure,241,NIFTY500
+MFSL,Max Financial Services,Insurance,242,NIFTY200
+GICRE,General Insurance Corp,Insurance,243,NIFTY200
+NIACL,New India Assurance,Insurance,244,NIFTY500
+STARHEALTH,Star Health Insurance,Insurance,245,NIFTY200
+GODIGIT,Go Digit General Insurance,Insurance,246,NIFTY500
+BAJAJHLDNG,Bajaj Holdings,Diversified,247,NIFTY200
+TATAINVEST,Tata Investment Corporation,Diversified,248,NIFTY500
+HDFCAMC,HDFC Asset Management,NBFC,249,NIFTY200
+NIPPONLIFEIND,Nippon Life India AMC,NBFC,250,NIFTY500
+ANGELONE,Angel One,NBFC,251,NIFTY200
+IIFLSEC,IIFL Securities,NBFC,252,NIFTY500
+MOTILALOFS,Motilal Oswal Financial,NBFC,253,NIFTY200
+M&MFIN,Mahindra & Mahindra Financial,NBFC,254,NIFTY200
+SHRIRAMFIN,Shriram Finance,NBFC,255,NIFTY100
+BAJAJFINSV,Bajaj Finserv,NBFC,256,NIFTY50
+LICHSGFIN,LIC Housing Finance,NBFC,257,NIFTY200
+POONAWALLA,Poonawalla Fincorp,NBFC,258,NIFTY500
+MANAPPURAM,Manappuram Finance,NBFC,259,NIFTY200
+CANFINHOME,Can Fin Homes,NBFC,260,NIFTY500
+AAVAS,Aavas Financiers,NBFC,261,NIFTY500
+CREDITACC,Credit Access Grameen,NBFC,262,NIFTY500
+UJJIVANSFB,Ujjivan Small Finance Bank,Banking,263,NIFTY500
+EQUITASBNK,Equitas Small Finance Bank,Banking,264,NIFTY500
+SURYODAY,Suryoday Small Finance Bank,Banking,265,NIFTY500
+AUBANK,AU Small Finance Bank,Banking,266,NIFTY200
+JAIBALAJI,Jai Balaji Industries,Metals,267,NIFTY500
+JSPL,Jindal Steel & Power,Metals,268,NIFTY200
+WELCORP,Welspun Corp,Metals,269,NIFTY500
+KALYANKJIL,Kalyan Jewellers,Retail,270,NIFTY200
+SENCO,Senco Gold,Retail,271,NIFTY500
+PCJEWELLER,PC Jeweller,Retail,272,NIFTY500
+SAPPHIRE,Sapphire Foods,Hospitality,273,NIFTY500
+DEVYANI,Devyani International,Hospitality,274,NIFTY500
+JUBLFOOD,Jubilant FoodWorks,Hospitality,275,NIFTY200
+WESTLIFE,Westlife Foodworld,Hospitality,276,NIFTY500
+EASEMYTRIP,Easy Trip Planners,Aviation,277,NIFTY500
+SPICEJET,SpiceJet,Aviation,278,NIFTY500
+GLOBUS,Globus Spirits,FMCG,279,NIFTY500
+RADICO,Radico Khaitan,FMCG,280,NIFTY200
+UNITDSPR,United Spirits,FMCG,281,NIFTY200
+VSTIND,VST Industries,FMCG,282,NIFTY500
+GODFRYPHLP,Godfrey Phillips,FMCG,283,NIFTY500
+JUBLPHARMA,Jubilant Pharmova,Pharma,284,NIFTY200
+SUNPHARMA,Sun Pharmaceutical,Pharma,285,NIFTY50
+BLKASHYAP,B L Kashyap,Infrastructure,286,NIFTY500
+IRB,IRB Infrastructure,Infrastructure,287,NIFTY500
+ASHIANA,Ashiana Housing,Realty,288,NIFTY500
+ARVINDFASN,Arvind Fashions,Retail,289,NIFTY500
+NUVAMA,Nuvama Wealth Management,NBFC,290,NIFTY500
+360ONE,360 ONE WAM,NBFC,291,NIFTY200
+SBFC,SBFC Finance,NBFC,292,NIFTY500
+UGROCAP,Ugro Capital,NBFC,293,NIFTY500
+LXCHEM,Laxmi Organic Industries,Chemicals,294,NIFTY500
+HSCL,Himadri Speciality Chemical,Chemicals,295,NIFTY500
+TATVA,Tatva Chintan Pharma,Chemicals,296,NIFTY500
+PCBL,PCBL,Chemicals,297,NIFTY500
+INDIGOPNTS,Indigo Paints,Consumer Durables,298,NIFTY500
+KANSAINER,Kansai Nerolac Paints,Consumer Durables,299,NIFTY200
+CROMPTON,Crompton Greaves Consumer,Consumer Durables,300,NIFTY200
+ORIENTELEC,Orient Electric,Consumer Durables,301,NIFTY500
+BATAINDIA,Bata India,Consumer Durables,302,NIFTY200
+RELAXO,Relaxo Footwears,Consumer Durables,303,NIFTY500
+CAMPUS,Campus Activewear,Consumer Durables,304,NIFTY500
+LIMELIGHT,Limelight Networks,Consumer Durables,305,NIFTY500
+BLUESTARCO,Blue Star,Consumer Durables,306,NIFTY200
+AMBER,Amber Enterprises,Consumer Durables,307,NIFTY500
+DIXON,Dixon Technologies,Consumer Durables,308,NIFTY200
+VGUARD,V-Guard Industries,Consumer Durables,309,NIFTY500
+SYSKA,Syska LED Lights,Consumer Durables,310,NIFTY500
+BAJAJELEC,Bajaj Electricals,Consumer Durables,311,NIFTY500
+SOLARINDS,Solar Industries,Defence,312,NIFTY200
+PARAS,Paras Defence,Defence,313,NIFTY500
+ASTRA,Astra Microwave Products,Defence,314,NIFTY500
+MTAR,MTAR Technologies,Defence,315,NIFTY500
+DATAPATTNS,Data Patterns,Defence,316,NIFTY500
+IDEAFORGE,ideaForge Technology,Defence,317,NIFTY500
+CENTREPOINT,Centre Point,Hospitality,318,NIFTY500
+SUPRIYA,Supriya Lifescience,Pharma,319,NIFTY500
+WINDLAS,Windlas Biotech,Pharma,320,NIFTY500
+GLAND,Gland Pharma,Pharma,321,NIFTY200
+SEQUENT,SeQuent Scientific,Pharma,322,NIFTY500
+SHILPAMED,Shilpa Medicare,Pharma,323,NIFTY500
+PIRAMALPHA,Piramal Pharma,Pharma,324,NIFTY500
+EMUDHRA,eMudhra,IT,325,NIFTY500
+RATEGAIN,RateGain Travel Technologies,IT,326,NIFTY500
+TANLA,Tanla Platforms,IT,327,NIFTY500
+NEWGEN,Newgen Software,IT,328,NIFTY500
+INTELLECT,Intellect Design Arena,IT,329,NIFTY500
+ROUTE,Route Mobile,IT,330,NIFTY500
+HAPPSTMNDS,Happiest Minds Technologies,IT,331,NIFTY500
+SFININDEX,SFIN Index,IT,332,NIFTY500
+QUESS,Quess Corp,IT,333,NIFTY500
+TEAMLEASE,TeamLease Services,IT,334,NIFTY500
+CARTRADE,CarTrade Tech,Internet,335,NIFTY500
+JUSTDIAL,Just Dial,Internet,336,NIFTY500
+INDIAMART,IndiaMART InterMESH,Internet,337,NIFTY200
+INDIGRID,IndiGrid InvIT,Power,338,NIFTY500
+POWERMECH,Power Mech Projects,Power,339,NIFTY500
+JPPOWER,JP Power Ventures,Power,340,NIFTY500
+ACMESOLAR,ACME Solar Holdings,Power,341,NIFTY500
+PREMIERENE,Premier Energies,Power,342,NIFTY500
+WAAREEENER,Waaree Energies,Power,343,NIFTY500
+WEBSOL,Websol Energy System,Power,344,NIFTY500
+KIRLOSIND,Kirloskar Industries,Capital Goods,345,NIFTY500
+KIRLPNU,Kirloskar Pneumatic,Capital Goods,346,NIFTY500
+WEIR,Weir Minerals India,Capital Goods,347,NIFTY500
+ELGI,Elgi Equipments,Capital Goods,348,NIFTY500
+ACTION,Action Construction Equipment,Capital Goods,349,NIFTY500
+ESCORTS,Escorts Kubota,Capital Goods,350,NIFTY200
+SANGHVIFOR,Sanghvi Forging,Capital Goods,351,NIFTY500
+TRIVENI,Triveni Turbine,Capital Goods,352,NIFTY500
+VOLTAMP,Voltamp Transformers,Capital Goods,353,NIFTY500
+TRIL,Transformers & Rectifiers,Capital Goods,354,NIFTY500
+EPIGRAL,Epigral,Chemicals,355,NIFTY500
+NOCIL,NOCIL,Chemicals,356,NIFTY500
+ALKYLAMINE,Alkyl Amines Chemicals,Chemicals,357,NIFTY500
+FLUOROCHEM,Gujarat Fluorochemicals,Chemicals,358,NIFTY200
+NEOGEN,Neogen Chemicals,Chemicals,359,NIFTY500
+SUDARSCHEM,Sudarshan Chemical,Chemicals,360,NIFTY500
+PTCIL,PTC Industries,Chemicals,361,NIFTY500
+SUPPETRO,Supreme Petrochem,Chemicals,362,NIFTY500
+JCHAC,Johnson Controls-Hitachi AC,Consumer Durables,363,NIFTY500
+HITACHIEN,Hitachi Energy India,Capital Goods,364,NIFTY500
+ABB,ABB India,Capital Goods,365,NIFTY100
+HONAUT,Honeywell Automation,Capital Goods,366,NIFTY200
+CHOLAHLDNG,Cholamandalam Investment,NBFC,367,NIFTY500
+BAJAJHFL,Bajaj Housing Finance,NBFC,368,NIFTY200
+APTUS,Aptus Value Housing Finance,NBFC,369,NIFTY500
+HOMEFIRST,Home First Finance,NBFC,370,NIFTY500
+CAPLIPOINT,Caplin Point Laboratories,Pharma,371,NIFTY500
+JBCHEPHARM,JB Chemicals & Pharma,Pharma,372,NIFTY500
+ERIS,Eris Lifesciences,Pharma,373,NIFTY500
+SOLARA,Solara Active Pharma,Pharma,374,NIFTY500
+GUJGASLTD,Gujarat Gas,Energy,375,NIFTY200
+IGL,Indraprastha Gas,Energy,376,NIFTY200
+MGL,Mahanagar Gas,Energy,377,NIFTY200
+PETRONET,Petronet LNG,Energy,378,NIFTY100
+GAIL,GAIL India,Energy,379,NIFTY100
+HINDPETRO,Hindustan Petroleum,Energy,380,NIFTY200
+MRPL,Mangalore Refinery,Energy,381,NIFTY500
+CHENNPETRO,Chennai Petroleum,Energy,382,NIFTY500
+DBCORP,DB Corp,Media,383,NIFTY500
+JAGRANPRAK,Jagran Prakashan,Media,384,NIFTY500
+HINDMEDIA,HT Media,Media,385,NIFTY500
+TVTODAY,TV Today Network,Media,386,NIFTY500
+NDTV,NDTV,Media,387,NIFTY500
+TIPSINDLTD,Tips Industries,Media,388,NIFTY500
+AARVI,AARVI Encon,Capital Goods,389,NIFTY500
+STOVEKRAFT,Stove Kraft,Consumer Durables,390,NIFTY500
+GREENPANEL,Greenpanel Industries,Consumer Durables,391,NIFTY500
+CENTURYPLY,Century Plyboards,Consumer Durables,392,NIFTY200
+GREENPLY,Greenply Industries,Consumer Durables,393,NIFTY500
+ASTRAL,Astral,Capital Goods,394,NIFTY200
+PRINCEPIPE,Prince Pipes and Fittings,Capital Goods,395,NIFTY500
+SUPREME,Supreme Industries,Capital Goods,396,NIFTY200
+FINOLEX,Finolex Industries,Capital Goods,397,NIFTY500
+JKPAPER,JK Paper,Consumer Durables,398,NIFTY500
+WESTERNINDIA,West Coast Paper Mills,Consumer Durables,399,NIFTY500
+TATACHEMICAL,Tata Chemicals,Chemicals,400,NIFTY200
+IRCON,IRCON International,Infrastructure,401,NIFTY500
+NBCC,NBCC India,Infrastructure,402,NIFTY500
+HUDCO,Housing & Urban Development,Infrastructure,403,NIFTY500
+ENGINERSIN,Engineers India,Infrastructure,404,NIFTY500
+WABAG,VA Tech Wabag,Infrastructure,405,NIFTY500
+EPAM,EPAM Systems India,IT,406,NIFTY500
+BIRLASOFT,Birlasoft,IT,407,NIFTY500
+FIVESTAR,Five-Star Business Finance,NBFC,408,NIFTY500
+INDIGRID,IndiGrid,Power,409,NIFTY500
+CPSEETF,CPSE ETF,Diversified,410,NIFTY500
+GODREJIND,Godrej Industries,Diversified,411,NIFTY200
+PIDILITIND,Pidilite Industries,Chemicals,412,NIFTY100
+SUMICHEM,Sumitomo Chemical India,Chemicals,413,NIFTY500
+BBTC,Bombay Burmah Trading,Diversified,414,NIFTY500
+MHRIL,Mahindra Holidays,Hospitality,415,NIFTY500
+SPANDANA,Spandana Sphoorty Financial,NBFC,416,NIFTY500
+SATIN,Satin Creditcare Network,NBFC,417,NIFTY500
+WELSPUNLIV,Welspun Living,Textiles,418,NIFTY500
+KPR,KPR Mill,Textiles,419,NIFTY500
+NITIN,Nitin Spinners,Textiles,420,NIFTY500
+HIMATSEIDE,Himatsingka Seide,Textiles,421,NIFTY500
+RTNPOWER,Rattanindia Power,Power,422,NIFTY500
+ORIENTGRE,Orient Green Power,Power,423,NIFTY500
+KPRMILL,KPR Mill,Textiles,424,NIFTY500
+EDELWEISS,Edelweiss Financial Services,NBFC,425,NIFTY500
+KARURVYSYA,Karur Vysya Bank,Banking,426,NIFTY500
+CSBBANK,CSB Bank,Banking,427,NIFTY500
+DCBBANK,DCB Bank,Banking,428,NIFTY500
+RBLBANK,RBL Bank,Banking,429,NIFTY200
+SOUTHBANK,South Indian Bank,Banking,430,NIFTY500
+CITYUNIONBK,City Union Bank,Banking,431,NIFTY500
+LAKSHVILAS,Lakshmi Vilas Bank,Banking,432,NIFTY500
+NATHBIOKEM,Nath Bio-Genes,Agri,433,NIFTY500
+BAYER,Bayer CropScience,Agri,434,NIFTY500
+KSCL,Kaveri Seed Company,Agri,435,NIFTY500
+ADVENZYMES,Advanced Enzyme Technologies,Agri,436,NIFTY500
+JUBLPHARMA,Jubilant Pharmova,Pharma,437,NIFTY200
+SUNPHARMA,Sun Pharmaceutical,Pharma,438,NIFTY50
+ATUL,Atul,Chemicals,439,NIFTY200
+GHCL,GHCL,Chemicals,440,NIFTY500
+BASF,BASF India,Chemicals,441,NIFTY500
+CASTROLIND,Castrol India,Energy,442,NIFTY200
+GULFOILLUB,Gulf Oil Lubricants,Energy,443,NIFTY500
+TATAELXSI,Tata Elxsi,IT,444,NIFTY200
+LATENTVIEW,Latent View Analytics,IT,445,NIFTY500
+NUVAMA,Nuvama Wealth,NBFC,446,NIFTY500
+GOCOLORS,Go Fashion India,Retail,447,NIFTY500
+TIPSFILMS,Tips Films,Media,448,NIFTY500
+SHRIRAMEPC,Shriram EPC,Capital Goods,449,NIFTY500
+GABRIEL,Gabriel India,Auto Ancillary,450,NIFTY500
+SUPRAJIT,Suprajit Engineering,Auto Ancillary,451,NIFTY500
+ENDURANCE,Endurance Technologies,Auto Ancillary,452,NIFTY200
+SUNDRMFAST,Sundram Fasteners,Auto Ancillary,453,NIFTY200
+CRAFTSMAN,Craftsman Automation,Auto Ancillary,454,NIFTY500
+LUMAXTECH,Lumax Technologies,Auto Ancillary,455,NIFTY500
+LUMAXIND,Lumax Industries,Auto Ancillary,456,NIFTY500
+AAON,Aaon,Consumer Durables,457,NIFTY500
+GANESHHOUC,Ganesh Housing Corporation,Realty,458,NIFTY500
+KOLTEPATIL,Kolte-Patil Developers,Realty,459,NIFTY500
+ANANTRAJ,Anant Raj,Realty,460,NIFTY500
+SUNTECKREAL,Sunteck Realty,Realty,461,NIFTY500
+SIGNATURE,Signature Global,Realty,462,NIFTY500
+MAXESTATES,Max Estates,Realty,463,NIFTY500
+WELSPUNONE,Welspun One Logistics Parks,Logistics,464,NIFTY500
+ALLCARGO,Allcargo Logistics,Logistics,465,NIFTY500
+SICAL,Sical Logistics,Logistics,466,NIFTY500
+TCI,Transport Corporation of India,Logistics,467,NIFTY500
+MAHLOG,Mahindra Logistics,Logistics,468,NIFTY500
+JETAIRWAYS,Jet Airways (Ind),Aviation,469,NIFTY500
+AIRINDIA,Air India (Tata),Aviation,470,NIFTY500
+GMMPFAUDLR,GMM Pfaudler,Capital Goods,471,NIFTY500
+WOCKPHARMA,Wockhardt,Pharma,472,NIFTY500
+JUBLPHARM,Jubilant Pharmova,Pharma,473,NIFTY200
+FLUOROCHEM,Gujarat Fluorochemicals,Chemicals,474,NIFTY200
+TATVA,Tatva Chintan Pharma Chem,Chemicals,475,NIFTY500
+SHARDACROP,Sharda Cropchem,Agri,476,NIFTY500
+HERITGFOOD,Heritage Foods,FMCG,477,NIFTY500
+MILKFOOD,Milk Food,FMCG,478,NIFTY500
+HATSUN,Hatsun Agro,FMCG,479,NIFTY500
+PARAG,Parag Milk Foods,FMCG,480,NIFTY500
+VENKEYS,Venky's India,FMCG,481,NIFTY500
+AVANTIFEED,Avanti Feeds,FMCG,482,NIFTY500
+WATERBASE,Waterbase,FMCG,483,NIFTY500
+ZYDUSLIFE,Zydus Lifesciences,Pharma,484,NIFTY200
+NATPHARMA,Natural Capsules,Pharma,485,NIFTY500
+AJANTPHARM,Ajanta Pharmaceuticals,Pharma,486,NIFTY200
+ORCHPHARMA,Orchid Pharma,Pharma,487,NIFTY500
+SPARC,Sun Pharma Advanced Research,Pharma,488,NIFTY500
+DRREDDYSLAB,Dr Reddy's Laboratories,Pharma,489,NIFTY50
+CRISIL,CRISIL,NBFC,490,NIFTY200
+CARERATING,CARE Ratings,NBFC,491,NIFTY500
+ICRA,ICRA,NBFC,492,NIFTY500
+BSE,BSE,NBFC,493,NIFTY200
+MCX,Multi Commodity Exchange,NBFC,494,NIFTY200
+CDSL,Central Depository Services,NBFC,495,NIFTY200
+NSDL,NSDL,NBFC,496,NIFTY500
+MAZDOCK,Mazagon Dock,Defence,497,NIFTY200
+COCHINSHIP,Cochin Shipyard,Defence,498,NIFTY200
+MIDHANI,Mishra Dhatu Nigam,Defence,499,NIFTY500
+DYNPRO,Dynamic Products,Defence,500,NIFTY500

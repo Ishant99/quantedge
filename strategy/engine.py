@@ -14,7 +14,7 @@ from config import (
     TA_WEIGHT, SENTIMENT_WEIGHT, TREND_WEIGHT,
     MIN_CONFIDENCE, TOP_N_SIGNALS,
     RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, MAX_OPEN_POSITIONS,
-    VIRTUAL_CAPITAL
+    VIRTUAL_CAPITAL, ATR_SL_MULTIPLIER
 )
 from analysis.technical_agent import TAResult
 from analysis.sentiment_agent import SentimentResult
@@ -103,8 +103,8 @@ class StrategyEngine:
         # M5: Risk management — entry / SL / TP / position size
         # ------------------------------------------------------------------
         entry       = last_close
-        stop_loss   = round(entry - (1.5 * atr), 2)
-        take_profit = round(entry + (REWARD_RISK_RATIO * 1.5 * atr), 2)
+        stop_loss   = round(entry - (ATR_SL_MULTIPLIER * atr), 2)
+        take_profit = round(entry + (REWARD_RISK_RATIO * ATR_SL_MULTIPLIER * atr), 2)
 
         # 2% portfolio risk rule
         risk_per_trade = portfolio_value * RISK_PER_TRADE_PCT

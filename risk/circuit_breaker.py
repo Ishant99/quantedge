@@ -11,15 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 from datetime import datetime, date
-from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE
+from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE, MAX_DAILY_LOSS_PCT, MAX_WEEKLY_LOSS_PCT
 from utils import get_logger
 from utils.telegram import send
 
 logger = get_logger("CircuitBreaker")
 
-# Thresholds
-MAX_DAILY_LOSS_PCT   = 0.03   # Stop trading if down 3% in one day
-MAX_WEEKLY_LOSS_PCT  = 0.07   # Stop trading if down 7% in one week
 CIRCUIT_BREAKER_FILE = "logs/circuit_breaker.json"
 
 

@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 import yfinance as yf
+from config import SECTOR_HOT_MULT, SECTOR_COLD_MULT
 from utils import get_logger
 
 logger = get_logger("SectorRotation")
@@ -104,9 +105,9 @@ class SectorRotationAnalyser:
         Hot sector = 1.2x, cold sector = 0.7x, neutral = 1.0x
         """
         if sector in result.hot_sectors:
-            return 1.2
+            return SECTOR_HOT_MULT
         elif sector in result.cold_sectors:
-            return 0.7
+            return SECTOR_COLD_MULT
         return 1.0
 
     def _default(self) -> SectorRotationResult:

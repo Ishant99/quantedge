@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import numpy as np
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import CORRELATION_THRESHOLD as MAX_CORRELATION, MAX_SAME_SECTOR
 from utils import get_logger
 
 logger = get_logger("CorrelationFilter")
-
-MAX_CORRELATION      = 0.75   # block if correlation > 75%
-MAX_SAME_SECTOR      = 2      # max 2 stocks from same sector
 
 
 class CorrelationFilter:
