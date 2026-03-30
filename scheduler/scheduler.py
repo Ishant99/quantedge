@@ -117,7 +117,23 @@ def run_eod_close():
 
 
 # =============================================================================
-# JOB 5 — Weekly summary every Sunday 8 PM IST
+# JOB 5 — Signal outcome tracker at 3:30 PM (after market close, Mon-Fri)
+# =============================================================================
+
+def run_outcome_tracker():
+    """Check all open signals — mark TP_HIT / SL_HIT / EXPIRED outcomes."""
+    logger.info(f"Outcome tracker triggered at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        from analysis.outcome_tracker import OutcomeTracker
+        result = OutcomeTracker().run()
+        logger.info(f"Outcomes: TP={result['tp_hit']} SL={result['sl_hit']} "
+                    f"EXPIRED={result['expired']} OPEN={result['still_open']}")
+    except Exception as e:
+        logger.error(f"Outcome tracker failed: {e}")
+
+
+# =============================================================================
+# JOB 6 — Weekly summary every Sunday 8 PM IST
 # =============================================================================
 
 def run_weekly_summary():
@@ -229,7 +245,15 @@ if __name__ == "__main__":
         name="EOD Close (15:25 IST)",
     )
 
-    # --- Job 5: Weekly summary every Sunday 8 PM ---
+    # --- Job 5: Outcome tracker at 3:30 PM (after market close) ---
+    scheduler.add_job(
+        run_outcome_tracker,
+        CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
+        id="outcome_tracker",
+        name="Signal Outcome Tracker (15:30 IST)",
+    )
+
+    # --- Job 6: Weekly summary every Sunday 8 PM ---
     scheduler.add_job(
         run_weekly_summary,
         CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=IST),
@@ -239,11 +263,12 @@ if __name__ == "__main__":
 
     logger.info("=" * 55)
     logger.info("  QUANTEDGE SCHEDULER STARTED")
-    logger.info(f"  Morning scan  : {SCAN_TIME_1} IST (Mon-Fri)")
-    logger.info(f"  Afternoon scan: {SCAN_TIME_2} IST (Mon-Fri)")
-    logger.info("  Price monitor : every 15 min, 09:15–15:25 (Mon-Fri)")
-    logger.info("  EOD close     : 15:25 IST (Mon-Fri)")
-    logger.info("  Weekly report : Sunday 20:00 IST")
+    logger.info(f"  Morning scan    : {SCAN_TIME_1} IST (Mon-Fri)")
+    logger.info(f"  Afternoon scan  : {SCAN_TIME_2} IST (Mon-Fri)")
+    logger.info("  Price monitor   : every 15 min, 09:15-15:25 (Mon-Fri)")
+    logger.info("  EOD close       : 15:25 IST (Mon-Fri)")
+    logger.info("  Outcome tracker : 15:30 IST (Mon-Fri)")
+    logger.info("  Weekly report   : Sunday 20:00 IST")
     logger.info("=" * 55)
 
     try:

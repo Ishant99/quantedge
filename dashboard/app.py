@@ -1025,12 +1025,12 @@ elif page == "RESEARCH":
 elif page == "HISTORY":
     st.markdown('<div class="bb-header" style="font-size:12px;">HISTORY</div>',
                 unsafe_allow_html=True)
-    tab_tr, tab_rd = st.tabs(["TRADE LOG", "READINESS"])
+    tab_tr, tab_sig, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "READINESS"])
 
     with tab_tr:
         trades = memory.get_recent_trades(limit=500)
         if not trades:
-            st.info("No closed trades yet")
+            st.info("No closed trades yet — paper trades will appear here after SL/TP hits")
         else:
             df = pd.DataFrame(trades)
             closed = df[df["status"]=="closed"]
@@ -1064,6 +1064,83 @@ elif page == "HISTORY":
             if sf != "All": filtered = filtered[filtered["status"]==sf]
             if sym_f: filtered = filtered[filtered["symbol"].str.contains(sym_f.upper())]
             st.dataframe(filtered, use_container_width=True, height=360)
+
+    with tab_sig:
+        # Signal Outcome Tracker — strategy accuracy panel
+        try:
+            from analysis.outcome_tracker import OutcomeTracker
+            ot_stats   = OutcomeTracker.get_stats()
+            ot_records = OutcomeTracker.get_recent_outcomes(limit=100)
+        except Exception:
+            ot_stats   = {}
+            ot_records = []
+
+        if ot_stats and ot_stats.get("total_resolved", 0) > 0:
+            s = ot_stats
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("RESOLVED",    s.get("total_resolved", 0))
+            tp_col = "#00C805"
+            sl_col = "#FF3B3B"
+            c2.metric("TP HIT",      s.get("tp_count", 0),
+                      delta=f"{s.get('tp_rate_pct',0):.0f}%")
+            c3.metric("SL HIT",      s.get("sl_count", 0),
+                      delta=f"-{s.get('sl_rate_pct',0):.0f}%")
+            c4.metric("AVG DAYS TP", f"{s.get('avg_days_tp',0):.0f}d")
+            c5.metric("AVG DAYS SL", f"{s.get('avg_days_sl',0):.0f}d")
+
+            # TP vs SL donut
+            if s.get("tp_count", 0) + s.get("sl_count", 0) > 0:
+                fig_d = go.Figure(go.Pie(
+                    labels=["TP HIT","SL HIT","EXPIRED"],
+                    values=[s.get("tp_count",0), s.get("sl_count",0), s.get("expired_count",0)],
+                    hole=0.65,
+                    marker_colors=[tp_col, sl_col, "#555555"],
+                    textfont=dict(family="JetBrains Mono", size=10),
+                ))
+                fig_d.update_layout(**_plotly_cfg(200))
+                st.plotly_chart(fig_d, use_container_width=True)
+        else:
+            st.info("Signal outcomes will appear here after the market closes today. "
+                    "The tracker runs at 3:30 PM IST every weekday.")
+            if st.button("RUN OUTCOME CHECK NOW", type="primary"):
+                with st.spinner("Checking signal outcomes..."):
+                    try:
+                        from analysis.outcome_tracker import OutcomeTracker
+                        result = OutcomeTracker().run()
+                        st.success(f"Done — TP: {result['tp_hit']}  "
+                                   f"SL: {result['sl_hit']}  "
+                                   f"Expired: {result['expired']}  "
+                                   f"Still open: {result['still_open']}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+        if ot_records:
+            st.markdown('<div class="bb-header" style="font-size:11px;margin-top:12px;">'
+                        'RECENT SIGNAL OUTCOMES</div>', unsafe_allow_html=True)
+            outcome_color = {"TP_HIT": "#00C805", "SL_HIT": "#FF3B3B",
+                             "EXPIRED": "#888888", "OPEN": "#FF6B00"}
+            for r in ot_records[:30]:
+                oc    = r.get("outcome", "OPEN")
+                color = outcome_color.get(oc, "#888")
+                ep    = r.get("entry_price", 0) or 0
+                op    = r.get("outcome_price", ep) or ep
+                pnl_p = round((op - ep) / ep * 100, 1) if ep else 0
+                days  = r.get("days_to_outcome") or "—"
+                conf  = r.get("confidence", 0) or 0
+                st.markdown(f"""
+                <div style="display:grid;grid-template-columns:90px 70px 60px 70px 70px 60px 1fr;
+                            gap:8px;padding:6px 0;border-bottom:1px solid #1e1e1e;
+                            font-family:JetBrains Mono;font-size:11px;align-items:center;">
+                  <span style="color:#cccccc;">{r.get('symbol','')}</span>
+                  <span style="color:{color};font-weight:600;">{oc}</span>
+                  <span style="color:{color};">{pnl_p:+.1f}%</span>
+                  <span style="color:#888;">Entry {ep:,.0f}</span>
+                  <span style="color:#888;">Exit {op:,.0f}</span>
+                  <span style="color:#666;">{days}d</span>
+                  <span style="color:#555;font-size:10px;">{r.get('outcome_date','')[:10]}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
