@@ -66,6 +66,35 @@ class FIIDIITracker:
             consecutive_days=consec,
         )
 
+    def get_signal(self):
+        """
+        Returns an object compatible with main.py expectations:
+          .signal  — "buy" | "strong_buy" | "sell" | "strong_sell" | "neutral"
+          .message — human-readable summary
+          .score   — float in [-1, 1]  (used for dynamic sizing)
+        """
+        from types import SimpleNamespace
+        flow = self.get_flow()
+
+        # Map internal bullish/bearish → buy/sell vocabulary
+        if flow.signal == "bullish" and flow.consecutive_days >= 3:
+            sig, score = "strong_buy", 0.8
+        elif flow.signal == "bullish":
+            sig, score = "buy", 0.4
+        elif flow.signal == "bearish" and flow.consecutive_days >= 3:
+            sig, score = "strong_sell", -0.8
+        elif flow.signal == "bearish":
+            sig, score = "sell", -0.4
+        else:
+            sig, score = "neutral", 0.0
+
+        msg = (
+            f"FII net Rs.{flow.fii_net:+,.0f} Cr | "
+            f"DII net Rs.{flow.dii_net:+,.0f} Cr | "
+            f"{flow.consecutive_days}d streak -> {sig.upper()}"
+        )
+        return SimpleNamespace(signal=sig, score=score, message=msg, flow=flow)
+
     def get_multiplier(self) -> float:
         """Returns position size multiplier based on FII/DII flow."""
         flow = self.get_flow()
