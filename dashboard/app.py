@@ -217,6 +217,52 @@ hr { border-color: #1e1e1e !important; margin: 8px 0 !important; }
     white-space: nowrap; margin-bottom: 10px;
     display: flex; gap: 24px; align-items: center;
 }
+
+/* ── MOBILE RESPONSIVE ── */
+@media (max-width: 768px) {
+    /* Collapse sidebar on mobile */
+    section[data-testid="stSidebar"] {
+        min-width: 100% !important; max-width: 100% !important;
+    }
+    /* Looser padding on small screens */
+    .block-container { padding: 0.5rem 0.6rem !important; }
+    /* Bigger tap targets for buttons */
+    .stButton > button { padding: 10px 16px !important; font-size: 12px !important; }
+    /* Signal cards full-width, easier to read */
+    .sig-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .sig-card { padding: 10px !important; }
+    /* Position rows stack vertically */
+    .pos-row {
+        grid-template-columns: 1fr 1fr !important;
+        gap: 4px !important; font-size: 11px !important;
+    }
+    /* Ticker strip scrolls horizontally */
+    .ticker-strip { overflow-x: auto !important; }
+    /* Metrics: 2 per row instead of 4 */
+    div[data-testid="column"] { min-width: 45% !important; }
+    /* Sidebar nav labels bigger for thumb tap */
+    section[data-testid="stSidebar"] .stRadio label {
+        font-size: 14px !important; padding: 10px 12px !important;
+    }
+    /* Hide heavy desktop text */
+    .desktop-only { display: none !important; }
+    /* Tabs scroll horizontally */
+    .stTabs [data-baseweb="tab-list"] { overflow-x: auto !important; flex-wrap: nowrap !important; }
+    .stTabs [data-baseweb="tab"] { min-width: max-content !important; }
+    /* Charts shorter on mobile */
+    div[data-testid="stPlotlyChart"] { max-height: 260px !important; }
+    /* Tables smaller font */
+    .stDataFrame { font-size: 10px !important; }
+    /* Inputs full-width */
+    .stTextInput, .stNumberInput, .stSelectbox { width: 100% !important; }
+}
+
+@media (max-width: 480px) {
+    html, body, [class*="css"] { font-size: 12px !important; }
+    .sig-sym { font-size: 14px !important; }
+    .sig-grid { grid-template-columns: 1fr 1fr !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.0rem !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -802,8 +848,8 @@ elif page == "RESEARCH":
     st.markdown('<div class="bb-header" style="font-size:12px;">RESEARCH</div>',
                 unsafe_allow_html=True)
 
-    tab_intel, tab_heat, tab_bt, tab_screen = st.tabs([
-        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "SCREENER"
+    tab_intel, tab_heat, tab_bt, tab_screen, tab_attrib, tab_opts = st.tabs([
+        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "SCREENER", "ATTRIBUTION", "OPTIONS"
     ])
 
     with tab_intel:
@@ -1017,6 +1063,168 @@ elif page == "RESEARCH":
                 st.dataframe(df_nse[["symbol","name","sector","market_cap_rank","index_membership"]],
                              use_container_width=True, height=400)
             except Exception: pass
+
+    with tab_attrib:
+        st.markdown('<div class="bb-header">INDICATOR PERFORMANCE ATTRIBUTION</div>',
+                    unsafe_allow_html=True)
+        st.caption("Which of the 8 TA indicators actually predict winning trades? "
+                   "Based on resolved signals (TP_HIT vs SL_HIT) in the database.")
+
+        try:
+            from analysis.performance_attribution import PerformanceAttributor
+            pa = PerformanceAttributor.get_cached()
+        except Exception as e:
+            pa = {}
+            st.warning(f"Attribution error: {e}")
+
+        if not pa or pa.get("total_resolved", 0) < 2:
+            st.info("Attribution requires at least 2 resolved signals (TP_HIT or SL_HIT). "
+                    "Check back after a few trading days.")
+        else:
+            total = pa.get("total_resolved", 0)
+            wr    = pa.get("overall_win_rate", 0)
+            c1, c2 = st.columns(2)
+            c1.metric("RESOLVED SIGNALS", total)
+            c2.metric("OVERALL WIN RATE", f"{wr:.1f}%")
+
+            st.markdown('<div class="bb-header" style="margin-top:14px;">'
+                        'INDICATOR WIN RATES</div>', unsafe_allow_html=True)
+
+            ranked = pa.get("ranked", [])
+            if ranked:
+                # Bar chart
+                import plotly.graph_objects as go
+                labels = [r[0] for r in ranked]
+                rates  = [r[1]["win_rate"] for r in ranked]
+                colors = ["#00C805" if r >= 55 else
+                          "#FFB347" if r >= 45 else
+                          "#FF3B3B" for r in rates]
+                fig = go.Figure(go.Bar(
+                    x=rates, y=labels, orientation="h",
+                    marker_color=colors,
+                    text=[f"{r:.0f}%" for r in rates],
+                    textposition="outside",
+                    textfont=dict(family="JetBrains Mono", size=10, color="#cccccc"),
+                ))
+                fig.add_vline(x=50, line_dash="dash",
+                              line_color="#444444", line_width=1)
+                fig.add_vline(x=wr, line_dash="dot",
+                              line_color="#FF6B00", line_width=1,
+                              annotation_text="Overall",
+                              annotation_font_color="#FF6B00",
+                              annotation_font_size=9)
+                fig.update_layout(**_plotly_cfg(280),
+                                  xaxis=dict(range=[0, 100],
+                                             ticksuffix="%",
+                                             color="#555",
+                                             gridcolor="#1a1a1a"),
+                                  yaxis=dict(color="#888"),
+                                  showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Detail table
+                st.markdown('<div class="bb-header" style="margin-top:10px;">'
+                            'DETAIL</div>', unsafe_allow_html=True)
+                for name, stat in ranked:
+                    wr_ind = stat["win_rate"]
+                    color  = "#00C805" if wr_ind >= 55 else "#FFB347" if wr_ind >= 45 else "#FF3B3B"
+                    edge   = wr_ind - 50
+                    st.markdown(f"""
+                    <div style="display:grid;grid-template-columns:110px 60px 50px 50px 80px 1fr;
+                                gap:8px;padding:6px 0;border-bottom:1px solid #151515;
+                                font-family:JetBrains Mono;font-size:11px;align-items:center;">
+                      <span style="color:#cccccc;font-weight:600;">{name}</span>
+                      <span style="color:{color};font-weight:700;">{wr_ind:.0f}%</span>
+                      <span style="color:#555;">n={stat['signals']}</span>
+                      <span style="color:#00C805;">{stat['wins']}W</span>
+                      <span style="color:#FF3B3B;">{stat['losses']}L</span>
+                      <span style="color:{'#00C805' if edge>=0 else '#FF3B3B'};font-size:10px;">
+                        {'edge +' if edge>=0 else 'edge '}{edge:.1f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    with tab_opts:
+        st.markdown('<div class="bb-header">NIFTY / BANKNIFTY OPTIONS SIGNALS</div>',
+                    unsafe_allow_html=True)
+        st.caption("Weekly CE/PE trade ideas based on index trend, IV environment, "
+                   "and strike selection. For reference only — verify with live option chain.")
+
+        if st.button("GENERATE OPTIONS SIGNALS", type="primary", use_container_width=False):
+            with st.spinner("Analysing indices..."):
+                try:
+                    from analysis.options_signals import OptionsSignalGenerator
+                    opt_signals = OptionsSignalGenerator().run()
+                    st.session_state["opt_signals"] = opt_signals
+                    st.session_state["opt_ts"] = datetime.now().strftime("%H:%M:%S")
+                except Exception as e:
+                    st.error(f"Options signal error: {e}")
+                    st.session_state["opt_signals"] = []
+
+        opt_signals = st.session_state.get("opt_signals", [])
+        opt_ts      = st.session_state.get("opt_ts", "")
+
+        if opt_ts:
+            st.caption(f"Last updated: {opt_ts}")
+
+        if not opt_signals:
+            st.info("Click GENERATE OPTIONS SIGNALS to fetch Nifty & BankNifty data "
+                    "and produce CE/PE trade ideas.")
+        else:
+            for sig in opt_signals:
+                direction_color = "#00C805" if sig.direction == "CALL" else "#FF3B3B"
+                direction_label = f"{'▲ CALL' if sig.direction == 'CALL' else '▼ PUT'}"
+                rr_dist = abs(sig.target_idx - sig.index_spot)
+                sl_dist = abs(sig.stop_loss_idx - sig.index_spot)
+                rr_ratio = round(rr_dist / sl_dist, 1) if sl_dist > 0 else 0
+
+                st.markdown(f"""
+                <div style="background:#111111;border:1px solid #1e1e1e;
+                            border-left:3px solid {direction_color};
+                            padding:14px 18px;margin-bottom:12px;
+                            font-family:JetBrains Mono;border-radius:0;">
+                  <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+                    <span style="font-size:15px;font-weight:700;color:#eeeeee;">{sig.index}</span>
+                    <span style="color:{direction_color};font-weight:700;font-size:14px;">
+                      {direction_label}
+                    </span>
+                    <span style="color:#aaaaaa;font-size:13px;">Strike <b style="color:#eeeeee;">{sig.strike}</b></span>
+                    <span style="color:#555;font-size:11px;">Expiry {sig.expiry}</span>
+                    <span style="color:#FF6B00;font-size:11px;margin-left:auto;">
+                      Conf {sig.confidence:.0%}
+                    </span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
+                              font-size:11px;color:#888;margin-bottom:8px;">
+                    <div><span style="color:#555;display:block;">SPOT</span>
+                         <span style="color:#cccccc;">{sig.index_spot:,.0f}</span></div>
+                    <div><span style="color:#555;display:block;">ENTRY ZONE</span>
+                         <span style="color:#cccccc;">{sig.entry_zone}</span></div>
+                    <div><span style="color:#555;display:block;">SL (INDEX)</span>
+                         <span style="color:#FF3B3B;">{sig.stop_loss_idx:,.0f}</span></div>
+                    <div><span style="color:#555;display:block;">TARGET (INDEX)</span>
+                         <span style="color:#00C805;">{sig.target_idx:,.0f}</span></div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
+                    <div style="color:#888888;">{sig.iv_note}</div>
+                    <div style="color:#555;text-align:right;">
+                      Lot size {sig.lot_size} &nbsp;|&nbsp; R:R {rr_ratio}x
+                    </div>
+                  </div>
+                  <div style="margin-top:8px;color:#555555;font-size:10px;
+                              border-top:1px solid #1a1a1a;padding-top:6px;">
+                    {sig.reasoning}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("""
+            <div style="background:#0d0d0d;border:1px solid #1a1a1a;padding:10px 14px;
+                        font-size:10px;color:#555555;font-family:JetBrains Mono;margin-top:8px;">
+              ⚠ DISCLAIMER: These are educational signals only. Options involve substantial
+              risk. Entry zone is approximate — use live NSE option chain for actual premiums.
+              Always trade with defined risk using stop-loss orders.
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # =============================================================================

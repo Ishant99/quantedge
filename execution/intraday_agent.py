@@ -1,13 +1,21 @@
 # =============================================================================
-# execution/intraday_agent.py — Intraday Trading Module
+# execution/intraday_agent.py — Intraday Signal Generator (15-min charts)
 #
-# Separate from swing agent. Uses tighter parameters:
-#   - 5-min chart confirmation (instead of daily)
-#   - Smaller position size (10% of swing allocation)
-#   - Tighter stop loss (1× ATR instead of 1.5×)
-#   - Must close by 3:25 PM (no overnight holds)
-#   - Only trades when market regime is BULL
-#   - Max 2 intraday positions at once
+# Runs at 9:30, 10:30, 11:30, 12:30, 13:30, 14:30 IST on market days.
+# Scans stocks from the daily swing watchlist on 15-min candles.
+#
+# Strategy (must meet 3 of 4):
+#   1. EMA9 crosses above EMA21 on 15-min chart
+#   2. Price above VWAP (session)
+#   3. RSI(14) between 40-65 (not overbought, has room to run)
+#   4. Volume spike >= 1.5x 20-bar average on entry candle
+#
+# Position management:
+#   - SL  = low of last 3 candles
+#   - TP  = 1.5 x SL-distance (1.5 R:R intraday)
+#   - Position size = 50% of normal swing size (0.5% risk per trade)
+#   - Force-close at 3:15 PM (EOD) via price_monitor.close_all_intraday()
+#   - Max 2 intraday positions simultaneously
 # =============================================================================
 
 import sys, os
@@ -17,23 +25,30 @@ import json
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime
 from dataclasses import dataclass
-from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL
+import pytz
+
+from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL, RISK_PER_TRADE_PCT
 from utils import get_logger
 from utils.telegram import send
 
 logger = get_logger("IntradayAgent")
+IST = pytz.timezone("Asia/Kolkata")
 
 MAX_INTRADAY_POSITIONS = 2
-INTRADAY_RISK_PCT      = 0.005   # 0.5% risk per intraday trade (vs 2% swing)
-MIN_INTRADAY_TA_SCORE  = 7.0     # stricter than swing (6.0)
+INTRADAY_RISK_MULT     = 0.50   # 50% of normal swing risk per trade
+INTRADAY_RR            = 1.5    # reward:risk ratio
+MIN_VOL_SPIKE          = 1.5    # current bar volume vs 20-bar avg
+INTRADAY_RSI_LO        = 40
+INTRADAY_RSI_HI        = 65
+MIN_CRITERIA           = 3      # must meet N out of 4 criteria
 
 
 @dataclass
 class IntradaySignal:
     symbol:         str
-    action:         str      # BUY | SKIP
+    action:         str          # BUY
     entry_price:    float
     stop_loss:      float
     take_profit:    float
@@ -41,155 +56,166 @@ class IntradaySignal:
     capital_at_risk:float
     confidence:     float
     reasoning:      str
-    trade_type:     str = "intraday"
+    vwap:           float = 0.0
+    rsi_15m:        float = 0.0
+    trade_type:     str   = "intraday"
 
 
 class IntradayAgent:
     """
-    Intraday trading module — buys on morning strength,
-    closes all positions by end of day.
-    Allocation: 20% of portfolio (separate from 80% swing).
+    Intraday scanner — 15-min EMA crossover + VWAP + RSI + volume.
+    Only trades stocks already passing the daily momentum filter.
+    Force-closes all positions at 3:15 PM via EOD close job.
     """
-
-    INTRADAY_ALLOCATION = 0.20   # 20% of portfolio for intraday
 
     def __init__(self):
         self.portfolio = self._load_portfolio()
 
-    def scan_and_trade(self, swing_symbols: list[str] = None) -> list[IntradaySignal]:
+    def scan_and_trade(self, swing_symbols: list = None) -> list:
         """
-        Run intraday scan. Uses same stock universe as swing
-        but with tighter criteria and 5-min data.
-
-        Args:
-            swing_symbols: Symbols already analysed by swing agent.
-                          Intraday only trades stocks the swing agent likes too.
+        Run intraday scan. Returns list of IntradaySignal.
+        swing_symbols = stocks already vetted by daily pipeline.
         """
-        if self._count_intraday_positions() >= MAX_INTRADAY_POSITIONS:
-            logger.info(f"Max intraday positions ({MAX_INTRADAY_POSITIONS}) reached")
+        now = datetime.now(IST)
+        if not (dtime(9, 25) <= now.time() <= dtime(14, 45) and now.weekday() < 5):
+            logger.info("IntradayAgent: outside trading window")
             return []
 
-        # If no swing symbols provided, use default watchlist
-        if not swing_symbols:
-            swing_symbols = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK",
-                             "AXISBANK","SBIN","KOTAKBANK","BRITANNIA","TITAN"]
+        open_intraday = self._count_intraday_positions()
+        slots = MAX_INTRADAY_POSITIONS - open_intraday
+        if slots <= 0:
+            logger.info(f"IntradayAgent: max {MAX_INTRADAY_POSITIONS} positions reached")
+            return []
 
-        # Only take intraday on stocks swing agent also likes
+        candidates = (swing_symbols or [
+            "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY",
+            "SBIN", "AXISBANK", "WIPRO", "TITAN", "LT",
+        ])[:20]
+
+        portfolio_value = self.portfolio.get("cash", VIRTUAL_CAPITAL)
         signals = []
-        slots   = MAX_INTRADAY_POSITIONS - self._count_intraday_positions()
 
-        for sym in swing_symbols[:15]:   # check top 15 swing candidates
-            if slots <= 0:
+        for sym in candidates:
+            if len(signals) >= slots:
                 break
-            sig = self._analyse_intraday(sym)
-            if sig and sig.action == "BUY":
+            sig = self._analyse(sym, portfolio_value)
+            if sig:
                 signals.append(sig)
-                slots -= 1
+                self._enter_trade(sig)
 
-        # Execute
-        for sig in signals:
-            self._enter_trade(sig)
+        if signals:
+            self._send_telegram(signals)
+            logger.info(f"IntradayAgent: {len(signals)} entries placed")
 
         return signals
 
-    def _analyse_intraday(self, symbol: str) -> IntradaySignal | None:
-        """
-        Analyse a stock for intraday entry using 5-minute data.
-        Criteria:
-          1. Opening range breakout — price breaks above first 15-min high
-          2. Volume surge (2× average)
-          3. RSI on 5-min chart > 55
-          4. Price above VWAP
-        """
-        try:
-            # Fetch today's 5-min data
-            ticker = yf.Ticker(f"{symbol}.NS")
-            df5    = ticker.history(period="1d", interval="5m", auto_adjust=True)
+    # ------------------------------------------------------------------
+    # Per-stock analysis
+    # ------------------------------------------------------------------
 
-            if df5.empty or len(df5) < 10:
+    def _analyse(self, symbol: str, portfolio_value: float) -> IntradaySignal | None:
+        try:
+            df = yf.Ticker(f"{symbol}.NS").history(
+                period="5d", interval="15m", auto_adjust=True
+            )
+            if df.empty or len(df) < 25:
                 return None
 
-            df5.columns = [c.lower() for c in df5.columns]
-            close  = df5["close"]
-            high   = df5["high"]
-            low    = df5["low"]
-            volume = df5["volume"]
+            df.columns = [c.lower() for c in df.columns]
+            close  = df["close"]
+            high   = df["high"]
+            low    = df["low"]
+            volume = df["volume"]
             last   = float(close.iloc[-1])
 
-            # Opening range (first 15 mins = first 3 × 5-min bars)
-            opening_high = float(high.iloc[:3].max())
-            opening_low  = float(low.iloc[:3].min())
+            # EMA 9 / 21
+            ema9       = close.ewm(span=9,  adjust=False).mean()
+            ema21      = close.ewm(span=21, adjust=False).mean()
+            crossover  = (float(ema9.iloc[-2]) < float(ema21.iloc[-2]) and
+                          float(ema9.iloc[-1]) > float(ema21.iloc[-1]))
 
-            # ORB breakout: price breaks above opening range high
-            orb_breakout = last > opening_high * 1.002   # 0.2% above
+            # VWAP (today's session only)
+            try:
+                idx_tz = df.index.tz_convert(IST)
+                today  = datetime.now(IST).date()
+                mask   = idx_tz.date == today
+                td     = df[mask] if mask.any() else df.tail(26)
+            except Exception:
+                td = df.tail(26)
 
-            # Volume surge
-            avg_vol  = float(volume.mean())
-            curr_vol = float(volume.iloc[-1])
-            vol_surge= curr_vol > avg_vol * 1.8
+            denom = td["volume"].sum()
+            vwap  = float(
+                ((td["high"] + td["low"] + td["close"]) / 3 * td["volume"]).sum() / denom
+            ) if denom > 0 else last
+            above_vwap = last > vwap
 
-            # RSI on 5-min
+            # RSI(14) on 15-min
             delta = close.diff()
             gain  = delta.clip(lower=0).rolling(14).mean()
             loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi   = float((100 - 100/(1 + gain/loss.replace(0, np.nan))).iloc[-1])
-            rsi_ok= rsi > 55
+            rsi   = float(100 - 100 / (1 + gain / loss.replace(0, np.nan)).iloc[-1])
+            rsi_ok = INTRADAY_RSI_LO <= rsi <= INTRADAY_RSI_HI
 
-            # VWAP
-            vwap  = float((df5["close"] * df5["volume"]).cumsum() /
-                          df5["volume"].cumsum()).iloc[-1]
-            above_vwap = last > vwap
+            # Volume spike
+            vol_avg = float(volume.rolling(20).mean().iloc[-1])
+            vol_now = float(volume.iloc[-1])
+            vol_spike = (vol_now / vol_avg >= MIN_VOL_SPIKE) if vol_avg > 0 else False
 
-            # Score
-            score = sum([orb_breakout, vol_surge, rsi_ok, above_vwap])
-            if score < 3:
-                return None   # need at least 3/4 criteria
-
-            # Position sizing
-            portfolio_value = self.portfolio.get("cash", VIRTUAL_CAPITAL)
-            intraday_capital= portfolio_value * self.INTRADAY_ALLOCATION
-            atr  = self._atr_5m(df5)
-            sl   = round(last - atr, 2)           # tighter: 1× ATR
-            tp   = round(last + (1.5 * atr), 2)   # 1.5:1 R/R for intraday
-            sl_d = last - sl
-            risk = intraday_capital * INTRADAY_RISK_PCT
-            qty  = int(risk / sl_d) if sl_d > 0 else 0
-
-            if qty <= 0:
+            # Count how many criteria met
+            criteria  = [crossover, above_vwap, rsi_ok, vol_spike]
+            met       = sum(criteria)
+            if met < MIN_CRITERIA:
                 return None
 
-            conf = 0.5 + score * 0.12   # 0.74 max
+            # SL = low of last 3 candles
+            sl_low  = float(low.iloc[-3:].min())
+            sl_dist = last - sl_low
+            if sl_dist <= 0:
+                return None
+
+            tp  = round(last + INTRADAY_RR * sl_dist, 2)
+            sl  = round(sl_low, 2)
+
+            risk_per_trade = portfolio_value * RISK_PER_TRADE_PCT * INTRADAY_RISK_MULT
+            qty = max(1, int(risk_per_trade / sl_dist))
+            cap_at_risk = round(qty * sl_dist, 2)
+
+            confidence = 0.50 + met * 0.10   # 0.80 max (4/4)
 
             reasons = []
-            if orb_breakout: reasons.append("ORB breakout")
-            if vol_surge:    reasons.append(f"Volume surge {curr_vol/avg_vol:.1f}×")
-            if rsi_ok:       reasons.append(f"RSI {rsi:.0f}")
-            if above_vwap:   reasons.append("Above VWAP")
+            if crossover:  reasons.append("EMA9/21 crossover")
+            if above_vwap: reasons.append(f"above VWAP {vwap:,.0f}")
+            if rsi_ok:     reasons.append(f"RSI {rsi:.0f}")
+            if vol_spike:  reasons.append(f"vol {vol_now/vol_avg:.1f}x spike")
 
             return IntradaySignal(
-                symbol         = symbol,
-                action         = "BUY",
-                entry_price    = round(last, 2),
-                stop_loss      = sl,
-                take_profit    = tp,
-                position_size  = qty,
-                capital_at_risk= round(qty * sl_d, 2),
-                confidence     = round(conf, 2),
-                reasoning      = "Intraday: " + " + ".join(reasons),
-                trade_type     = "intraday",
+                symbol          = symbol,
+                action          = "BUY",
+                entry_price     = round(last, 2),
+                stop_loss       = sl,
+                take_profit     = tp,
+                position_size   = qty,
+                capital_at_risk = cap_at_risk,
+                confidence      = round(confidence, 3),
+                reasoning       = "INTRADAY 15m: " + ", ".join(reasons),
+                vwap            = round(vwap, 2),
+                rsi_15m         = round(rsi, 1),
+                trade_type      = "intraday",
             )
 
         except Exception as e:
-            logger.debug(f"Intraday analysis failed for {symbol}: {e}")
+            logger.debug(f"{symbol} intraday error: {e}")
             return None
 
+    # ------------------------------------------------------------------
+    # Trade management
+    # ------------------------------------------------------------------
+
     def _enter_trade(self, sig: IntradaySignal):
-        """Enter an intraday paper trade."""
         cost = sig.entry_price * sig.position_size
         if cost > self.portfolio.get("cash", 0):
             logger.warning(f"Insufficient cash for intraday {sig.symbol}")
             return
-
         self.portfolio["cash"] -= cost
         self.portfolio.setdefault("positions", {})[sig.symbol] = {
             "qty":        sig.position_size,
@@ -200,26 +226,39 @@ class IntradayAgent:
             "timestamp":  datetime.now().isoformat(),
         }
         self._save_portfolio()
-
-        logger.info(f"INTRADAY BUY {sig.symbol} × {sig.position_size} "
-                    f"@ Rs.{sig.entry_price:,.2f} | "
-                    f"SL: Rs.{sig.stop_loss:,.2f} | TP: Rs.{sig.take_profit:,.2f}")
-
-        send(f"📈 *Intraday Entry*\n"
-             f"Stock: `{sig.symbol}`\n"
-             f"Entry: `Rs.{sig.entry_price:,.2f}`\n"
-             f"SL: `Rs.{sig.stop_loss:,.2f}` | TP: `Rs.{sig.take_profit:,.2f}`\n"
-             f"Qty: `{sig.position_size}` | Risk: `Rs.{sig.capital_at_risk:,.0f}`\n"
-             f"Reason: _{sig.reasoning}_")
+        logger.info(f"INTRADAY BUY {sig.symbol} x{sig.position_size} "
+                    f"@ Rs.{sig.entry_price:,.0f} SL={sig.stop_loss:,.0f} TP={sig.take_profit:,.0f}")
 
     def _count_intraday_positions(self) -> int:
-        positions = self.portfolio.get("positions", {})
-        return sum(1 for p in positions.values() if p.get("trade_type") == "intraday")
+        return sum(
+            1 for p in self.portfolio.get("positions", {}).values()
+            if p.get("trade_type") == "intraday"
+        )
 
-    def _atr_5m(self, df: pd.DataFrame, period: int = 14) -> float:
-        hi, lo, cl = df["high"], df["low"], df["close"]
-        tr = pd.concat([hi-lo, (hi-cl.shift()).abs(), (lo-cl.shift()).abs()], axis=1).max(axis=1)
-        return float(tr.rolling(period).mean().iloc[-1])
+    # ------------------------------------------------------------------
+    # Telegram
+    # ------------------------------------------------------------------
+
+    def _send_telegram(self, signals: list):
+        now_str = datetime.now(IST).strftime("%H:%M IST")
+        lines   = [f"*Intraday Signals — {now_str}*", ""]
+        for s in signals:
+            rr = round((s.take_profit - s.entry_price) /
+                       (s.entry_price - s.stop_loss), 1) if s.entry_price > s.stop_loss else 0
+            lines += [
+                f"*{s.symbol}*  conf {s.confidence:.0%}",
+                f"Entry Rs.{s.entry_price:,.0f} | SL Rs.{s.stop_loss:,.0f} | "
+                f"TP Rs.{s.take_profit:,.0f} | R:R {rr}x",
+                f"VWAP Rs.{s.vwap:,.0f}  RSI {s.rsi_15m:.0f}",
+                f"_{s.reasoning}_",
+                "",
+            ]
+        lines.append("_All positions closed at 15:15 IST_")
+        send("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Portfolio helpers
+    # ------------------------------------------------------------------
 
     def _load_portfolio(self) -> dict:
         os.makedirs("logs", exist_ok=True)

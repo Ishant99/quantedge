@@ -18,6 +18,7 @@ from analysis.volume_profile import VolumeProfileAnalyser
 from analysis.fii_dii import FIIDIIAnalyser
 from analysis.pcr_signal import PCRAnalyser
 from analysis.earnings_guard import EarningsGuard
+from analysis.momentum_filter import MomentumFilter
 from strategy.engine import StrategyEngine
 from execution.executor import get_executor
 from memory.portfolio_memory import PortfolioMemory
@@ -88,12 +89,20 @@ def run_agent(dry_run: bool = False) -> list:
     symbol_names   = {r["symbol"]: r["name"]   for _, r in scanner.symbols_df.iterrows()}
 
     # ------------------------------------------------------------------
-    # 5. TECHNICAL ANALYSIS
+    # 5. MOMENTUM FILTER — only trade stocks in confirmed trends
+    # ------------------------------------------------------------------
+    logger.info("[MOMENTUM] Filtering by trend health...")
+    mom_mode    = "short" if bear_mode else "buy"
+    mom_results = MomentumFilter().filter_all(market_data, mode=mom_mode)
+    market_data = {sym: df for sym, df in market_data.items() if sym in mom_results}
+    logger.info(f"[MOMENTUM] {len(market_data)}/{len(mom_results) + (len(scanner.symbols_df) - len(mom_results))} pass momentum gates")
+
+    # ------------------------------------------------------------------
+    # 6. TECHNICAL ANALYSIS
     # ------------------------------------------------------------------
     logger.info("[M2] Technical analysis...")
     ta_results = TechnicalAgent().analyse_all(market_data)
     if bear_mode:
-        # In bear mode: keep bearish stocks for SELL/SHORT scanning too
         tradeable = {sym: r for sym, r in ta_results.items()
                      if r.tradeable or r.signal == "bearish"}
     else:
@@ -171,35 +180,46 @@ def run_agent(dry_run: bool = False) -> list:
     )
 
     if bear_mode:
-        # Block new BUYs — only keep SELL signals (close open positions)
-        # and bearish HOLD signals as SHORT watchlist
-        sell_signals = [s for s in signals if s.action == "SELL"]
-        short_watch  = sorted(
-            [s for s in signals if s.action in ("HOLD", "SELL") and
-             ta_results.get(s.symbol) and
-             ta_results[s.symbol].signal == "bearish"],
-            key=lambda x: x.confidence, reverse=True
-        )[:5]
-        logger.info(f"[REGIME] Bear mode — {len(sell_signals)} SELL signals, "
-                    f"{len(short_watch)} SHORT watchlist")
+        # Block new BUYs — close open positions + generate SHORT watchlist
+        from analysis.short_signals import ShortSignalGenerator
+        sell_signals  = [s for s in signals if s.action == "SELL"]
+        short_signals = ShortSignalGenerator().generate_all(
+            ta_results      = ta_results,
+            sent_results    = sent_results,
+            market_data     = market_data,
+            portfolio_value = portfolio_value,
+            top_n           = 5,
+        )
+        logger.info(f"[REGIME] Bear mode — {len(sell_signals)} SELL, "
+                    f"{len(short_signals)} SHORT setups")
+
         if sell_signals:
-            send(f"*Bear Mode — SELL Alerts*\n"
+            send("*Bear Mode — Close Positions*\n"
                  + "\n".join(f"• {s.symbol} — close position" for s in sell_signals))
-        if short_watch:
-            send(f"*Bear Mode — SHORT Watchlist*\n"
-                 + "\n".join(f"• {s.symbol} ({ta_results[s.symbol].score:.1f}/10 bearish)"
-                             for s in short_watch))
-        # Execute sell signals to close existing paper positions
+
+        if short_signals:
+            lines = ["*Bear Mode — SHORT Watchlist*", ""]
+            for s in short_signals:
+                lines.append(
+                    f"*{s.symbol}* ({s.confidence:.0%} conf)\n"
+                    f"Entry Rs.{s.entry_price:,.0f} | "
+                    f"SL Rs.{s.stop_loss:,.0f} | "
+                    f"Target Rs.{s.take_profit:,.0f}\n"
+                    f"_{s.reasoning[:100]}_\n"
+                )
+            send("\n".join(lines))
+
         memory = PortfolioMemory()
         for sig in sell_signals:
             memory.save_signal(sig)
             if not dry_run:
                 result = executor.execute(sig)
                 logger.info(f"  SELL {sig.symbol}: {result.get('status','unknown')}")
+
         _run_trailing_stop()
         summary = executor.get_portfolio_summary()
         memory.save_snapshot(summary)
-        return sell_signals
+        return sell_signals + short_signals
 
     buy_signals = [s for s in signals if s.action == "BUY"]
 

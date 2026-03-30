@@ -95,8 +95,19 @@ class PortfolioMemory:
     # ------------------------------------------------------------------
 
     def save_signal(self, signal) -> int:
-        """Save a TradeSignal. Returns the new row id."""
+        """Save a TradeSignal. Returns row id, or -1 if duplicate (same symbol+action today)."""
+        today = datetime.now().strftime("%Y-%m-%d")
         with self._conn() as conn:
+            # Dedup: skip if same symbol + action already saved today
+            existing = conn.execute("""
+                SELECT id FROM signals
+                WHERE symbol=? AND action=? AND DATE(timestamp)=?
+                LIMIT 1
+            """, (signal.symbol, signal.action, today)).fetchone()
+            if existing:
+                logger.debug(f"Dedup: {signal.symbol} {signal.action} already saved today — skipped")
+                return existing[0]
+
             cur = conn.execute("""
                 INSERT INTO signals
                 (timestamp, symbol, action, confidence, entry_price,

@@ -71,10 +71,10 @@ SMA_SHORT        = 20
 SMA_MID          = 50
 SMA_LONG         = 200
 VOLUME_AVG_DAYS  = 20
-MIN_TA_SCORE     = float(_S("MIN_TA_SCORE", "MIN_TA_SCORE", 4.5))
+MIN_TA_SCORE     = float(_S("MIN_TA_SCORE", "MIN_TA_SCORE", 5.0))
 # Thresholds for bullish/bearish signal classification in TechnicalAgent
-TA_SIGNAL_BULLISH = float(_S("TA_SIGNAL_BULLISH", "TA_SIGNAL_BULLISH", 6.0))
-TA_SIGNAL_BEARISH = float(_S("TA_SIGNAL_BEARISH", "TA_SIGNAL_BEARISH", 3.5))
+TA_SIGNAL_BULLISH = float(_S("TA_SIGNAL_BULLISH", "TA_SIGNAL_BULLISH", 6.5))
+TA_SIGNAL_BEARISH = float(_S("TA_SIGNAL_BEARISH", "TA_SIGNAL_BEARISH", 4.0))
 # New indicators (ADX, Stochastic, OBV)
 ADX_PERIOD          = 14
 STOCH_K_PERIOD      = 14
@@ -104,7 +104,7 @@ SENTIMENT_DECAY_FACTOR    = 0.5        # weight halved for each extra 6h window
 TA_WEIGHT        = float(_S("TA_WEIGHT",        "TA_WEIGHT",        0.50))
 SENTIMENT_WEIGHT = float(_S("SENTIMENT_WEIGHT", "SENTIMENT_WEIGHT", 0.30))
 TREND_WEIGHT     = 0.20
-MIN_CONFIDENCE   = float(_S("MIN_CONFIDENCE",   "MIN_CONFIDENCE",   0.55))
+MIN_CONFIDENCE   = float(_S("MIN_CONFIDENCE",   "MIN_CONFIDENCE",   0.60))
 TOP_N_SIGNALS    = int(  _S("TOP_N_SIGNALS",    "TOP_N_SIGNALS",    10))
 
 # -----------------------------------------------------------------------------

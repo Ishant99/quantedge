@@ -41,11 +41,9 @@ def run_daily_scan():
 
         # dry_run=False: paper mode simulates trades virtually (correct behavior)
         # dry_run=True is only for: python main.py --dry-run (manual override)
-        signals = run_agent(dry_run=False)
+        signals = run_agent(dry_run=False)  # main.py saves signals internally
 
-        memory = PortfolioMemory()
-        for sig in signals:
-            memory.save_signal(sig)
+        memory  = PortfolioMemory()
         summary = memory.get_stats()
 
         from execution.executor import get_executor
@@ -64,9 +62,39 @@ def run_daily_scan():
 
         send_telegram_alert(signals, summary)
 
+        # Options signals — Nifty/BankNifty weekly CE/PE ideas
+        _run_options_signals()
+
     except Exception as e:
         logger.error(f"Scheduled scan failed: {e}")
         send_telegram_message(f"*Agent ERROR (scan)*\n`{e}`")
+
+
+def _run_options_signals():
+    """Generate Nifty/BankNifty options trade ideas and push to Telegram."""
+    try:
+        from analysis.options_signals import OptionsSignalGenerator
+        opt_signals = OptionsSignalGenerator().run()
+        if not opt_signals:
+            logger.info("Options signals: no clear directional bias today")
+            return
+
+        lines = ["*Nifty/BankNifty Options Ideas*", ""]
+        for s in opt_signals:
+            direction_arrow = "▲" if s.direction == "CALL" else "▼"
+            lines += [
+                f"*{s.index} {direction_arrow} {s.direction} {s.strike}*"
+                f"  |  Expiry {s.expiry}",
+                f"Spot {s.index_spot:,.0f}  |  Entry {s.entry_zone}",
+                f"SL (idx) {s.stop_loss_idx:,.0f}  |  Target {s.target_idx:,.0f}",
+                f"_{s.iv_note}_",
+                "",
+            ]
+        lines.append("_Educational only — verify with live option chain_")
+        send_telegram_message("\n".join(lines))
+        logger.info(f"Options signals: {len(opt_signals)} sent to Telegram")
+    except Exception as e:
+        logger.warning(f"Options signals failed: {e}")
 
 
 # =============================================================================
@@ -117,7 +145,27 @@ def run_eod_close():
 
 
 # =============================================================================
-# JOB 5 — Signal outcome tracker at 3:30 PM (after market close, Mon-Fri)
+# JOB 5 — Intraday scan every hour 9:30–14:30 (Mon-Fri)
+# =============================================================================
+
+def run_intraday_scan():
+    """15-min EMA/VWAP intraday signals on top swing candidates."""
+    logger.info(f"Intraday scan at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        from execution.intraday_agent import IntradayAgent
+        # Use last daily scan's top symbols if available, else defaults
+        agent   = IntradayAgent()
+        signals = agent.scan_and_trade()
+        if signals:
+            logger.info(f"Intraday: {len(signals)} entries placed")
+        else:
+            logger.info("Intraday: no setups found this hour")
+    except Exception as e:
+        logger.error(f"Intraday scan failed: {e}")
+
+
+# =============================================================================
+# JOB 6 — Signal outcome tracker at 3:30 PM (after market close, Mon-Fri)
 # =============================================================================
 
 def run_outcome_tracker():
@@ -245,7 +293,20 @@ if __name__ == "__main__":
         name="EOD Close (15:25 IST)",
     )
 
-    # --- Job 5: Outcome tracker at 3:30 PM (after market close) ---
+    # --- Job 5: Intraday scan every hour 9:30–14:30 ---
+    scheduler.add_job(
+        run_intraday_scan,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9,10,11,12,13,14",
+            minute=30,
+            timezone=IST,
+        ),
+        id="intraday_scan",
+        name="Intraday Scan (hourly 09:30-14:30 IST)",
+    )
+
+    # --- Job 6: Outcome tracker at 3:30 PM (after market close) ---
     scheduler.add_job(
         run_outcome_tracker,
         CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
@@ -265,6 +326,7 @@ if __name__ == "__main__":
     logger.info("  QUANTEDGE SCHEDULER STARTED")
     logger.info(f"  Morning scan    : {SCAN_TIME_1} IST (Mon-Fri)")
     logger.info(f"  Afternoon scan  : {SCAN_TIME_2} IST (Mon-Fri)")
+    logger.info("  Intraday scan   : hourly 09:30-14:30 (Mon-Fri)")
     logger.info("  Price monitor   : every 15 min, 09:15-15:25 (Mon-Fri)")
     logger.info("  EOD close       : 15:25 IST (Mon-Fri)")
     logger.info("  Outcome tracker : 15:30 IST (Mon-Fri)")
