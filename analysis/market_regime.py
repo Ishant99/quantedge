@@ -31,6 +31,7 @@ class RegimeResult:
     nifty_1m_return:float   # 1 month return %
     nifty_3m_return:float   # 3 month return %
     allow_buys:     bool
+    allow_shorts:   bool    # True in bear/sideways — scan for bearish setups
     position_size_multiplier: float   # 1.0 = normal, 0.5 = cautious, 0.0 = blocked
     message:        str
 
@@ -78,33 +79,37 @@ class MarketRegimeFilter:
             # ----------------------------------------------------------
             if (last > ema200 and last > ema50 and ema20 > ema50
                     and ret_1m > -3 and rsi > 40):
-                regime   = "bull"
-                trend    = "up"
-                allow    = True
-                ps_mult  = 1.0
-                message  = f"Bull market — Nifty above all EMAs. Normal trading."
+                regime       = "bull"
+                trend        = "up"
+                allow        = True
+                allow_shorts = False
+                ps_mult      = 1.0
+                message      = "Bull market — Nifty above all EMAs. Normal trading."
 
             elif (last < ema200 and ret_1m < -5) or rsi < 35:
-                regime   = "bear"
-                trend    = "down"
-                allow    = False
-                ps_mult  = 0.0
-                message  = (f"Bear market — Nifty below EMA200, RSI {rsi:.0f}. "
-                            f"BUY signals BLOCKED to protect capital.")
+                regime       = "bear"
+                trend        = "down"
+                allow        = False
+                allow_shorts = True
+                ps_mult      = 0.0
+                message      = (f"Bear market — Nifty below EMA200, RSI {rsi:.0f}. "
+                                f"BUY signals BLOCKED. Scanning for SELL/SHORT setups.")
 
             elif last < ema200 or (ret_1m < -2 and ret_3m < -5):
-                regime   = "sideways"
-                trend    = "flat"
-                allow    = True
-                ps_mult  = 0.5
-                message  = (f"Sideways/weak market — position sizes halved, "
-                            f"only high-confidence signals allowed.")
+                regime       = "sideways"
+                trend        = "flat"
+                allow        = True
+                allow_shorts = True
+                ps_mult      = 0.5
+                message      = ("Sideways/weak market — position sizes halved, "
+                                "only high-confidence signals allowed.")
             else:
-                regime   = "bull"
-                trend    = "up"
-                allow    = True
-                ps_mult  = 0.8
-                message  = f"Mild bull — slightly cautious, 80% position sizes."
+                regime       = "bull"
+                trend        = "up"
+                allow        = True
+                allow_shorts = False
+                ps_mult      = 0.8
+                message      = "Mild bull — slightly cautious, 80% position sizes."
 
             result = RegimeResult(
                 regime                   = regime,
@@ -114,6 +119,7 @@ class MarketRegimeFilter:
                 nifty_1m_return          = round(ret_1m, 2),
                 nifty_3m_return          = round(ret_3m, 2),
                 allow_buys               = allow,
+                allow_shorts             = allow_shorts,
                 position_size_multiplier = ps_mult,
                 message                  = message,
             )
@@ -133,7 +139,7 @@ class MarketRegimeFilter:
         return RegimeResult(
             regime="bull", nifty_trend="up", nifty_rsi=50.0,
             nifty_above_200ema=True, nifty_1m_return=0.0,
-            nifty_3m_return=0.0, allow_buys=True,
+            nifty_3m_return=0.0, allow_buys=True, allow_shorts=False,
             position_size_multiplier=1.0,
             message="Market data unavailable — proceeding with normal operation."
         )

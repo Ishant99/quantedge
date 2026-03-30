@@ -58,10 +58,7 @@ def run_agent(dry_run: bool = False) -> list:
     logger.info("[REGIME] Checking market...")
     regime = MarketRegimeFilter().get_regime()
     logger.info(f"[REGIME] {regime.message}")
-    if not regime.allow_buys:
-        send(f"*Bear Market*\n_{regime.message}_")
-        _run_trailing_stop()
-        return []
+    bear_mode = not regime.allow_buys  # scan continues but BUY signals blocked
 
     # ------------------------------------------------------------------
     # 3. MARKET-WIDE SIGNALS (PCR + FII/DII + Sector Rotation)
@@ -74,12 +71,10 @@ def run_agent(dry_run: bool = False) -> list:
     logger.info(f"[FII] {fii_result.message}")
     logger.info(f"[SECTOR] {sector_result.message}")
 
-    # If both PCR and FII are strongly bearish, block all buys
-    if pcr_result.signal == "strong_sell" and fii_result.signal in ("sell","strong_sell"):
+    # If both PCR and FII are strongly bearish, add extra block on buys
+    if pcr_result.signal == "strong_sell" and fii_result.signal in ("sell", "strong_sell"):
         logger.warning("PCR + FII both bearish — blocking buys today")
-        send(f"*Market Warning*\nPCR: {pcr_result.pcr:.2f} + FII selling\nNo new positions today.")
-        _run_trailing_stop()
-        return []
+        bear_mode = True
 
     # ------------------------------------------------------------------
     # 4. MARKET SCANNER
@@ -97,8 +92,13 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     logger.info("[M2] Technical analysis...")
     ta_results = TechnicalAgent().analyse_all(market_data)
-    tradeable  = {sym: r for sym, r in ta_results.items() if r.tradeable}
-    logger.info(f"[M2] {len(tradeable)}/{len(ta_results)} tradeable")
+    if bear_mode:
+        # In bear mode: keep bearish stocks for SELL/SHORT scanning too
+        tradeable = {sym: r for sym, r in ta_results.items()
+                     if r.tradeable or r.signal == "bearish"}
+    else:
+        tradeable = {sym: r for sym, r in ta_results.items() if r.tradeable}
+    logger.info(f"[M2] {len(tradeable)}/{len(ta_results)} tradeable (bear_mode={bear_mode})")
 
     tradeable_data = {sym: market_data[sym] for sym in tradeable}
 
@@ -113,9 +113,14 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     logger.info("[S/R] Support/resistance analysis...")
     sr_results = SupportResistanceAnalyser().analyse_all(tradeable_data)
-    tradeable  = {sym: r for sym, r in tradeable.items()
-                  if sr_results.get(sym, None) and
-                  sr_results[sym].recommendation != "sell_zone"}
+    if bear_mode:
+        # In bear mode: keep stocks in sell_zone (resistance) — good SHORT setups
+        tradeable = {sym: r for sym, r in tradeable.items()
+                     if sr_results.get(sym, None)}
+    else:
+        tradeable = {sym: r for sym, r in tradeable.items()
+                     if sr_results.get(sym, None) and
+                     sr_results[sym].recommendation != "sell_zone"}
     logger.info(f"[S/R] {len(tradeable)} pass S/R filter")
 
     # ------------------------------------------------------------------
@@ -164,6 +169,38 @@ def run_agent(dry_run: bool = False) -> list:
         open_positions           = open_positions,
         position_size_multiplier = regime.position_size_multiplier,
     )
+
+    if bear_mode:
+        # Block new BUYs — only keep SELL signals (close open positions)
+        # and bearish HOLD signals as SHORT watchlist
+        sell_signals = [s for s in signals if s.action == "SELL"]
+        short_watch  = sorted(
+            [s for s in signals if s.action in ("HOLD", "SELL") and
+             ta_results.get(s.symbol) and
+             ta_results[s.symbol].signal == "bearish"],
+            key=lambda x: x.confidence, reverse=True
+        )[:5]
+        logger.info(f"[REGIME] Bear mode — {len(sell_signals)} SELL signals, "
+                    f"{len(short_watch)} SHORT watchlist")
+        if sell_signals:
+            send(f"*Bear Mode — SELL Alerts*\n"
+                 + "\n".join(f"• {s.symbol} — close position" for s in sell_signals))
+        if short_watch:
+            send(f"*Bear Mode — SHORT Watchlist*\n"
+                 + "\n".join(f"• {s.symbol} ({ta_results[s.symbol].score:.1f}/10 bearish)"
+                             for s in short_watch))
+        # Execute sell signals to close existing paper positions
+        memory = PortfolioMemory()
+        for sig in sell_signals:
+            memory.save_signal(sig)
+            if not dry_run:
+                result = executor.execute(sig)
+                logger.info(f"  SELL {sig.symbol}: {result.get('status','unknown')}")
+        _run_trailing_stop()
+        summary = executor.get_portfolio_summary()
+        memory.save_snapshot(summary)
+        return sell_signals
+
     buy_signals = [s for s in signals if s.action == "BUY"]
 
     # ------------------------------------------------------------------

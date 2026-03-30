@@ -30,7 +30,9 @@ def run_daily_scan():
         from main import run_agent
         from memory.portfolio_memory import PortfolioMemory
 
-        signals = run_agent(dry_run=(TRADING_MODE == "paper"))
+        # dry_run=False: paper mode simulates trades virtually (correct behavior)
+        # dry_run=True is only for: python main.py --dry-run (manual override)
+        signals = run_agent(dry_run=False)
 
         memory = PortfolioMemory()
         for sig in signals:
