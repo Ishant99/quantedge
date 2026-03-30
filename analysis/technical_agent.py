@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
     RSI_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     BB_PERIOD, BB_STD, SMA_SHORT, SMA_MID, SMA_LONG,
-    VOLUME_AVG_DAYS, MIN_TA_SCORE,
+    VOLUME_AVG_DAYS, MIN_TA_SCORE, TA_SIGNAL_BULLISH, TA_SIGNAL_BEARISH,
     ADX_PERIOD, STOCH_K_PERIOD, STOCH_D_PERIOD,
     STOCH_OVERBOUGHT, STOCH_OVERSOLD, OBV_TREND_LOOKBACK,
 )
@@ -277,9 +277,9 @@ class TechnicalAgent:
             # ----------------------------------------------------------
             score = round(min(score, 10.0), 2)
 
-            if score >= 7.0:
+            if score >= TA_SIGNAL_BULLISH:
                 signal = "bullish"
-            elif score <= 4.0:
+            elif score <= TA_SIGNAL_BEARISH:
                 signal = "bearish"
             else:
                 signal = "neutral"

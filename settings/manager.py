@@ -35,8 +35,10 @@ DEFAULTS: dict = {
     "VIRTUAL_CAPITAL": 1_000_000,
 
     # ---- Strategy ----
-    "MIN_TA_SCORE":       5.0,
-    "MIN_CONFIDENCE":     0.60,
+    "MIN_TA_SCORE":          4.5,
+    "MIN_CONFIDENCE":        0.55,
+    "TA_SIGNAL_BULLISH":     6.0,   # score >= this → bullish signal
+    "TA_SIGNAL_BEARISH":     3.5,   # score <= this → bearish signal
     "TOP_N_SIGNALS":      10,
     "TA_WEIGHT":          0.50,
     "SENTIMENT_WEIGHT":   0.30,
