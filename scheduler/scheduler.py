@@ -1,7 +1,12 @@
 # =============================================================================
-# scheduler/scheduler.py — Daily scheduler
-# Runs the full agent pipeline at 9:15 AM IST every weekday.
-# Also sends Telegram alerts with top signals.
+# scheduler/scheduler.py — Master scheduler
+#
+# Jobs (all IST, Mon-Fri unless noted):
+#   09:15  → Full scan (run_daily_scan)     [configurable via dashboard]
+#   15:00  → Afternoon scan (run_daily_scan)[configurable via dashboard]
+#   Every 15 min 09:15–15:25 → Price monitor (SL/TP exits)
+#   15:25  → EOD close of all intraday positions
+#   Sunday 20:00 → Weekly performance summary to Telegram
 #
 # Run: python scheduler/scheduler.py
 # =============================================================================
@@ -23,8 +28,12 @@ logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
 
 
+# =============================================================================
+# JOB 1 & 2 — Full daily scan (9:15 AM and 3:00 PM)
+# =============================================================================
+
 def run_daily_scan():
-    """Full pipeline — runs every weekday at 9:15 AM IST."""
+    """Full pipeline — runs every weekday at configured scan times."""
     logger.info(f"Scheduled scan triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     try:
         from main import run_agent
@@ -56,18 +65,82 @@ def run_daily_scan():
         send_telegram_alert(signals, summary)
 
     except Exception as e:
-        logger.error(f"Scheduled run failed: {e}")
-        send_telegram_message(f"Trading Agent ERROR: {e}")
+        logger.error(f"Scheduled scan failed: {e}")
+        send_telegram_message(f"*Agent ERROR (scan)*\n`{e}`")
 
+
+# =============================================================================
+# JOB 3 — Price monitor every 15 minutes (9:15 AM – 3:25 PM)
+# =============================================================================
+
+def run_price_monitor():
+    """
+    Check all open positions for SL/TP hits and trailing stop updates.
+    Runs every 15 minutes during market hours.
+    """
+    logger.debug(f"Price monitor tick at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        from execution.price_monitor import PriceMonitor
+        results = PriceMonitor().run()
+
+        exits = [r for r in results if r.action in ("SL_HIT", "TP_HIT")]
+        trails = [r for r in results if r.action == "TRAIL_UPDATED"]
+
+        if exits:
+            logger.info(f"Price monitor: {len(exits)} exits, "
+                        f"total P&L Rs.{sum(r.pnl for r in exits):+,.0f}")
+        if trails:
+            logger.info(f"Price monitor: {len(trails)} trailing stop updates")
+
+    except Exception as e:
+        logger.error(f"Price monitor failed: {e}")
+
+
+# =============================================================================
+# JOB 4 — EOD close at 3:25 PM (intraday positions only)
+# =============================================================================
+
+def run_eod_close():
+    """Force-close all intraday positions at 3:25 PM."""
+    logger.info(f"EOD close triggered at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        from execution.price_monitor import PriceMonitor
+        results = PriceMonitor().close_all_intraday()
+        if results:
+            total_pnl = sum(r.pnl for r in results)
+            logger.info(f"EOD: closed {len(results)} intraday positions, "
+                        f"P&L Rs.{total_pnl:+,.0f}")
+        else:
+            logger.info("EOD: no intraday positions to close")
+    except Exception as e:
+        logger.error(f"EOD close failed: {e}")
+
+
+# =============================================================================
+# JOB 5 — Weekly summary every Sunday 8 PM IST
+# =============================================================================
+
+def run_weekly_summary():
+    """Send weekly performance report to Telegram."""
+    logger.info(f"Weekly summary triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
+    try:
+        from automation.weekly_summary import send_weekly_summary
+        send_weekly_summary()
+    except Exception as e:
+        logger.error(f"Weekly summary failed: {e}")
+        send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
+
+
+# =============================================================================
+# Telegram helper
+# =============================================================================
 
 def send_telegram_alert(signals: list, stats: dict):
-    """Send top signals to Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.info("Telegram not configured — skipping alert")
         return
 
     date_str = datetime.now(IST).strftime("%d %b %Y")
-    lines = [f"*NSE Trading Agent — {date_str}*", f"Mode: {TRADING_MODE.upper()}", ""]
+    lines = [f"*NSE Agent — {date_str}*", f"Mode: {TRADING_MODE.upper()}", ""]
 
     if not signals:
         lines.append("No BUY signals today.")
@@ -75,14 +148,17 @@ def send_telegram_alert(signals: list, stats: dict):
         for i, s in enumerate(signals[:5], 1):
             lines += [
                 f"*#{i} {s.symbol}* — {s.action} ({s.confidence:.0%})",
-                f"Entry: Rs.{s.entry_price:,.0f} | SL: Rs.{s.stop_loss:,.0f} | TP: Rs.{s.take_profit:,.0f}",
-                f"Reason: {s.reasoning[:80]}...",
+                f"Entry: Rs.{s.entry_price:,.0f} | "
+                f"SL: Rs.{s.stop_loss:,.0f} | "
+                f"TP: Rs.{s.take_profit:,.0f}",
+                f"_{s.reasoning[:80]}_",
                 "",
             ]
 
-    lines += [
-        f"_Win Rate: {stats['win_rate_pct']:.0f}% | Trades: {stats['total_trades']}_"
-    ]
+    lines.append(
+        f"Win Rate: {stats['win_rate_pct']:.0f}% | "
+        f"Trades: {stats['total_trades']}"
+    )
     send_telegram_message("\n".join(lines))
 
 
@@ -95,13 +171,16 @@ def send_telegram_message(text: str):
             json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
             timeout=10,
         )
-        logger.info("Telegram alert sent")
+        logger.info("Telegram message sent")
     except Exception as e:
         logger.warning(f"Telegram send failed: {e}")
 
 
+# =============================================================================
+# Entry point
+# =============================================================================
+
 if __name__ == "__main__":
-    # Read scan times from user settings (configurable from dashboard)
     from config import SCAN_TIME_1, SCAN_TIME_2
 
     def _parse_time(t: str):
@@ -113,22 +192,59 @@ if __name__ == "__main__":
 
     scheduler = BlockingScheduler(timezone=IST)
 
+    # --- Job 1: Morning scan ---
     scheduler.add_job(
         run_daily_scan,
         CronTrigger(hour=h1, minute=m1, day_of_week="mon-fri", timezone=IST),
         id="scan_1",
-        name=f"Scan 1 ({SCAN_TIME_1} IST)",
+        name=f"Morning Scan ({SCAN_TIME_1} IST)",
     )
 
+    # --- Job 2: Afternoon scan ---
     scheduler.add_job(
         run_daily_scan,
         CronTrigger(hour=h2, minute=m2, day_of_week="mon-fri", timezone=IST),
         id="scan_2",
-        name=f"Scan 2 ({SCAN_TIME_2} IST)",
+        name=f"Afternoon Scan ({SCAN_TIME_2} IST)",
     )
 
-    logger.info(f"Scheduler started — scans at {SCAN_TIME_1} and {SCAN_TIME_2} IST (Mon-Fri)")
-    logger.info("Press Ctrl+C to stop")
+    # --- Job 3: Price monitor every 15 min, 9:15 AM – 3:25 PM ---
+    scheduler.add_job(
+        run_price_monitor,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="15,30,45,0",
+            timezone=IST,
+        ),
+        id="price_monitor",
+        name="Price Monitor (every 15 min)",
+    )
+
+    # --- Job 4: EOD close at 3:25 PM ---
+    scheduler.add_job(
+        run_eod_close,
+        CronTrigger(hour=15, minute=25, day_of_week="mon-fri", timezone=IST),
+        id="eod_close",
+        name="EOD Close (15:25 IST)",
+    )
+
+    # --- Job 5: Weekly summary every Sunday 8 PM ---
+    scheduler.add_job(
+        run_weekly_summary,
+        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=IST),
+        id="weekly_summary",
+        name="Weekly Summary (Sun 20:00 IST)",
+    )
+
+    logger.info("=" * 55)
+    logger.info("  QUANTEDGE SCHEDULER STARTED")
+    logger.info(f"  Morning scan  : {SCAN_TIME_1} IST (Mon-Fri)")
+    logger.info(f"  Afternoon scan: {SCAN_TIME_2} IST (Mon-Fri)")
+    logger.info("  Price monitor : every 15 min, 09:15–15:25 (Mon-Fri)")
+    logger.info("  EOD close     : 15:25 IST (Mon-Fri)")
+    logger.info("  Weekly report : Sunday 20:00 IST")
+    logger.info("=" * 55)
 
     try:
         scheduler.start()

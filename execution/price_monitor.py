@@ -14,12 +14,13 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import sqlite3
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, time
 import pytz
 from dataclasses import dataclass
-from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL
+from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL, SQLITE_DB_FILE
 from utils import get_logger
 from utils.telegram import send
 
@@ -261,7 +262,35 @@ class PriceMonitor:
         return None
 
     def _log_trade(self, result: MonitorResult, exit_price: float):
-        """Append to paper trades CSV."""
+        """Write trade exit to SQLite (trades table) + CSV fallback."""
+        # --- SQLite (primary) ---
+        try:
+            db = SQLITE_DB_FILE
+            if os.path.exists(db):
+                with sqlite3.connect(db) as conn:
+                    # Find the most recent open trade for this symbol
+                    row = conn.execute(
+                        "SELECT id, entry_price, qty FROM trades "
+                        "WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1",
+                        (result.symbol,)
+                    ).fetchone()
+                    if row:
+                        trade_id, entry, qty = row
+                        pnl     = round((exit_price - entry) * qty, 2)
+                        pnl_pct = round((exit_price - entry) / entry * 100, 2)
+                        conn.execute("""
+                            UPDATE trades
+                            SET exit_price=?, exit_time=?, pnl=?, pnl_pct=?, status='closed'
+                            WHERE id=?
+                        """, (round(exit_price, 2), datetime.now().isoformat(),
+                              pnl, pnl_pct, trade_id))
+                        logger.debug(f"SQLite: closed trade #{trade_id} for {result.symbol} "
+                                     f"P&L Rs.{pnl:+,.0f}")
+        except Exception as e:
+            logger.warning(f"SQLite trade close failed for {result.symbol}: {e}")
+
+        # --- CSV (fallback / audit log) ---
+        import csv
         os.makedirs("logs", exist_ok=True)
         log_file   = "logs/paper_trades.csv"
         fieldnames = ["timestamp","symbol","trade_type","action","qty",
@@ -277,7 +306,6 @@ class PriceMonitor:
             "pnl":         result.pnl,
             "pnl_pct":     result.pnl_pct,
         }
-        import csv
         write_header = not os.path.exists(log_file)
         with open(log_file, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames)

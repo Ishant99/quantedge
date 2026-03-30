@@ -161,6 +161,9 @@ class BacktestEngine:
             window = df.iloc[:i]
             today  = df.iloc[i]
             date   = df.index[i]
+            # Ensure tz-naive for arithmetic (yfinance may return tz-aware index)
+            if hasattr(date, "tzinfo") and date.tzinfo is not None:
+                date = date.tz_localize(None)
             cost_factor = 1 + commission_pct + slippage_pct
 
             # Check exit conditions for open position
@@ -239,11 +242,14 @@ class BacktestEngine:
 
         # Close any open position at end
         if position:
-            last    = df.iloc[-1]["close"]
-            exit_px = last * (1 - commission_pct - slippage_pct)
-            pnl     = (exit_px - position["entry"]) * position["qty"]
-            cash   += exit_px * position["qty"]
-            hold_d  = (df.index[-1] - pd.Timestamp(position["entry_date"])).days
+            last      = df.iloc[-1]["close"]
+            exit_px   = last * (1 - commission_pct - slippage_pct)
+            pnl       = (exit_px - position["entry"]) * position["qty"]
+            cash     += exit_px * position["qty"]
+            last_date = df.index[-1]
+            if hasattr(last_date, "tzinfo") and last_date.tzinfo is not None:
+                last_date = last_date.tz_localize(None)
+            hold_d = (last_date - pd.Timestamp(position["entry_date"])).days
             trades.append({
                 "entry_date": position["entry_date"],
                 "exit_date":  str(df.index[-1].date()),
