@@ -95,7 +95,8 @@ def run_agent(dry_run: bool = False) -> list:
     mom_mode    = "short" if bear_mode else "buy"
     mom_results = MomentumFilter().filter_all(market_data, mode=mom_mode)
     market_data = {sym: df for sym, df in market_data.items() if sym in mom_results}
-    logger.info(f"[MOMENTUM] {len(market_data)}/{len(mom_results) + (len(scanner.symbols_df) - len(mom_results))} pass momentum gates")
+    total_scanned = len(scanner.symbols_df)
+    logger.info(f"[MOMENTUM] {len(market_data)}/{total_scanned} pass momentum gates")
 
     # ------------------------------------------------------------------
     # 6. TECHNICAL ANALYSIS
@@ -234,7 +235,7 @@ def run_agent(dry_run: bool = False) -> list:
         mtf  = mtf_results.get(sig.symbol)
         vp   = vp_results.get(sig.symbol)
         sec  = symbol_sectors.get(sig.symbol, "Unknown")
-        sec_mult = sector_result.get_sector_multiplier(sec, sector_result)
+        sec_mult = SectorRotationAnalyser.get_sector_multiplier(sec, sector_result)
 
         # Boost confidence for bullish patterns, S/R, VP
         extra = 0.0

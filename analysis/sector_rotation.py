@@ -98,8 +98,9 @@ class SectorRotationAnalyser:
             message         = msg,
         )
 
-    def get_sector_multiplier(self, sector: str,
-                               result: SectorRotationResult) -> float:
+    @staticmethod
+    def get_sector_multiplier(sector: str,
+                              result: SectorRotationResult) -> float:
         """
         Return position size multiplier based on sector momentum.
         Hot sector = 1.2x, cold sector = 0.7x, neutral = 1.0x
@@ -112,7 +113,7 @@ class SectorRotationAnalyser:
 
     def _default(self) -> SectorRotationResult:
         return SectorRotationResult(
-            hot_sectors=[], cold_sectors={},
+            hot_sectors=[], cold_sectors=[],
             sector_returns={}, rotation_signal="mixed",
             message="Sector data unavailable — neutral weighting"
         )

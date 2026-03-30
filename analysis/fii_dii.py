@@ -77,16 +77,17 @@ class FIIDIITracker:
         flow = self.get_flow()
 
         # Map internal bullish/bearish → buy/sell vocabulary
+        # score is 0-10 scale (used by DynamicPositionSizer: 5 = neutral)
         if flow.signal == "bullish" and flow.consecutive_days >= 3:
-            sig, score = "strong_buy", 0.8
+            sig, score = "strong_buy", 9.0
         elif flow.signal == "bullish":
-            sig, score = "buy", 0.4
+            sig, score = "buy", 7.0
         elif flow.signal == "bearish" and flow.consecutive_days >= 3:
-            sig, score = "strong_sell", -0.8
+            sig, score = "strong_sell", 1.0
         elif flow.signal == "bearish":
-            sig, score = "sell", -0.4
+            sig, score = "sell", 3.0
         else:
-            sig, score = "neutral", 0.0
+            sig, score = "neutral", 5.0
 
         msg = (
             f"FII net Rs.{flow.fii_net:+,.0f} Cr | "

@@ -213,7 +213,7 @@ class ShortSignalGenerator:
             if df is None or df.empty:
                 continue
             sent = sent_results.get(symbol)
-            sentiment  = sent.sentiment  if sent else "neutral"
+            sentiment  = sent.label      if sent else "neutral"
             sent_score = sent.score      if sent else 0.0
 
             sig = self.generate(
