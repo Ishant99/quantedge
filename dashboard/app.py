@@ -2107,20 +2107,43 @@ elif page == "CONFIG":
         st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
         st.markdown('<div class="bb-header">RESTART SCHEDULER</div>', unsafe_allow_html=True)
         st.info("After changing scan times, API keys, or mode — restart the scheduler "
-                "container for changes to take effect.")
-        if st.button("RESTART SCHEDULER CONTAINER", use_container_width=True):
+                "for changes to take effect.")
+
+        if st.button("RESTART SCHEDULER", use_container_width=True):
             try:
-                import subprocess
-                result = subprocess.run(
-                    ["docker", "restart", "quantedge_scheduler"],
-                    capture_output=True, text=True, timeout=30
+                import subprocess, sys, signal as _signal
+
+                # Kill any existing scheduler process
+                killed = 0
+                try:
+                    result = subprocess.run(
+                        ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                        capture_output=True, text=True
+                    )
+                    for line in result.stdout.splitlines():
+                        if "scheduler" in line.lower():
+                            pid = int(line.split(",")[1].strip('"'))
+                            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                                           capture_output=True)
+                            killed += 1
+                except Exception:
+                    pass
+
+                # Start fresh scheduler process
+                scheduler_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "scheduler", "scheduler.py"
                 )
-                if result.returncode == 0:
-                    st.success("Scheduler restarted successfully.")
-                else:
-                    st.error(f"Restart failed: {result.stderr[:200]}")
+                subprocess.Popen(
+                    [sys.executable, scheduler_path],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                    if hasattr(subprocess, "CREATE_NEW_CONSOLE") else 0,
+                )
+                st.success(f"Scheduler started in background"
+                           f"{f' (killed {killed} old process)' if killed else ''}.")
             except Exception as e:
                 st.error(f"Could not restart: {e}")
+                st.info("Start manually: `python scheduler/scheduler.py`")
 
         st.markdown('<div class="bb-header" style="margin-top:14px;">CURRENT SETTINGS SUMMARY</div>',
                     unsafe_allow_html=True)
