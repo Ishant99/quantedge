@@ -172,6 +172,48 @@ hr { border-color: #1e1e1e !important; margin: 8px 0 !important; }
     letter-spacing: 2px; font-weight: 600; margin-bottom: 6px;
     border-bottom: 1px solid #1e1e1e; padding-bottom: 4px;
 }
+
+/* ── Multi-market P&L strip ── */
+.mkt-strip {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+    margin-bottom: 8px;
+}
+.mkt-cell {
+    background: #111111; border: 1px solid #1e1e1e;
+    border-top: 2px solid #2a2a2a;
+    padding: 8px 10px; text-align: center;
+}
+.mkt-cell.nse  { border-top-color: #FF6B00; }
+.mkt-cell.fno  { border-top-color: #00BFFF; }
+.mkt-cell.cr   { border-top-color: #F7931A; }
+.mkt-cell.us   { border-top-color: #4169E1; }
+.mkt-cell.tot  { border-top-color: #00C805; background: #0d1a0d; }
+.mkt-lbl { font-size: 9px; color: #555; text-transform: uppercase;
+           letter-spacing: 1px; margin-bottom: 4px; }
+.mkt-val { font-size: 13px; font-weight: 600; font-family: 'JetBrains Mono'; }
+
+/* ── Market Intel card ── */
+.intel-card {
+    background: #0d0d0d; border: 1px solid #1e1e1e;
+    padding: 10px 12px; margin-bottom: 8px;
+}
+.intel-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 0; border-bottom: 1px solid #151515; font-size: 11px;
+}
+.intel-row:last-child { border-bottom: none; }
+.intel-key { color: #555; font-size: 10px; text-transform: uppercase;
+             letter-spacing: 0.8px; }
+.badge {
+    font-size: 9px; font-weight: 700; padding: 2px 7px;
+    letter-spacing: 0.8px; text-transform: uppercase;
+}
+.badge-bull { color: #00C805; border: 1px solid #00C805; }
+.badge-bear { color: #FF3B3B; border: 1px solid #FF3B3B; }
+.badge-side { color: #FFB347; border: 1px solid #FFB347; }
+.badge-buy  { color: #00BFFF; border: 1px solid #00BFFF; }
+.badge-sell { color: #FF6B00; border: 1px solid #FF6B00; }
+.badge-neu  { color: #888888; border: 1px solid #444444; }
 .bb-row {
     display: flex; justify-content: space-between; align-items: center;
     padding: 5px 0; border-bottom: 1px solid #151515; font-size: 12px;
@@ -419,6 +461,20 @@ with st.sidebar:
     vc   = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     pnl  = cash - vc
     pc   = "#00C805" if pnl >= 0 else "#FF3B3B"
+    # Combined P&L across all markets
+    try:
+        from execution.brokers.fno_paper_broker import FNOPaperBroker
+        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+        from execution.brokers.us_paper_broker import USPaperBroker
+        _sb_inr = _cfg("INR_PER_USD", 83.0)
+        _sb_fno = FNOPaperBroker().get_stats().get("total_pnl", 0) or 0
+        _sb_cry = (CryptoPaperBroker().get_stats().get("total_pnl_usdt", 0) or 0) * _sb_inr
+        _sb_us  = (USPaperBroker().get_stats().get("total_pnl_usd", 0) or 0) * _sb_inr
+        _sb_comb = pnl + _sb_fno + _sb_cry + _sb_us
+        _sb_extra = True
+    except Exception:
+        _sb_comb = pnl; _sb_extra = False
+    _cpc = "#00C805" if _sb_comb >= 0 else "#FF3B3B"
     st.markdown(f"""
     <div style="background:#111111;border:1px solid #1e1e1e;padding:10px;
                 border-left:2px solid #FF6B00;">
@@ -426,8 +482,9 @@ with st.sidebar:
                     letter-spacing:1px;margin-bottom:6px;">Portfolio</div>
         <div style="font-size:17px;font-weight:700;color:#eeeeee;">
             Rs.{cash:,.0f}</div>
-        <div style="font-size:11px;color:{pc};margin-top:3px;">
-            {'+' if pnl>=0 else ''}Rs.{pnl:,.0f} ({pnl/vc*100:+.2f}%)</div>
+        <div style="font-size:10px;color:{pc};margin-top:3px;">
+            NSE {'+' if pnl>=0 else ''}Rs.{pnl:,.0f}</div>
+        {'<div style="font-size:10px;color:'+_cpc+';margin-top:2px;border-top:1px solid #1e1e1e;padding-top:3px;">ALL '+('+' if _sb_comb>=0 else '')+'Rs.'+f"{_sb_comb:,.0f}"+'</div>' if _sb_extra else ''}
     </div>
     """, unsafe_allow_html=True)
 
@@ -448,36 +505,128 @@ if page == "TODAY":
     pnl   = cash - vc
     pos   = pf.get("positions", {})
 
-    # ── Ticker strip ──────────────────────────────────────────────────────────
-    reg = _load_json("logs/market_regime.json")
+    # ── Live market data for strips ───────────────────────────────────────────
+    reg     = _load_json("logs/market_regime.json")
     rsi_val = reg.get("rsi", 0) if reg else 0
     ret_1m  = reg.get("ret_1m", 0) if reg else 0
     pcr_d   = _load_json("logs/pcr_signal.json")
     pcr_val = pcr_d.get("pcr", 0) if pcr_d else 0
+
+    # BankNifty 1-day return
+    try:
+        _bn = yf.Ticker("^NSEBANK").history(period="5d", interval="1d")
+        bn_ret = float((_bn["Close"].iloc[-1] - _bn["Close"].iloc[-2]) /
+                       _bn["Close"].iloc[-2] * 100) if len(_bn) >= 2 else 0.0
+    except Exception:
+        bn_ret = 0.0
+
+    # FII net from file
+    fii_d   = _load_json("logs/fii_signal.json")
+    fii_net = fii_d.get("fii_net", 0) if fii_d else 0
+    fii_sig = fii_d.get("signal", "") if fii_d else ""
+
+    # Market open/closed indicator
+    from datetime import time as _dtime
+    import pytz as _pytz
+    _ist  = _pytz.timezone("Asia/Kolkata")
+    _now  = datetime.now(_ist)
+    _mkt_open = _dtime(9, 15) <= _now.time() <= _dtime(15, 30) and _now.weekday() < 5
+    _mkt_label = "LIVE" if _mkt_open else "CLOSED"
+    _mkt_color = "#00C805" if _mkt_open else "#555555"
+
+    rg_str = reg.get("regime", "unknown").upper() if reg else "---"
+    rg_col = {"BULL": "#00C805", "BEAR": "#FF3B3B"}.get(rg_str, "#FFB347")
+
+    # Multi-market stats for strip (loaded once, reused below)
+    _inr = _cfg("INR_PER_USD", 83.0)
+    try:
+        from execution.brokers.fno_paper_broker import FNOPaperBroker
+        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+        from execution.brokers.us_paper_broker import USPaperBroker
+        _fno_s = FNOPaperBroker().get_stats()
+        _cry_s = CryptoPaperBroker().get_stats()
+        _us_s  = USPaperBroker().get_stats()
+    except Exception:
+        _fno_s = _cry_s = _us_s = {"total_pnl": 0, "total_pnl_usdt": 0,
+                                    "total_pnl_usd": 0, "open_positions": 0}
+
+    _fno_pnl = _fno_s.get("total_pnl", 0) or 0
+    _cry_pnl = (_cry_s.get("total_pnl_usdt", 0) or 0) * _inr
+    _us_pnl  = (_us_s.get("total_pnl_usd", 0)  or 0) * _inr
+    _comb    = pnl + _fno_pnl + _cry_pnl + _us_pnl
+    _fno_open = _fno_s.get("open_positions", 0) or 0
+    _cry_open = _cry_s.get("open_positions", 0) or 0
+    _us_open  = _us_s.get("open_positions", 0)  or 0
+    _total_open = len(pos) + _fno_open + _cry_open + _us_open
+
+    # ── Ticker strip ──────────────────────────────────────────────────────────
     st.markdown(f"""
     <div class="ticker-strip">
-        <span>NIFTY50 &nbsp;<span style="color:{'#00C805' if ret_1m>=0 else '#FF3B3B'}">
+        <span style="color:{_mkt_color};font-weight:700;letter-spacing:1px;">
+            ● {_mkt_label}</span>
+        <span>NIFTY &nbsp;<span style="color:{'#00C805' if ret_1m>=0 else '#FF3B3B'}">
             {ret_1m:+.2f}%</span></span>
+        <span>BANKNIFTY &nbsp;<span style="color:{'#00C805' if bn_ret>=0 else '#FF3B3B'}">
+            {bn_ret:+.2f}%</span></span>
         <span>RSI <span style="color:#FF6B00">{rsi_val:.1f}</span></span>
         <span>PCR <span style="color:#FF6B00">{pcr_val:.2f}</span></span>
-        <span>POSITIONS <span style="color:#FF6B00">{len(pos)}</span></span>
-        <span>WIN RATE <span style="color:#FF6B00">{stats['win_rate_pct']:.1f}%</span></span>
-        <span>P&L <span style="color:{'#00C805' if pnl>=0 else '#FF3B3B'}">{'+' if pnl>=0 else ''}Rs.{pnl:,.0f}</span></span>
+        <span>REGIME <span style="color:{rg_col}">{rg_str}</span></span>
+        <span>FII <span style="color:{'#00C805' if fii_net>=0 else '#FF3B3B'}">
+            {'▲' if fii_net>=0 else '▼'}{abs(fii_net):,.0f}Cr</span></span>
+        <span>POS <span style="color:#FF6B00">{_total_open}</span></span>
+        <span>WIN <span style="color:#FF6B00">{stats['win_rate_pct']:.1f}%</span></span>
+        <span style="color:#444;">{_now.strftime('%H:%M IST')}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Multi-market P&L strip ────────────────────────────────────────────────
+    def _pnl_color(v): return "#00C805" if v >= 0 else "#FF3B3B"
+    def _pnl_fmt(v, prefix="Rs."): return f"{prefix}{'+' if v>=0 else ''}{v:,.0f}"
+
+    st.markdown(f"""
+    <div class="mkt-strip">
+      <div class="mkt-cell nse">
+        <div class="mkt-lbl">NSE Equity</div>
+        <div class="mkt-val" style="color:{_pnl_color(pnl)};">{_pnl_fmt(pnl)}</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">{len(pos)} positions</div>
+      </div>
+      <div class="mkt-cell fno">
+        <div class="mkt-lbl">F&amp;O Paper</div>
+        <div class="mkt-val" style="color:{_pnl_color(_fno_pnl)};">{_pnl_fmt(_fno_pnl)}</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">{_fno_open} positions</div>
+      </div>
+      <div class="mkt-cell cr">
+        <div class="mkt-lbl">Crypto</div>
+        <div class="mkt-val" style="color:{_pnl_color(_cry_pnl)};">{_pnl_fmt(_cry_pnl)}</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">{_cry_open} positions</div>
+      </div>
+      <div class="mkt-cell us">
+        <div class="mkt-lbl">US Stocks</div>
+        <div class="mkt-val" style="color:{_pnl_color(_us_pnl)};">{_pnl_fmt(_us_pnl)}</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">{_us_open} positions</div>
+      </div>
+      <div class="mkt-cell tot">
+        <div class="mkt-lbl">Combined P&amp;L</div>
+        <div class="mkt-val" style="color:{_pnl_color(_comb)};font-size:15px;">{_pnl_fmt(_comb)}</div>
+        <div style="font-size:9px;color:#444;margin-top:2px;">{_total_open} total open</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
     # ── KPI row ───────────────────────────────────────────────────────────────
     k1,k2,k3,k4,k5,k6 = st.columns(6)
     k1.metric("PORTFOLIO",      f"Rs.{cash:,.0f}")
-    k2.metric("TOTAL P&L",      f"Rs.{pnl:+,.0f}",     delta=f"{pnl/vc*100:+.2f}%")
-    k3.metric("OPEN POS",       len(pos))
+    k2.metric("NSE P&L",        f"Rs.{pnl:+,.0f}",     delta=f"{pnl/vc*100:+.2f}%")
+    k3.metric("OPEN POSITIONS", _total_open, delta=f"NSE:{len(pos)} F&O:{_fno_open}")
     k4.metric("TOTAL TRADES",   stats["total_trades"])
     k5.metric("WIN RATE",       f"{stats['win_rate_pct']:.1f}%")
-    k6.metric("PROFIT FACTOR",  f"{stats['profit_factor']:.2f}")
+    k6.metric("COMBINED P&L",   f"Rs.{_comb:+,.0f}")
 
     st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
 
-    tab_ov, tab_sig = st.tabs(["OVERVIEW", "SIGNALS"])
+    tab_ov, tab_sig, tab_fno, tab_crypto, tab_us = st.tabs([
+        "OVERVIEW", "SIGNALS", "F&O BOOK", "CRYPTO", "US STOCKS"
+    ])
 
     # ── Overview ──────────────────────────────────────────────────────────────
     with tab_ov:
@@ -541,6 +690,54 @@ if page == "TODAY":
                 st.info("No signals yet")
 
         with right:
+            # ── Market Intel (PCR / FII / Regime) ─────────────────────────
+            st.markdown('<div class="bb-header">MARKET INTEL</div>', unsafe_allow_html=True)
+            _pcr_d   = _load_json("logs/pcr_signal.json")
+            _fii_d   = _load_json("logs/fii_signal.json")
+            _pcr_sig = _pcr_d.get("signal", "neutral") if _pcr_d else "neutral"
+            _fii_sig = _fii_d.get("signal", "neutral") if _fii_d else "neutral"
+            _rg_now  = reg.get("regime", "unknown") if reg else "unknown"
+            _pcr_badge = ("badge-bull" if _pcr_sig == "bullish" else
+                          "badge-bear" if _pcr_sig == "bearish" else "badge-neu")
+            _fii_badge = ("badge-bull" if _fii_sig == "bullish" else
+                          "badge-bear" if _fii_sig == "bearish" else "badge-neu")
+            _rg_badge  = ("badge-bull" if _rg_now == "bull" else
+                          "badge-bear" if _rg_now == "bear" else "badge-side")
+            _pcr_num   = _pcr_d.get("pcr", 0) if _pcr_d else 0
+            _fii_num   = _fii_d.get("fii_net", 0) if _fii_d else 0
+            _dii_num   = _fii_d.get("dii_net", 0) if _fii_d else 0
+            st.markdown(f"""
+            <div class="intel-card">
+              <div class="intel-row">
+                <span class="intel-key">Regime</span>
+                <span class="badge {_rg_badge}">{_rg_now.upper()}</span>
+              </div>
+              <div class="intel-row">
+                <span class="intel-key">PCR {_pcr_num:.2f}</span>
+                <span class="badge {_pcr_badge}">{_pcr_sig.upper()}</span>
+              </div>
+              <div class="intel-row">
+                <span class="intel-key">FII {'+' if _fii_num>=0 else ''}{_fii_num:,.0f}Cr</span>
+                <span class="badge {_fii_badge}">{_fii_sig.upper()}</span>
+              </div>
+              <div class="intel-row">
+                <span class="intel-key">DII {'+' if _dii_num>=0 else ''}{_dii_num:,.0f}Cr</span>
+                <span style="color:{'#00C805' if _dii_num>=0 else '#FF3B3B'};font-size:11px;">
+                    {'▲ BUY' if _dii_num>=0 else '▼ SELL'}</span>
+              </div>
+              <div class="intel-row">
+                <span class="intel-key">Nifty RSI</span>
+                <span style="color:{'#FF3B3B' if rsi_val>70 else '#00C805' if rsi_val<35 else '#FF6B00'};
+                             font-weight:600;font-size:11px;">{rsi_val:.1f}</span>
+              </div>
+              <div class="intel-row">
+                <span class="intel-key">BankNifty</span>
+                <span style="color:{'#00C805' if bn_ret>=0 else '#FF3B3B'};font-size:11px;">
+                    {bn_ret:+.2f}%</span>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
             # Performance block
             st.markdown('<div class="bb-header">PERFORMANCE</div>', unsafe_allow_html=True)
             rows_html = ""
@@ -680,6 +877,297 @@ if page == "TODAY":
         if auto:
             time.sleep(60); st.rerun()
 
+    # ── CRYPTO ────────────────────────────────────────────────────────────────
+    with tab_crypto:
+        st.markdown('<div class="bb-header">CRYPTO PAPER TRADING</div>',
+                    unsafe_allow_html=True)
+        try:
+            from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+            cb     = CryptoPaperBroker()
+            c_stats  = cb.get_stats()
+            c_open   = cb.get_open_positions()
+            c_closed = cb.get_closed_trades(limit=20)
+        except Exception as e:
+            st.error(f"Crypto broker error: {e}")
+            c_stats, c_open, c_closed = {}, [], []
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("OPEN",       c_stats.get("open_positions", 0))
+        c2.metric("CLOSED",     c_stats.get("total", 0))
+        c3.metric("WIN RATE",   f"{c_stats.get('win_rate', 0):.1f}%")
+        c4.metric("TOTAL P&L",  f"{c_stats.get('total_pnl_usdt', 0):+.2f} USDT")
+
+        if st.button("RUN CRYPTO SCAN NOW", type="primary"):
+            with st.spinner("Scanning crypto markets..."):
+                try:
+                    from data.crypto_scanner import CryptoScanner
+                    from analysis.technical_agent import TechnicalAgent
+                    from config import MIN_CONFIDENCE
+                    mdata = CryptoScanner().run(max_workers=10)
+                    ta    = TechnicalAgent().analyse_all(mdata)
+                    opened = 0
+                    for sym, r in ta.items():
+                        if r.tradeable and r.signal == "bullish" and r.confidence >= MIN_CONFIDENCE:
+                            if cb.open_position(sym, "LONG", usd_amount=100,
+                                                reasoning=r.reasoning[:100]):
+                                opened += 1
+                    st.success(f"Opened {opened} crypto paper positions")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        if c_open:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">OPEN POSITIONS</div>',
+                        unsafe_allow_html=True)
+            for p in c_open:
+                entry = p["entry_price"]; curr = p["current_price"] or entry
+                pnl   = p["pnl_usdt"] or 0
+                chg   = (curr - entry) / entry * 100 if entry else 0
+                color = "#00C805" if pnl >= 0 else "#FF3B3B"
+                st.markdown(f"""
+                <div style="background:#111;border:1px solid #1e1e1e;
+                            border-left:3px solid {'#00C805' if p['direction']=='LONG' else '#FF3B3B'};
+                            padding:10px 14px;margin-bottom:6px;font-family:JetBrains Mono;font-size:11px;">
+                  <div style="display:flex;gap:14px;align-items:center;">
+                    <span style="font-weight:700;color:#eee;">{p['symbol']}</span>
+                    <span style="color:{'#00C805' if p['direction']=='LONG' else '#FF3B3B'};">
+                      {p['direction']}</span>
+                    <span style="color:#555;">Entry {entry:.4f}</span>
+                    <span style="color:#888;">Now {curr:.4f}</span>
+                    <span style="color:{color};font-weight:700;margin-left:auto;">
+                      {pnl:+.2f} USDT ({chg:+.1f}%)</span>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if c_closed:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">CLOSED TRADES</div>',
+                        unsafe_allow_html=True)
+            df_cc = pd.DataFrame(c_closed)[
+                ["symbol","direction","entry_price","exit_price","pnl_usdt","pnl_pct","exit_reason"]
+            ]
+            st.dataframe(df_cc, use_container_width=True, height=220)
+
+    # ── US STOCKS ─────────────────────────────────────────────────────────────
+    with tab_us:
+        st.markdown('<div class="bb-header">US STOCKS PAPER TRADING</div>',
+                    unsafe_allow_html=True)
+        try:
+            from execution.brokers.us_paper_broker import USPaperBroker
+            ub     = USPaperBroker()
+            u_stats  = ub.get_stats()
+            u_open   = ub.get_open_positions()
+            u_closed = ub.get_closed_trades(limit=20)
+        except Exception as e:
+            st.error(f"US broker error: {e}")
+            u_stats, u_open, u_closed = {}, [], []
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("OPEN",       u_stats.get("open_positions", 0))
+        c2.metric("CLOSED",     u_stats.get("total", 0))
+        c3.metric("WIN RATE",   f"{u_stats.get('win_rate', 0):.1f}%")
+        c4.metric("TOTAL P&L",  f"${u_stats.get('total_pnl_usd', 0):+.2f}")
+
+        st.caption("US market scan runs automatically at 7:00 PM IST (US market open, Mon-Fri)")
+
+        if st.button("RUN US SCAN NOW", type="primary"):
+            with st.spinner("Scanning US stocks..."):
+                try:
+                    from data.us_scanner import USScanner
+                    from analysis.technical_agent import TechnicalAgent
+                    from config import MIN_CONFIDENCE
+                    mdata = USScanner().run(max_workers=15)
+                    ta    = TechnicalAgent().analyse_all(mdata)
+                    opened = 0
+                    for sym, r in ta.items():
+                        if r.tradeable and r.signal == "bullish" and r.confidence >= MIN_CONFIDENCE:
+                            if ub.open_position(sym, "LONG", usd_amount=500,
+                                                reasoning=r.reasoning[:100]):
+                                opened += 1
+                    st.success(f"Opened {opened} US paper positions")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        if u_open:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">OPEN POSITIONS</div>',
+                        unsafe_allow_html=True)
+            for p in u_open:
+                entry = p["entry_price"]; curr = p["current_price"] or entry
+                pnl   = p["pnl_usd"] or 0
+                chg   = (curr - entry) / entry * 100 if entry else 0
+                color = "#00C805" if pnl >= 0 else "#FF3B3B"
+                st.markdown(f"""
+                <div style="background:#111;border:1px solid #1e1e1e;
+                            border-left:3px solid #00C805;
+                            padding:10px 14px;margin-bottom:6px;
+                            font-family:JetBrains Mono;font-size:11px;">
+                  <div style="display:flex;gap:14px;align-items:center;">
+                    <span style="font-weight:700;color:#eee;">{p['symbol']}</span>
+                    <span style="color:#00C805;">{p['direction']}</span>
+                    <span style="color:#555;">Entry ${entry:.2f}</span>
+                    <span style="color:#888;">Now ${curr:.2f}</span>
+                    <span style="color:{color};font-weight:700;margin-left:auto;">
+                      ${pnl:+.2f} ({chg:+.1f}%)</span>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if u_closed:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">CLOSED TRADES</div>',
+                        unsafe_allow_html=True)
+            df_uc = pd.DataFrame(u_closed)[
+                ["symbol","direction","entry_price","exit_price","pnl_usd","pnl_pct","exit_reason"]
+            ]
+            st.dataframe(df_uc, use_container_width=True, height=220)
+
+    # ── F&O BOOK ──────────────────────────────────────────────────────────────
+    with tab_fno:
+        st.markdown('<div class="bb-header">F&O PAPER TRADING BOOK</div>',
+                    unsafe_allow_html=True)
+        try:
+            from execution.brokers.fno_paper_broker import FNOPaperBroker
+            fno = FNOPaperBroker()
+            fno_stats  = fno.get_stats()
+            open_pos   = fno.get_open_positions()
+            closed_pos = fno.get_closed_trades(limit=20)
+        except Exception as e:
+            st.error(f"F&O broker error: {e}")
+            open_pos, closed_pos, fno_stats = [], [], {}
+
+        # KPIs
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("OPEN POSITIONS",  fno_stats.get("open_positions", 0))
+        c2.metric("CLOSED TRADES",   fno_stats.get("total", 0))
+        c3.metric("WIN RATE",        f"{fno_stats.get('win_rate', 0):.1f}%")
+        c4.metric("TOTAL F&O P&L",   f"Rs.{fno_stats.get('total_pnl', 0):+,.0f}")
+
+        # Action buttons
+        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+        b1, b2, b3 = st.columns(3)
+
+        if b1.button("BUY OPTIONS (CE/PE)", type="primary", use_container_width=True):
+            with st.spinner("Generating signals..."):
+                try:
+                    from analysis.options_signals import OptionsSignalGenerator
+                    opened = 0
+                    for s in OptionsSignalGenerator().run():
+                        if fno.open_position(index=s.index, direction=s.direction,
+                                             strike=s.strike, expiry=s.expiry,
+                                             lots=1, reasoning=s.reasoning):
+                            opened += 1
+                    st.success(f"Opened {opened} options position(s)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        if b2.button("SELL STRADDLE/STRANGLE", use_container_width=True):
+            with st.spinner("Generating sell signals..."):
+                try:
+                    from analysis.options_selling import OptionsSellingGenerator
+                    opened = 0
+                    for s in OptionsSellingGenerator().run():
+                        ce_id, pe_id = fno.open_selling_position(
+                            index=s.index, ce_strike=s.ce_strike, pe_strike=s.pe_strike,
+                            ce_premium=s.ce_premium, pe_premium=s.pe_premium,
+                            expiry=s.expiry, lots=1, strategy=s.strategy,
+                            reasoning=s.reasoning,
+                        )
+                        if ce_id:
+                            opened += 2
+                    st.success(f"Opened {opened} sell leg(s)" if opened
+                               else "No sell signals today (runs Tue/Wed/Thu only)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        if b3.button("FUTURES LONG/SHORT", use_container_width=True):
+            with st.spinner("Generating futures signals..."):
+                try:
+                    from analysis.futures_signals import FuturesSignalGenerator
+                    opened = 0
+                    for s in FuturesSignalGenerator().run():
+                        if fno.open_futures(index=s.index, direction=s.direction,
+                                            expiry=s.expiry, lots=1,
+                                            reasoning=s.reasoning):
+                            opened += 1
+                    st.success(f"Opened {opened} futures position(s)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        # Open positions — all types
+        st.markdown('<div class="bb-header" style="margin-top:12px;">OPEN POSITIONS</div>',
+                    unsafe_allow_html=True)
+        if not open_pos:
+            st.info("No open F&O positions.")
+        else:
+            for p in open_pos:
+                entry   = p["entry_premium"]
+                curr    = p["current_premium"] or entry
+                pnl_rs  = p["pnl"] or 0
+                chg     = ((curr - entry) / entry * 100) if entry else 0
+                opt     = p["option_type"]   # CE | PE | FUT-LONG | FUT-SHORT | SELL-CE-* | SELL-PE-*
+                is_sell = opt.startswith("SELL")
+                is_fut  = opt.startswith("FUT")
+
+                if is_sell:
+                    # Seller profit = premium decay, so invert display
+                    pnl_rs = round((entry - curr) * p["qty"], 2)
+                    chg    = (entry - curr) / entry * 100 if entry else 0
+                    border = "#FFB347"
+                    label  = f"SELL {opt.replace('SELL-','').split('-')[0]}"
+                elif is_fut:
+                    border = "#00BFFF"
+                    label  = opt.replace("FUT-", "FUT ")
+                elif opt == "CE":
+                    border = "#00C805"; label = "BUY CE"
+                else:
+                    border = "#FF3B3B"; label = "BUY PE"
+
+                color = "#00C805" if pnl_rs >= 0 else "#FF3B3B"
+                strike_label = str(p["strike"]) if p["strike"] else "—"
+
+                st.markdown(f"""
+                <div style="background:#111;border:1px solid #1e1e1e;
+                            border-left:3px solid {border};
+                            padding:12px 16px;margin-bottom:8px;
+                            font-family:JetBrains Mono;font-size:11px;">
+                  <div style="display:flex;gap:16px;align-items:center;margin-bottom:6px;">
+                    <span style="font-weight:700;color:#eee;font-size:13px;">
+                      {p['instrument']} {strike_label}
+                    </span>
+                    <span style="color:{border};font-size:10px;">{label}</span>
+                    <span style="color:#555;">Expiry {p['expiry']}</span>
+                    <span style="color:#555;">{p['lots']} lot × {p['lot_size']}</span>
+                    <span style="color:{color};font-weight:700;margin-left:auto;">
+                      Rs.{pnl_rs:+,.0f} ({chg:+.1f}%)
+                    </span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;color:#666;">
+                    <div>Entry <span style="color:#ccc;">Rs.{entry:.1f}</span></div>
+                    <div>Current <span style="color:{color};">Rs.{curr:.1f}</span></div>
+                    <div>
+                      {"SL@2x Rs."+f"{entry*2:.1f}" if is_sell else
+                       "SL@50% Rs."+f"{entry*0.5:.1f}" if not is_fut else
+                       "SL@-2% Rs."+f"{entry*0.98:.0f}"}
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # Closed trades
+        if closed_pos:
+            st.markdown('<div class="bb-header" style="margin-top:12px;">CLOSED TRADES</div>',
+                        unsafe_allow_html=True)
+            df_cl = pd.DataFrame(closed_pos)[
+                ["instrument","option_type","strike","expiry",
+                 "lots","entry_premium","exit_premium","pnl","pnl_pct","exit_reason","exit_time"]
+            ]
+            df_cl.columns = ["Index","Type","Strike","Expiry",
+                              "Lots","Entry","Exit","P&L","P&L%","Reason","Closed At"]
+            st.dataframe(df_cl, use_container_width=True, height=280)
+
 
 # =============================================================================
 # PAGE: PORTFOLIO
@@ -696,12 +1184,30 @@ elif page == "PORTFOLIO":
     st.markdown('<div class="bb-header" style="font-size:12px;">PORTFOLIO</div>',
                 unsafe_allow_html=True)
 
-    c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("VALUE",        f"Rs.{cash:,.0f}")
-    c2.metric("P&L",          f"Rs.{pnl:+,.0f}", delta=f"{pnl/vc*100:+.2f}%")
-    c3.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
-    c4.metric("PROFIT FACTOR",f"{stats['profit_factor']:.2f}")
-    c5.metric("MAX DRAWDOWN", f"{stats['max_drawdown_pct']:.1f}%")
+    # Combined P&L across all markets
+    try:
+        from execution.brokers.fno_paper_broker import FNOPaperBroker
+        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+        from execution.brokers.us_paper_broker import USPaperBroker
+        fno_s  = FNOPaperBroker().get_stats()
+        cry_s  = CryptoPaperBroker().get_stats()
+        us_s   = USPaperBroker().get_stats()
+        _pf_inr = _cfg("INR_PER_USD", 83.0)
+        fno_pnl = fno_s.get("total_pnl", 0)
+        cry_pnl_inr = cry_s.get("total_pnl_usdt", 0) * _pf_inr
+        us_pnl_inr  = us_s.get("total_pnl_usd", 0)  * _pf_inr
+        combined_pnl = pnl + fno_pnl + cry_pnl_inr + us_pnl_inr
+    except Exception:
+        fno_pnl = cry_pnl_inr = us_pnl_inr = combined_pnl = 0
+        fno_s = cry_s = us_s = {"open_positions": 0, "win_rate": 0}
+
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("NSE EQUITY",   f"Rs.{cash:,.0f}", delta=f"Rs.{pnl:+,.0f}")
+    c2.metric("F&O P&L",      f"Rs.{fno_pnl:+,.0f}")
+    c3.metric("CRYPTO P&L",   f"Rs.{cry_pnl_inr:+,.0f}")
+    c4.metric("US P&L",       f"Rs.{us_pnl_inr:+,.0f}")
+    c5.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
+    c6.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
 
     tab_eq, tab_pos = st.tabs(["EQUITY", "POSITIONS"])
 
@@ -1404,8 +1910,8 @@ elif page == "CONFIG":
             "Changes take effect immediately in the dashboard. "
             "Click RESTART SCHEDULER below to apply changes to the scheduler process.")
 
-    tab_api, tab_mode, tab_strat, tab_risk, tab_sched, tab_tools = st.tabs([
-        "API KEYS", "MODE", "STRATEGY", "RISK", "SCHEDULER", "TOOLS"
+    tab_api, tab_mode, tab_strat, tab_risk, tab_sched, tab_markets, tab_tools = st.tabs([
+        "API KEYS", "MODE", "STRATEGY", "RISK", "SCHEDULER", "MARKETS", "TOOLS"
     ])
 
     # ── API Keys ──────────────────────────────────────────────────────────────
@@ -1621,6 +2127,103 @@ elif page == "CONFIG":
         display = {k: v for k, v in S.all_settings().items()
                    if k not in ("TELEGRAM_BOT_TOKEN","KITE_API_KEY","KITE_API_SECRET")}
         st.json(display)
+
+    # ── Markets ───────────────────────────────────────────────────────────────
+    with tab_markets:
+        st.markdown('<div class="bb-header">F&O PAPER TRADING</div>', unsafe_allow_html=True)
+        m1, m2 = st.columns(2)
+        with m1:
+            new_fno_tp    = st.slider("TP MULTIPLIER (options buy)",  1.5, 5.0,
+                                       float(cfg.get("FNO_TP_MULT", 2.0)), 0.25,
+                                       help="Exit when premium reaches this × entry. Default 2x.")
+            new_fno_sl    = st.slider("SL MULTIPLIER (options buy)",  0.10, 0.90,
+                                       float(cfg.get("FNO_SL_MULT", 0.50)), 0.05,
+                                       help="Exit when premium falls to this × entry. Default 0.5.")
+            new_fno_max   = st.slider("MAX F&O POSITIONS",  1, 20,
+                                       int(cfg.get("FNO_MAX_POSITIONS", 6)), 1)
+        with m2:
+            new_hv_strad  = st.slider("HV% STRADDLE THRESHOLD",  10.0, 40.0,
+                                       float(cfg.get("FNO_HV_STRADDLE", 18.0)), 1.0,
+                                       help="Use straddle when HV > this %")
+            new_hv_stran  = st.slider("HV% STRANGLE THRESHOLD",   5.0, 30.0,
+                                       float(cfg.get("FNO_HV_STRANGLE", 12.0)), 1.0,
+                                       help="Use strangle when HV > this % (below straddle)")
+            new_cache_min = st.slider("OPTIONS CHAIN CACHE (min)", 1, 30,
+                                       int(cfg.get("FNO_CHAIN_CACHE_MIN", 5)), 1)
+
+        new_sell_days = st.text_input("SELLING DAYS (comma-sep)",
+                                       value=cfg.get("FNO_SELL_DAYS", "tue,wed,thu"),
+                                       help="Days to run options selling. e.g. tue,wed,thu")
+
+        if st.button("SAVE F&O SETTINGS", type="primary", use_container_width=True):
+            S.save({
+                "FNO_TP_MULT":         new_fno_tp,
+                "FNO_SL_MULT":         new_fno_sl,
+                "FNO_MAX_POSITIONS":   new_fno_max,
+                "FNO_HV_STRADDLE":     new_hv_strad,
+                "FNO_HV_STRANGLE":     new_hv_stran,
+                "FNO_CHAIN_CACHE_MIN": new_cache_min,
+                "FNO_SELL_DAYS":       new_sell_days,
+            })
+            st.success("F&O settings saved.")
+            st.rerun()
+
+        st.markdown('<div class="bb-header" style="margin-top:14px;">CRYPTO PAPER TRADING</div>',
+                    unsafe_allow_html=True)
+        cr1, cr2, cr3 = st.columns(3)
+        with cr1:
+            new_cr_amt = st.number_input("USDT PER TRADE",
+                                          value=float(cfg.get("CRYPTO_USDT_PER_TRADE", 100.0)),
+                                          min_value=10.0, step=10.0)
+        with cr2:
+            new_cr_tp  = st.slider("CRYPTO TP %",  1.0, 20.0,
+                                    float(cfg.get("CRYPTO_TP_PCT", 0.08)) * 100, 0.5,
+                                    format="%.1f%%")
+        with cr3:
+            new_cr_sl  = st.slider("CRYPTO SL %",  0.5, 10.0,
+                                    float(cfg.get("CRYPTO_SL_PCT", 0.04)) * 100, 0.5,
+                                    format="%.1f%%")
+
+        if st.button("SAVE CRYPTO SETTINGS", type="primary", use_container_width=True):
+            S.save({
+                "CRYPTO_USDT_PER_TRADE": new_cr_amt,
+                "CRYPTO_TP_PCT":         new_cr_tp / 100,
+                "CRYPTO_SL_PCT":         new_cr_sl / 100,
+            })
+            st.success("Crypto settings saved.")
+            st.rerun()
+
+        st.markdown('<div class="bb-header" style="margin-top:14px;">US STOCKS PAPER TRADING</div>',
+                    unsafe_allow_html=True)
+        us1, us2, us3 = st.columns(3)
+        with us1:
+            new_us_amt = st.number_input("USD PER TRADE",
+                                          value=float(cfg.get("US_USD_PER_TRADE", 500.0)),
+                                          min_value=50.0, step=50.0)
+        with us2:
+            new_us_tp  = st.slider("US STOCKS TP %",  1.0, 20.0,
+                                    float(cfg.get("US_TP_PCT", 0.06)) * 100, 0.5,
+                                    format="%.1f%%")
+        with us3:
+            new_us_sl  = st.slider("US STOCKS SL %",  0.5, 10.0,
+                                    float(cfg.get("US_SL_PCT", 0.03)) * 100, 0.5,
+                                    format="%.1f%%")
+
+        new_inr_rate = st.number_input("USD/USDT → INR RATE",
+                                        value=float(cfg.get("INR_PER_USD", 83.0)),
+                                        min_value=50.0, step=0.5,
+                                        help="Used for combined P&L display in INR")
+
+        if st.button("SAVE US SETTINGS", type="primary", use_container_width=True):
+            S.save({
+                "US_USD_PER_TRADE": new_us_amt,
+                "US_TP_PCT":        new_us_tp / 100,
+                "US_SL_PCT":        new_us_sl / 100,
+                "INR_PER_USD":      new_inr_rate,
+                "INR_PER_USDT":     new_inr_rate,
+            })
+            st.success("US stocks settings saved.")
+            st.rerun()
 
     # ── Tools ─────────────────────────────────────────────────────────────────
     with tab_tools:

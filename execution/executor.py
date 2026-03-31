@@ -8,7 +8,7 @@
 # Both modes use identical interfaces so switching is one config change.
 # =============================================================================
 
-import json, os, csv
+import json, os, csv, sqlite3
 from datetime import datetime
 from dataclasses import asdict
 import sys
@@ -146,6 +146,68 @@ class PaperExecutor:
 
     def _log_trade(self, signal: TradeSignal, result: dict):
         os.makedirs("logs", exist_ok=True)
+
+        # --- SQLite (primary — needed for stats, dashboard, history) ---
+        try:
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS trades (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol      TEXT NOT NULL,
+                        action      TEXT,
+                        entry_price REAL,
+                        exit_price  REAL,
+                        stop_loss   REAL,
+                        take_profit REAL,
+                        qty         INTEGER,
+                        pnl         REAL DEFAULT 0,
+                        pnl_pct     REAL DEFAULT 0,
+                        status      TEXT DEFAULT 'open',
+                        trade_type  TEXT DEFAULT 'swing',
+                        entry_time  TEXT,
+                        exit_time   TEXT,
+                        reasoning   TEXT
+                    )
+                """)
+                if signal.action == "BUY":
+                    conn.execute("""
+                        INSERT INTO trades
+                        (symbol, action, entry_price, stop_loss, take_profit,
+                         qty, status, trade_type, entry_time, reasoning)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (signal.symbol, "BUY", signal.entry_price,
+                          signal.stop_loss, signal.take_profit,
+                          result.get("qty", 0), "open", "swing",
+                          datetime.now().isoformat(), signal.reasoning))
+                elif signal.action == "SELL":
+                    pnl     = result.get("pnl", 0) or 0
+                    qty     = result.get("qty", 0)
+                    pnl_pct = round(pnl / (signal.entry_price * qty) * 100, 2) if qty else 0
+                    row = conn.execute(
+                        "SELECT id FROM trades WHERE symbol=? AND status='open' "
+                        "ORDER BY id DESC LIMIT 1", (signal.symbol,)
+                    ).fetchone()
+                    if row:
+                        conn.execute("""
+                            UPDATE trades SET exit_price=?, exit_time=?,
+                            pnl=?, pnl_pct=?, status='closed' WHERE id=?
+                        """, (signal.entry_price, datetime.now().isoformat(),
+                              round(pnl, 2), pnl_pct, row[0]))
+                    else:
+                        # No open BUY found — insert as standalone closed record
+                        conn.execute("""
+                            INSERT INTO trades
+                            (symbol, action, entry_price, exit_price, qty,
+                             pnl, pnl_pct, status, trade_type, exit_time, reasoning)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                        """, (signal.symbol, "SELL", signal.entry_price,
+                              signal.entry_price, qty,
+                              round(pnl, 2), pnl_pct, "closed", "swing",
+                              datetime.now().isoformat(), signal.reasoning))
+        except Exception as e:
+            logger.warning(f"SQLite trade log failed ({signal.symbol}): {e}")
+
+        # --- CSV (audit log) ---
         log_file = "logs/paper_trades.csv"
         fieldnames = [
             "timestamp","symbol","action","qty","price","confidence",

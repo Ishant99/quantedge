@@ -157,6 +157,48 @@ SCAN_TIME_1 = _S("SCAN_TIME_1", default="09:15")
 SCAN_TIME_2 = _S("SCAN_TIME_2", default="15:00")
 
 # -----------------------------------------------------------------------------
+# F&O LOT SIZES (NSE — updated Nov 2024)
+# -----------------------------------------------------------------------------
+NIFTY_LOT_SIZE     = 75
+BANKNIFTY_LOT_SIZE = 15
+FNO_LOT_SIZES      = {"NIFTY": NIFTY_LOT_SIZE, "BANKNIFTY": BANKNIFTY_LOT_SIZE}
+
+# F&O exit rules
+FNO_TP_MULT        = float(_S("FNO_TP_MULT", default=2.0))   # exit when premium 2x
+FNO_SL_MULT        = float(_S("FNO_SL_MULT", default=0.50))  # exit when premium -50%
+FNO_MAX_POSITIONS  = int(  _S("FNO_MAX_POSITIONS", default=6))  # max concurrent F&O positions
+
+# Options selling thresholds
+FNO_HV_STRADDLE    = float(_S("FNO_HV_STRADDLE", default=18.0))  # HV% above → straddle
+FNO_HV_STRANGLE    = float(_S("FNO_HV_STRANGLE", default=12.0))  # HV% above → strangle
+FNO_SELL_DAYS      = _S("FNO_SELL_DAYS", default="tue,wed,thu")   # days to sell options
+FNO_CHAIN_CACHE_MIN= int(  _S("FNO_CHAIN_CACHE_MIN", default=5))  # options chain cache TTL
+
+# Futures
+FUTURES_RISK_FREE_RATE = float(_S("FUTURES_RISK_FREE_RATE", default=0.065))  # 6.5%
+FUTURES_DEFAULT_DTE    = int(  _S("FUTURES_DEFAULT_DTE",    default=15))     # mid-month
+FUTURES_SL_PCT         = float(_S("FUTURES_SL_PCT",         default=0.02))   # 2% SL
+FUTURES_TP_PCT         = float(_S("FUTURES_TP_PCT",         default=0.03))   # 3% TP
+
+# INR conversion rate for combined P&L display
+INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))
+INR_PER_USDT = float(_S("INR_PER_USDT", default=83.0))
+
+# -----------------------------------------------------------------------------
+# CRYPTO PAPER TRADING
+# -----------------------------------------------------------------------------
+CRYPTO_USDT_PER_TRADE = float(_S("CRYPTO_USDT_PER_TRADE", default=100.0))  # USDT per position
+CRYPTO_TP_PCT         = float(_S("CRYPTO_TP_PCT",         default=0.08))   # 8% target
+CRYPTO_SL_PCT         = float(_S("CRYPTO_SL_PCT",         default=0.04))   # 4% stop loss
+
+# -----------------------------------------------------------------------------
+# US STOCKS PAPER TRADING
+# -----------------------------------------------------------------------------
+US_USD_PER_TRADE      = float(_S("US_USD_PER_TRADE",      default=500.0))  # USD per position
+US_TP_PCT             = float(_S("US_TP_PCT",             default=0.06))   # 6% target
+US_SL_PCT             = float(_S("US_SL_PCT",             default=0.03))   # 3% stop loss
+
+# -----------------------------------------------------------------------------
 # ALERTS — Telegram (M9)
 # -----------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN  = _S("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "")

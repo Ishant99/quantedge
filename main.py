@@ -181,9 +181,13 @@ def run_agent(dry_run: bool = False) -> list:
     )
 
     if bear_mode:
-        # Block new BUYs — close open positions + generate SHORT watchlist
+        # Block new BUYs — close OPEN positions + generate SHORT watchlist
         from analysis.short_signals import ShortSignalGenerator
-        sell_signals  = [s for s in signals if s.action == "SELL"]
+        # Only close positions we actually hold — not every bearish stock in the scan
+        _open_syms   = set(executor.portfolio.get("positions", {}).keys()) \
+                       if hasattr(executor, "portfolio") else set()
+        sell_signals = [s for s in signals
+                        if s.action == "SELL" and s.symbol in _open_syms]
         short_signals = ShortSignalGenerator().generate_all(
             ta_results      = ta_results,
             sent_results    = sent_results,

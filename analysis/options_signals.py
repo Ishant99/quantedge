@@ -33,8 +33,11 @@ IST = pytz.timezone("Asia/Kolkata")
 
 NIFTY_TICKER     = "^NSEI"
 BANKNIFTY_TICKER = "^NSEBANK"
-NIFTY_LOT        = 25       # Nifty lot size
-BANKNIFTY_LOT    = 15       # BankNifty lot size
+from config import FNO_LOT_SIZES as _LOTS
+from data.nse_options_chain import NSEOptionsChain as _Chain
+_chain = _Chain()    # shared instance with 5-min cache
+NIFTY_LOT        = _LOTS["NIFTY"]
+BANKNIFTY_LOT    = _LOTS["BANKNIFTY"]
 NIFTY_STEP       = 50       # Strike interval
 BANKNIFTY_STEP   = 100
 
@@ -46,7 +49,8 @@ class OptionsSignal:
     strike:       int          # Suggested ATM/OTM strike
     expiry:       str          # "DD-MMM-YYYY" nearest weekly/monthly
     index_spot:   float
-    entry_zone:   str          # e.g. "Rs.180–200"
+    entry_zone:   str          # e.g. "Rs.180" or "Rs.180–200 (approx)"
+    entry_premium:float        # Live or estimated premium (Rs.) — 0 if unknown
     stop_loss_idx:float        # Index level — exit if index crosses this
     target_idx:   float        # Index level — target
     confidence:   float
@@ -173,13 +177,18 @@ class OptionsSignalGenerator:
             else:
                 iv_note = f"HV {hv_20:.0f}% — normal vol environment"
 
-            # Approx entry zone (20–30 delta option premium estimate)
-            pct_otm = abs(strike - spot) / spot
-            approx_prem_lo = round(spot * 0.005 * (1 - pct_otm * 5), 0)
-            approx_prem_hi = round(spot * 0.010 * (1 - pct_otm * 5), 0)
-            approx_prem_lo = max(50, approx_prem_lo)
-            approx_prem_hi = max(100, approx_prem_hi)
-            entry_zone = f"Rs.{approx_prem_lo:.0f}–{approx_prem_hi:.0f} (approx)"
+            # Live option premium from NSE chain (with Black-Scholes fallback)
+            opt_type   = "CE" if direction == "CALL" else "PE"
+            live_prem  = _chain.get_premium(name, strike, opt_type)
+            if live_prem:
+                entry_zone = f"Rs.{live_prem:.0f} (live)"
+            else:
+                # Rough estimate as last resort
+                pct_otm = abs(strike - spot) / spot
+                lo = max(50,  round(spot * 0.005 * max(0.1, 1 - pct_otm * 5), 0))
+                hi = max(100, round(spot * 0.010 * max(0.1, 1 - pct_otm * 5), 0))
+                live_prem = (lo + hi) / 2
+                entry_zone = f"Rs.{lo:.0f}–{hi:.0f} (approx)"
 
             reasoning = (
                 f"{name} {direction} {strike} | Expiry {expiry_date} | "
@@ -190,18 +199,19 @@ class OptionsSignalGenerator:
                         f"conf={confidence:.0%} expiry={expiry_date}")
 
             return OptionsSignal(
-                index        = name,
-                direction    = direction,
-                strike       = strike,
-                expiry       = expiry_date,
-                index_spot   = round(spot, 2),
-                entry_zone   = entry_zone,
-                stop_loss_idx= sl_idx,
-                target_idx   = tgt_idx,
-                confidence   = round(min(confidence, 0.85), 3),
-                reasoning    = reasoning,
-                iv_note      = iv_note,
-                lot_size     = lot,
+                index         = name,
+                direction     = direction,
+                strike        = strike,
+                expiry        = expiry_date,
+                index_spot    = round(spot, 2),
+                entry_zone    = entry_zone,
+                entry_premium = round(live_prem or 0, 1),
+                stop_loss_idx = sl_idx,
+                target_idx    = tgt_idx,
+                confidence    = round(min(confidence, 0.85), 3),
+                reasoning     = reasoning,
+                iv_note       = iv_note,
+                lot_size      = lot,
             )
 
         except Exception as e:

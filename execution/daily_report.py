@@ -1,18 +1,19 @@
 # =============================================================================
-# execution/daily_report.py — End of Day P&L Report
+# execution/daily_report.py — End of Day P&L Report (all markets)
 #
 # Sent to Telegram at 3:30 PM every market day.
-# Includes: trades taken today, P&L, portfolio value, win rate update.
+# Covers NSE equity + F&O + Crypto + US stocks.
 # =============================================================================
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import sqlite3
 import csv
 from datetime import datetime, date
 import pytz
-from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE
+from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE, SQLITE_DB_FILE, INR_PER_USD, INR_PER_USDT
 from memory.portfolio_memory import PortfolioMemory
 from utils import get_logger
 from utils.telegram import send
@@ -22,92 +23,146 @@ IST = pytz.timezone("Asia/Kolkata")
 
 
 class DailyReporter:
-    """Generates and sends end-of-day performance report."""
+    """Generates and sends end-of-day performance report for all markets."""
 
     def send_report(self):
-        """Build and send the daily report to Telegram."""
         today_str = date.today().strftime("%d %b %Y")
         now_str   = datetime.now(IST).strftime("%I:%M %p IST")
+        today_db  = date.today().strftime("%Y-%m-%d")
 
-        # Load portfolio
+        # ── NSE equity ──────────────────────────────────────────────────
         pf         = self._load_portfolio()
         cash       = pf.get("cash", VIRTUAL_CAPITAL)
         positions  = pf.get("positions", {})
-        total_val  = cash   # simplified: use cash (positions marked at entry)
+        total_val  = cash
         pnl_total  = total_val - VIRTUAL_CAPITAL
         pnl_pct    = pnl_total / VIRTUAL_CAPITAL * 100
 
-        # Today's trades from CSV
-        today_trades = self._get_today_trades()
+        today_trades = self._get_today_trades_csv()
         today_pnl    = sum(t.get("pnl", 0) for t in today_trades if t.get("pnl"))
 
-        # Stats from memory
         memory = PortfolioMemory()
         stats  = memory.get_stats()
 
-        # Readiness
+        # ── F&O ─────────────────────────────────────────────────────────
+        fno_today_count = fno_today_pnl = 0
+        fno_open = 0
+        if os.path.exists(SQLITE_DB_FILE):
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                try:
+                    row = conn.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM fno_trades "
+                        "WHERE status='closed' AND exit_time LIKE ?", (f"{today_db}%",)
+                    ).fetchone()
+                    fno_today_count, fno_today_pnl = row[0], row[1]
+                    fno_open = conn.execute(
+                        "SELECT COUNT(*) FROM fno_trades WHERE status='open'"
+                    ).fetchone()[0]
+                except Exception:
+                    pass
+
+        # ── Crypto ──────────────────────────────────────────────────────
+        cr_today_count = cr_today_pnl = 0
+        cr_open = 0
+        if os.path.exists(SQLITE_DB_FILE):
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                try:
+                    row = conn.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(pnl_usdt),0) FROM crypto_trades "
+                        "WHERE status='closed' AND exit_time LIKE ?", (f"{today_db}%",)
+                    ).fetchone()
+                    cr_today_count, cr_today_pnl = row[0], row[1]
+                    cr_open = conn.execute(
+                        "SELECT COUNT(*) FROM crypto_trades WHERE status='open'"
+                    ).fetchone()[0]
+                except Exception:
+                    pass
+
+        # ── US Stocks ───────────────────────────────────────────────────
+        us_today_count = us_today_pnl = 0
+        us_open = 0
+        if os.path.exists(SQLITE_DB_FILE):
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                try:
+                    row = conn.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(pnl_usd),0) FROM us_trades "
+                        "WHERE status='closed' AND exit_time LIKE ?", (f"{today_db}%",)
+                    ).fetchone()
+                    us_today_count, us_today_pnl = row[0], row[1]
+                    us_open = conn.execute(
+                        "SELECT COUNT(*) FROM us_trades WHERE status='open'"
+                    ).fetchone()[0]
+                except Exception:
+                    pass
+
+        combined_pnl = (today_pnl + fno_today_pnl +
+                        cr_today_pnl * INR_PER_USDT + us_today_pnl * INR_PER_USD)
+
+        # ── Readiness ───────────────────────────────────────────────────
         r = self._load_json("logs/readiness_report.json")
         gates_str = f"{r.get('passed',0)}/{r.get('total',8)}" if r else "N/A"
 
-        # Build message
+        # ── Build message ───────────────────────────────────────────────
         lines = [
             f"*Daily Report — {today_str}*",
             f"_{now_str}_",
             "",
-            "*Portfolio*",
-            f"Value: `Rs.{total_val:,.0f}`",
-            f"Total P&L: `Rs.{pnl_total:+,.0f}` ({pnl_pct:+.2f}%)",
-            f"Open Positions: `{len(positions)}`",
-            "",
-            f"*Today's Activity*",
-            f"Trades: `{len(today_trades)}`",
+            "*NSE Equity*",
+            f"Portfolio: `Rs.{total_val:,.0f}` ({pnl_pct:+.2f}%)",
+            f"Open: `{len(positions)}` | Today trades: `{len(today_trades)}`",
             f"Today P&L: `Rs.{today_pnl:+,.0f}`",
         ]
 
-        # List today's trades
         if today_trades:
-            lines.append("")
-            for t in today_trades[:5]:
-                icon = "✅" if float(t.get("pnl",0)) > 0 else "🔴"
-                lines.append(
-                    f"{icon} {t.get('symbol','')} `{t.get('action','')}` "
-                    f"→ Rs.{float(t.get('pnl',0)):+,.0f}"
-                )
+            for t in today_trades[:3]:
+                icon = "✅" if float(t.get("pnl", 0)) > 0 else "🔴"
+                lines.append(f"  {icon} {t.get('symbol','')} → Rs.{float(t.get('pnl',0)):+,.0f}")
 
         lines += [
             "",
-            "*Performance Stats*",
-            f"Total Trades: `{stats['total_trades']}`",
-            f"Win Rate: `{stats['win_rate_pct']:.1f}%`",
-            f"Profit Factor: `{stats['profit_factor']:.2f}`",
-            f"Max Drawdown: `{stats['max_drawdown_pct']:.1f}%`",
+            "*F&O Paper*",
+            f"Open: `{fno_open}` | Today closed: `{fno_today_count}`",
+            f"Today P&L: `Rs.{fno_today_pnl:+,.0f}`",
             "",
-            f"*Phase 2 Readiness: `{gates_str}` gates*",
+            "*Crypto*",
+            f"Open: `{cr_open}` | Today closed: `{cr_today_count}`",
+            f"Today P&L: `{cr_today_pnl:+.2f} USDT` (Rs.{cr_today_pnl*INR_PER_USDT:+,.0f})",
+            "",
+            "*US Stocks*",
+            f"Open: `{us_open}` | Today closed: `{us_today_count}`",
+            f"Today P&L: `${us_today_pnl:+.2f}` (Rs.{us_today_pnl*INR_PER_USD:+,.0f})",
+            "",
+            f"*Combined Today P&L: `Rs.{combined_pnl:+,.0f}`*",
+            "",
+            "*All-Time Stats*",
+            f"Trades: `{stats.get('total_trades',0)}` | "
+            f"Win Rate: `{stats.get('win_rate_pct',0):.1f}%` | "
+            f"P-Factor: `{stats.get('profit_factor',0):.2f}`",
+            f"Max Drawdown: `{stats.get('max_drawdown_pct',0):.1f}%`",
+            "",
+            f"*Live Readiness: `{gates_str}` gates*",
         ]
 
-        # Market tomorrow
-        tomorrow = datetime.now(IST).weekday()
-        if tomorrow == 4:   # Friday
-            lines.append("\n_Next trading day: Monday_")
-        elif tomorrow == 5: # Saturday
+        # Next trading day note
+        weekday = datetime.now(IST).weekday()
+        if weekday >= 4:  # Friday or weekend
             lines.append("\n_Next trading day: Monday_")
 
-        msg = "\n".join(lines)
-        send(msg)
-        logger.info(f"Daily report sent — trades: {len(today_trades)}, P&L: Rs.{today_pnl:+,.0f}")
+        send("\n".join(lines))
+        logger.info(f"Daily report sent — NSE: {len(today_trades)} trades Rs.{today_pnl:+,.0f} | "
+                    f"F&O: {fno_today_count} Rs.{fno_today_pnl:+,.0f} | "
+                    f"Combined: Rs.{combined_pnl:+,.0f}")
 
-    def _get_today_trades(self) -> list[dict]:
+    def _get_today_trades_csv(self) -> list[dict]:
         """Read today's trades from paper_trades.csv."""
         log_file = "logs/paper_trades.csv"
         if not os.path.exists(log_file):
             return []
-
         today = date.today().strftime("%Y-%m-%d")
         trades = []
         try:
             with open(log_file, "r") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
+                for row in csv.DictReader(f):
                     if row.get("timestamp", "").startswith(today):
                         try:
                             row["pnl"] = float(row.get("pnl", 0) or 0)

@@ -60,6 +60,31 @@ DEFAULTS: dict = {
     "SCAN_TIME_1": "09:15",    # first daily scan (IST)
     "SCAN_TIME_2": "15:00",    # second daily scan (IST)
 
+    # ---- F&O settings ----
+    "FNO_TP_MULT":           2.0,
+    "FNO_SL_MULT":           0.50,
+    "FNO_MAX_POSITIONS":     6,
+    "FNO_HV_STRADDLE":       18.0,
+    "FNO_HV_STRANGLE":       12.0,
+    "FNO_SELL_DAYS":         "tue,wed,thu",
+    "FNO_CHAIN_CACHE_MIN":   5,
+    "FUTURES_RISK_FREE_RATE":0.065,
+    "FUTURES_DEFAULT_DTE":   15,
+    "FUTURES_SL_PCT":        0.02,
+    "FUTURES_TP_PCT":        0.03,
+    "INR_PER_USD":           83.0,
+    "INR_PER_USDT":          83.0,
+
+    # ---- Crypto paper trading ----
+    "CRYPTO_USDT_PER_TRADE": 100.0,
+    "CRYPTO_TP_PCT":         0.08,
+    "CRYPTO_SL_PCT":         0.04,
+
+    # ---- US stocks paper trading ----
+    "US_USD_PER_TRADE":      500.0,
+    "US_TP_PCT":             0.06,
+    "US_SL_PCT":             0.03,
+
     # ---- Dashboard ----
     "DASHBOARD_REFRESH_SEC": 30,
 }

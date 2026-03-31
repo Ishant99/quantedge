@@ -22,7 +22,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from config import (
     ATR_SL_MULTIPLIER, REWARD_RISK_RATIO,
-    RISK_PER_TRADE_PCT, TA_SIGNAL_BEARISH,
+    RISK_PER_TRADE_PCT, TA_SIGNAL_BEARISH, MIN_CONFIDENCE,
 )
 from utils import get_logger
 
@@ -149,7 +149,7 @@ class ShortSignalGenerator:
                 score += 0.05
                 reasons.append(f"RSI {rsi:.0f} (bounce into resistance)")
 
-            if score < 0.45:   # minimum confidence for a short signal
+            if score < MIN_CONFIDENCE:   # respect global MIN_CONFIDENCE setting
                 return None
 
             # ----------------------------------------------------------

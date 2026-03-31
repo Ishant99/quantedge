@@ -226,8 +226,46 @@ class IntradayAgent:
             "timestamp":  datetime.now().isoformat(),
         }
         self._save_portfolio()
+        self._record_open_trade(sig)
         logger.info(f"INTRADAY BUY {sig.symbol} x{sig.position_size} "
                     f"@ Rs.{sig.entry_price:,.0f} SL={sig.stop_loss:,.0f} TP={sig.take_profit:,.0f}")
+
+    def _record_open_trade(self, sig: IntradaySignal):
+        """Insert an open trade record into SQLite so PriceMonitor can close it."""
+        import sqlite3
+        from config import SQLITE_DB_FILE
+        try:
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS trades (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol      TEXT NOT NULL,
+                        action      TEXT,
+                        entry_price REAL,
+                        exit_price  REAL,
+                        stop_loss   REAL,
+                        take_profit REAL,
+                        qty         INTEGER,
+                        pnl         REAL DEFAULT 0,
+                        pnl_pct     REAL DEFAULT 0,
+                        status      TEXT DEFAULT 'open',
+                        trade_type  TEXT DEFAULT 'intraday',
+                        entry_time  TEXT,
+                        exit_time   TEXT,
+                        reasoning   TEXT
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO trades
+                    (symbol, action, entry_price, stop_loss, take_profit,
+                     qty, status, trade_type, entry_time, reasoning)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (sig.symbol, "BUY", sig.entry_price, sig.stop_loss,
+                      sig.take_profit, sig.position_size, "open", "intraday",
+                      datetime.now().isoformat(), sig.reasoning))
+            logger.debug(f"SQLite: open trade recorded for {sig.symbol}")
+        except Exception as e:
+            logger.warning(f"SQLite open trade record failed ({sig.symbol}): {e}")
 
     def _count_intraday_positions(self) -> int:
         return sum(

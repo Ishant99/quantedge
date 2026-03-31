@@ -73,7 +73,43 @@ class OutcomeTracker:
         if resolved_today:
             self._send_telegram(resolved_today)
 
+        # Also update F&O, Crypto, US paper positions that have hit TP/SL
+        self._check_fno_positions()
+        self._check_crypto_positions()
+        self._check_us_positions()
+
         return counts
+
+    def _check_fno_positions(self):
+        """Trigger F&O monitor to close any expired/TP/SL positions."""
+        try:
+            from execution.brokers.fno_paper_broker import FNOPaperBroker
+            broker = FNOPaperBroker()
+            closed = broker.monitor_and_exit() + broker.monitor_futures() + broker.monitor_selling()
+            if closed:
+                logger.info(f"OutcomeTracker: closed {len(closed)} F&O positions via expiry/TP/SL")
+        except Exception as e:
+            logger.debug(f"F&O check skipped: {e}")
+
+    def _check_crypto_positions(self):
+        """Trigger crypto monitor."""
+        try:
+            from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+            closed = CryptoPaperBroker().monitor_and_exit()
+            if closed:
+                logger.info(f"OutcomeTracker: closed {len(closed)} crypto positions")
+        except Exception as e:
+            logger.debug(f"Crypto check skipped: {e}")
+
+    def _check_us_positions(self):
+        """Trigger US stocks monitor."""
+        try:
+            from execution.brokers.us_paper_broker import USPaperBroker
+            closed = USPaperBroker().monitor_and_exit()
+            if closed:
+                logger.info(f"OutcomeTracker: closed {len(closed)} US positions")
+        except Exception as e:
+            logger.debug(f"US check skipped: {e}")
 
     # ------------------------------------------------------------------
     # Core evaluation
