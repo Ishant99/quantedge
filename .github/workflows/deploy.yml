@@ -23,12 +23,9 @@ name: Deploy to Oracle VM
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:       # allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Job 1: Lint (fast sanity check before deploying)
-  # ---------------------------------------------------------------------------
   lint:
     name: Lint & Syntax Check
     runs-on: ubuntu-latest
@@ -41,7 +38,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check Python syntax (all .py files)
+      - name: Check Python syntax
         run: |
           find . -name "*.py" -not -path "./.venv/*" | while read f; do
             python -m py_compile "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
@@ -49,22 +46,16 @@ jobs:
 
       - name: Verify critical files exist
         run: |
-          for f in main.py config.py requirements.txt Dockerfile docker-compose.yml; do
+          for f in requirements.txt Dockerfile docker-compose.yml; do
             [ -f "$f" ] && echo "OK: $f" || { echo "MISSING: $f"; exit 1; }
           done
 
-  # ---------------------------------------------------------------------------
-  # Job 2: Deploy to Oracle Free Tier VM
-  # ---------------------------------------------------------------------------
   deploy:
     name: Deploy to Oracle VM
     runs-on: ubuntu-latest
-    needs: lint          # only deploy if lint passes
+    needs: lint
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
@@ -76,86 +67,59 @@ jobs:
         env:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           GH_PAT: ${{ secrets.GH_PAT }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           ssh -i ~/.ssh/oracle_key \
               -o StrictHostKeyChecking=no \
               -o ConnectTimeout=30 \
               ubuntu@$ORACLE_HOST << 'ENDSSH'
-
           set -e
-          echo "========================================"
-          echo "  QuantEdge Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "========================================"
 
-          # --- Directory setup ---
           DEPLOY_DIR="/home/ubuntu/quantedge"
           mkdir -p "$DEPLOY_DIR"
           cd "$DEPLOY_DIR"
 
-          # --- Pull latest code ---
           if [ -d ".git" ]; then
             echo "[GIT] Pulling latest..."
             git fetch origin main
             git reset --hard origin/main
           else
             echo "[GIT] Fresh clone..."
-            git clone https://x-access-token:$GH_PAT@github.com/Ishant99/quantedge.git .
+            git clone https://x-access-token:${GH_PAT}@github.com/Ishant99/quantedge.git .
           fi
 
-          # --- Write .env from GitHub Secrets (injected via SSH env) ---
-          cat > .env << 'EOF'
-          TRADING_MODE=paper
-          KITE_API_KEY=
-          KITE_API_SECRET=
-          TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
-          TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
-          EOF
+          if [ ! -f .env ]; then
+            echo "[ENV] Creating empty .env (first deploy only)"
+            touch .env
+          else
+            echo "[ENV] Preserving existing .env"
+          fi
 
-          # --- Enable swap if not already set (helps on 1GB RAM) ---
           if ! swapon --show | grep -q "/swapfile"; then
             echo "[SWAP] Setting up 1GB swapfile..."
             sudo fallocate -l 1G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
             sudo chmod 600 /swapfile
             sudo mkswap /swapfile
             sudo swapon /swapfile
-            echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab > /dev/null
-            echo "[SWAP] Done — $(free -h | grep Swap)"
-          else
-            echo "[SWAP] Already active — $(free -h | grep Swap)"
+            grep -q "^/swapfile " /etc/fstab || echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab > /dev/null
           fi
 
-          # --- Build Docker image ---
-          echo "[DOCKER] Building image..."
-          docker compose build --no-cache
-
-          # --- Zero-downtime restart ---
           echo "[DOCKER] Restarting containers..."
-          docker compose up -d --remove-orphans
+          docker compose down
+          docker compose up -d --build --remove-orphans
 
-          # --- Cleanup old images to save disk space ---
+          echo "[DOCKER] Cleaning old images..."
           docker image prune -f
 
-          # --- Verify containers are running ---
           sleep 10
-          echo "[STATUS] Container status:"
           docker compose ps
-
-          echo "========================================"
-          echo "  Deploy complete!"
-          echo "========================================"
-
           ENDSSH
 
-      - name: Smoke test — dashboard health
+      - name: Smoke test dashboard health
         run: |
-          echo "Waiting 20s for Streamlit to start..."
-          sleep 20
+          sleep 15
           curl --fail --silent --max-time 15 \
             "http://${{ secrets.ORACLE_HOST }}:8501/_stcore/health" \
-            && echo "Dashboard is healthy" \
-            || echo "Warning: health check did not respond (Streamlit may still be starting)"
+            && echo "Dashboard is healthy"
 
       - name: Notify Telegram on success
         if: success()
