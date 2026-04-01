@@ -37,14 +37,13 @@ IST = pytz.timezone("Asia/Kolkata")
 # =============================================================================
 
 def _preflight_check() -> bool:
-    """Quick connectivity + config check before running any job. Returns True if OK."""
+    """Quick connectivity check — fetch 1 day of Nifty data via yfinance."""
     try:
-        import requests as _req
-        r = _req.get("https://finance.yahoo.com", timeout=6)
-        if r.status_code >= 400:
-            logger.warning(f"Pre-flight: Yahoo Finance returned {r.status_code}")
-            return False
-        return True
+        import yfinance as _yf
+        df = _yf.Ticker("^NSEI").history(period="1d", interval="1d")
+        if df.empty:
+            logger.warning("Pre-flight: Nifty data returned empty — market may be closed")
+        return True   # non-empty OR empty both mean network is reachable
     except Exception as e:
         logger.warning(f"Pre-flight check failed: {e}")
         return False
@@ -289,16 +288,16 @@ def run_eod_digest():
         today = datetime.now(IST).strftime("%Y-%m-%d")
         date_label = datetime.now(IST).strftime("%d %b %Y")
 
-        nse_pnl = fno_pnl = crypto_pnl = us_pnl = 0
-        nse_count = fno_count = crypto_count = us_count = 0
+        counts = {"nse": 0, "fno": 0, "crypto": 0, "us": 0}
+        pnls   = {"nse": 0.0, "fno": 0.0, "crypto": 0.0, "us": 0.0}
 
         if os.path.exists(SQLITE_DB_FILE):
             with sqlite3.connect(SQLITE_DB_FILE) as conn:
-                for table, pnl_col, count_var, pnl_var in [
-                    ("trades",       "pnl",      "nse_count",    "nse_pnl"),
-                    ("fno_trades",   "pnl",      "fno_count",    "fno_pnl"),
-                    ("crypto_trades","pnl_usdt", "crypto_count", "crypto_pnl"),
-                    ("us_trades",    "pnl_usd",  "us_count",     "us_pnl"),
+                for key, table, pnl_col in [
+                    ("nse",    "trades",        "pnl"),
+                    ("fno",    "fno_trades",    "pnl"),
+                    ("crypto", "crypto_trades", "pnl_usdt"),
+                    ("us",     "us_trades",     "pnl_usd"),
                 ]:
                     try:
                         row = conn.execute(
@@ -306,9 +305,14 @@ def run_eod_digest():
                             f"FROM {table} WHERE status='closed' AND exit_time LIKE ?",
                             (f"{today}%",)
                         ).fetchone()
-                        locals()[count_var], locals()[pnl_var] = row[0], row[1]
+                        counts[key], pnls[key] = row[0], row[1]
                     except Exception:
                         pass
+
+        nse_count,    nse_pnl    = counts["nse"],    pnls["nse"]
+        fno_count,    fno_pnl    = counts["fno"],    pnls["fno"]
+        crypto_count, crypto_pnl = counts["crypto"], pnls["crypto"]
+        us_count,     us_pnl     = counts["us"],     pnls["us"]
 
         combined = (nse_pnl + fno_pnl +
                     crypto_pnl * INR_PER_USDT + us_pnl * INR_PER_USD)
