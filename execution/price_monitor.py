@@ -176,8 +176,8 @@ class PriceMonitor:
                 symbol=symbol, action="SL_HIT",
                 current_price=curr, entry_price=entry,
                 old_sl=sl, new_sl=sl,
-                pnl=round((sl - entry) * qty, 2),
-                pnl_pct=round((sl - entry)/entry*100, 2),
+                pnl=round((curr - entry) * qty, 2),
+                pnl_pct=round((curr - entry)/entry*100, 2),
                 qty=qty, trade_type=ttype
             )
 
@@ -188,8 +188,8 @@ class PriceMonitor:
                 symbol=symbol, action="TP_HIT",
                 current_price=curr, entry_price=entry,
                 old_sl=sl, new_sl=sl,
-                pnl=round((tp - entry) * qty, 2),
-                pnl_pct=round((tp - entry)/entry*100, 2),
+                pnl=round((curr - entry) * qty, 2),
+                pnl_pct=round((curr - entry)/entry*100, 2),
                 qty=qty, trade_type=ttype
             )
 

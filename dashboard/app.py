@@ -2176,21 +2176,23 @@ elif page == "CONFIG":
 
         if st.button("RESTART SCHEDULER", use_container_width=True):
             try:
-                import subprocess, sys, signal as _signal
+                import subprocess, sys
 
-                # Kill any existing scheduler process
+                pid_file = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "logs", "scheduler.pid"
+                )
                 killed = 0
                 try:
-                    result = subprocess.run(
-                        ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
-                        capture_output=True, text=True
-                    )
-                    for line in result.stdout.splitlines():
-                        if "scheduler" in line.lower():
-                            pid = int(line.split(",")[1].strip('"'))
-                            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                                           capture_output=True)
-                            killed += 1
+                    if os.path.exists(pid_file):
+                        with open(pid_file) as f:
+                            old_pid = int(f.read().strip())
+                        result = subprocess.run(
+                            ["taskkill", "/PID", str(old_pid), "/F"],
+                            capture_output=True, text=True
+                        )
+                        if result.returncode == 0:
+                            killed = 1
                 except Exception:
                     pass
 

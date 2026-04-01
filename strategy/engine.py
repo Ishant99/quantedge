@@ -144,8 +144,8 @@ class StrategyEngine:
         position_size_multiplier: float = 1.0,
     ) -> list[TradeSignal]:
         """
-        Generate signals for all stocks. Returns top-N BUY signals sorted
-        by confidence, then all SELL signals, then HOLDs.
+        Generate signals for all stocks. Returns BUY signals sorted by
+        confidence, then all SELL signals, then HOLDs.
         """
         signals = []
         for sym, ta in ta_results.items():
@@ -164,10 +164,10 @@ class StrategyEngine:
                            key=lambda x: x.confidence, reverse=True)
         hold_sigs = [s for s in signals if s.action == "HOLD"]
 
-        top = buy_sigs[:TOP_N_SIGNALS] + sell_sigs + hold_sigs
+        top = buy_sigs + sell_sigs + hold_sigs
         logger.info(
             f"Strategy output: {len(buy_sigs)} BUY, {len(sell_sigs)} SELL, "
-            f"{len(hold_sigs)} HOLD — showing top {TOP_N_SIGNALS}"
+            f"{len(hold_sigs)} HOLD"
         )
         return top
 

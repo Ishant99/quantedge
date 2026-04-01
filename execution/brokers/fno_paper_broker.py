@@ -22,6 +22,16 @@ LOT_SIZES = FNO_LOT_SIZES
 
 class FNOPaperBroker:
 
+    def _is_expired(self, expiry: str, today: datetime | None = None) -> bool:
+        """Robust expiry comparison for values like 03-Apr-2026."""
+        try:
+            expiry_dt = datetime.strptime(expiry, "%d-%b-%Y").date()
+            today_dt = (today or datetime.now()).date()
+            return expiry_dt <= today_dt
+        except Exception:
+            logger.warning(f"Could not parse expiry '{expiry}'")
+            return False
+
     def __init__(self):
         self.db  = SQLITE_DB_FILE
         self.chain = NSEOptionsChain()
@@ -121,8 +131,6 @@ class FNOPaperBroker:
         """Check all BUY options positions for TP/SL/expiry. Returns list of closed trades."""
         open_pos = self.get_open_positions()
         closed   = []
-        today    = datetime.now().strftime("%d-%b-%Y")
-
         for pos in open_pos:
             opt_type = pos["option_type"]
             # SELL and FUT positions are handled by their own monitors
@@ -152,7 +160,7 @@ class FNOPaperBroker:
                 reason = "TP_HIT"
             elif current <= entry_prem * SL_MULT:
                 reason = "SL_HIT"
-            elif expiry <= today:
+            elif self._is_expired(expiry):
                 reason = "EXPIRY"
 
             if reason:
@@ -274,7 +282,6 @@ class FNOPaperBroker:
                 WHERE status='open' AND option_type LIKE 'SELL-%'
             """).fetchall()
 
-        today = datetime.now().strftime("%d-%b-%Y")
         for row in rows:
             trade_id, index, opt_type, strike, expiry, lot_size, lots, qty, entry_prem = row
             # Get option type from SELL-CE-STRADDLE format
@@ -296,7 +303,7 @@ class FNOPaperBroker:
                 reason = "SL_HIT"     # premium doubled — buy back, take loss
             elif curr <= entry_prem * 0.20:
                 reason = "TP_HIT"     # 80% premium decay — buy back, take profit
-            elif expiry <= today:
+            elif self._is_expired(expiry):
                 reason = "EXPIRY"
 
             if reason:
@@ -354,7 +361,6 @@ class FNOPaperBroker:
                 WHERE status='open' AND option_type LIKE 'FUT-%'
             """).fetchall()
 
-        today = datetime.now().strftime("%d-%b-%Y")
         for row in rows:
             trade_id, index, opt_type, entry_price, qty, expiry = row
             direction = opt_type.replace("FUT-", "")
@@ -382,7 +388,7 @@ class FNOPaperBroker:
                 reason = "SL_HIT"     # 2% adverse move
             elif chg_pct >= 3.0:
                 reason = "TP_HIT"     # 3% favourable
-            elif expiry <= today:
+            elif self._is_expired(expiry):
                 reason = "EXPIRY"
 
             if reason:

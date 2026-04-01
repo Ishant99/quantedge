@@ -291,7 +291,7 @@ class IntradayAgent:
                 f"_{s.reasoning}_",
                 "",
             ]
-        lines.append("_All positions closed at 15:15 IST_")
+        lines.append("_All positions closed at 15:25 IST_")
         send("\n".join(lines))
 
     # ------------------------------------------------------------------

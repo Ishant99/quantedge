@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import pandas as pd
 
-from config import TRADING_MODE, TOP_N_SIGNALS, VIRTUAL_CAPITAL
+from config import TRADING_MODE, TOP_N_SIGNALS, VIRTUAL_CAPITAL, MAX_OPEN_POSITIONS
 from data.market_scanner import MarketScanner
 from analysis.technical_agent import TechnicalAgent
 from analysis.sentiment_agent import SentimentAgent
@@ -216,10 +216,12 @@ def run_agent(dry_run: bool = False) -> list:
 
         memory = PortfolioMemory()
         for sig in sell_signals:
-            memory.save_signal(sig)
+            signal_id = memory.save_signal(sig)
             if not dry_run:
                 result = executor.execute(sig)
                 logger.info(f"  SELL {sig.symbol}: {result.get('status','unknown')}")
+                if result.get("status") == "filled" and signal_id:
+                    memory.mark_signal_executed(signal_id)
 
         _run_trailing_stop()
         summary = executor.get_portfolio_summary()
@@ -299,24 +301,37 @@ def run_agent(dry_run: bool = False) -> list:
     buy_signals = sorted(buy_signals, key=lambda x: x.confidence, reverse=True)
     logger.info(f"Final: {len(buy_signals)} BUY signals after all 13 filters")
 
-    _print_signals(buy_signals[:TOP_N_SIGNALS], regime)
+    remaining_slots = max(0, MAX_OPEN_POSITIONS - open_positions)
+    actionable_limit = min(TOP_N_SIGNALS, remaining_slots)
+    actionable_signals = buy_signals[:actionable_limit]
+    if remaining_slots <= 0:
+        logger.info(f"[M7] Max open positions reached ({MAX_OPEN_POSITIONS}) -- skipping new BUY executions")
+    elif actionable_limit < min(TOP_N_SIGNALS, len(buy_signals)):
+        logger.info(f"[M7] Limiting executions to {actionable_limit} BUY signals due to open position cap")
+
+    _print_signals(actionable_signals, regime)
 
     # ------------------------------------------------------------------
     # 16. MEMORY + TELEGRAM + EXECUTE
     # ------------------------------------------------------------------
     memory = PortfolioMemory()
-    for sig in buy_signals[:TOP_N_SIGNALS]:
-        memory.save_signal(sig)
+    signal_ids = {}
+    for sig in actionable_signals:
+        signal_ids[sig.symbol] = memory.save_signal(sig)
 
     stats = memory.get_stats()
-    send_signals(buy_signals[:TOP_N_SIGNALS], stats, mode=TRADING_MODE, dry_run=dry_run)
+    send_signals(actionable_signals, stats, mode=TRADING_MODE, dry_run=dry_run)
 
     if dry_run:
         logger.info("[M7] DRY RUN -- not executed")
     else:
-        for sig in buy_signals[:TOP_N_SIGNALS]:
+        for sig in actionable_signals:
             result = executor.execute(sig)
             logger.info(f"  {sig.symbol}: {result.get('status','unknown')}")
+            if result.get("status") == "filled":
+                signal_id = signal_ids.get(sig.symbol)
+                if signal_id:
+                    memory.mark_signal_executed(signal_id)
 
     _run_trailing_stop()
     summary = executor.get_portfolio_summary()
@@ -332,11 +347,11 @@ def run_agent(dry_run: bool = False) -> list:
 
     elapsed = (datetime.now() - start_time).seconds
     logger.info(f"\nDone in {elapsed}s | "
-                f"Signals: {len(buy_signals)} | "
+                f"Signals: {len(actionable_signals)} | "
                 f"Trades: {stats['total_trades']} | "
                 f"Win rate: {stats['win_rate_pct']:.1f}%")
     logger.info("=" * 60)
-    return buy_signals[:TOP_N_SIGNALS]
+    return actionable_signals
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:

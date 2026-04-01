@@ -45,6 +45,9 @@ class PaperExecutor:
         result = {}
 
         if signal.action == "BUY":
+            if signal.symbol in self.portfolio["positions"]:
+                return {"status": "skipped", "reason": "position already open"}
+
             cost = signal.entry_price * signal.position_size
             if cost > self.portfolio["cash"]:
                 return {"status": "rejected", "reason": "insufficient cash"}
@@ -100,7 +103,8 @@ class PaperExecutor:
         """Cash + mark-to-market value of open positions."""
         total = self.portfolio["cash"]
         for sym, pos in self.portfolio["positions"].items():
-            total += pos["entry"] * pos["qty"]   # use entry as proxy in paper mode
+            mark = self._get_mark_price(sym) or pos["entry"]
+            total += mark * pos["qty"]
         return round(total, 2)
 
     def get_open_positions_count(self) -> int:
@@ -143,6 +147,17 @@ class PaperExecutor:
     def _save_portfolio(self):
         with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
             json.dump(self.portfolio, f, indent=2)
+
+    def _get_mark_price(self, symbol: str) -> float | None:
+        """Best-effort live mark for paper-mode risk checks and reporting."""
+        try:
+            import yfinance as yf
+            hist = yf.Ticker(f"{symbol}.NS").history(period="1d", interval="15m")
+            if not hist.empty:
+                return float(hist["Close"].iloc[-1])
+        except Exception:
+            pass
+        return None
 
     def _log_trade(self, signal: TradeSignal, result: dict):
         os.makedirs("logs", exist_ok=True)
@@ -259,6 +274,8 @@ class LiveExecutor:
     def execute(self, signal: TradeSignal) -> dict:
         if signal.action not in ("BUY", "SELL"):
             return {"status": "skipped", "reason": "HOLD signal"}
+        if signal.position_size <= 0:
+            return {"status": "skipped", "reason": "position size is 0"}
 
         from kiteconnect import KiteConnect
         transaction = (
@@ -316,10 +333,21 @@ class LiveExecutor:
         return len(self.kite.positions()["net"])
 
     def get_portfolio_summary(self) -> dict:
+        margins   = self.kite.margins()
         positions = self.kite.positions()["net"]
         holdings  = self.kite.holdings()
+        equity    = float(margins.get("equity", {}).get("net", 0) or 0)
+        cash      = float(
+            margins.get("equity", {}).get("available", {}).get("live_balance", 0)
+            or margins.get("equity", {}).get("available", {}).get("cash", 0)
+            or equity
+        )
         return {
             "mode":           "live",
+            "cash":           cash,
+            "portfolio_value":equity,
+            "pnl":            0.0,
+            "pnl_pct":        0.0,
             "open_positions": len(positions),
             "holdings":       len(holdings),
         }

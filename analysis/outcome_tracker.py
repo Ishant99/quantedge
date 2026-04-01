@@ -151,15 +151,25 @@ class OutcomeTracker:
                 date_str = str(idx.date()) if hasattr(idx, "date") else str(idx)[:10]
                 lo = row["low"]
                 hi = row["high"]
+                sl_hit = bool(sl and lo <= sl)
+                tp_hit = bool(tp and hi >= tp)
+
+                if sl_hit and tp_hit:
+                    intraday = self._resolve_intraday_sequence(symbol, date_str, sl, tp)
+                    if intraday:
+                        outcome, price = intraday
+                        days = (datetime.fromisoformat(date_str) -
+                                datetime.fromisoformat(sig_date)).days
+                        return (outcome, round(price, 2), date_str, days)
 
                 # Stop-loss hit (low touches SL)
-                if sl and lo <= sl:
+                if sl_hit:
                     days = (datetime.fromisoformat(date_str) -
                             datetime.fromisoformat(sig_date)).days
                     return ("SL_HIT", round(sl, 2), date_str, days)
 
                 # Take-profit hit (high touches TP)
-                if tp and hi >= tp:
+                if tp_hit:
                     days = (datetime.fromisoformat(date_str) -
                             datetime.fromisoformat(sig_date)).days
                     return ("TP_HIT", round(tp, 2), date_str, days)
@@ -170,6 +180,31 @@ class OutcomeTracker:
         except Exception as e:
             logger.debug(f"{symbol} outcome check failed: {e}")
             return ("OPEN", None, None, days_since)
+
+    def _resolve_intraday_sequence(self, symbol: str, date_str: str, sl: float, tp: float):
+        """Use 15m bars on ambiguous days to see which level was hit first."""
+        try:
+            start = datetime.fromisoformat(date_str)
+            end = start + timedelta(days=1)
+            intraday = yf.Ticker(f"{symbol}.NS").history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                interval="15m",
+                auto_adjust=True,
+            )
+            if intraday.empty:
+                return None
+            intraday.columns = [c.lower() for c in intraday.columns]
+            for _, row in intraday.iterrows():
+                lo = row["low"]
+                hi = row["high"]
+                if lo <= sl:
+                    return ("SL_HIT", sl)
+                if hi >= tp:
+                    return ("TP_HIT", tp)
+        except Exception as e:
+            logger.debug(f"{symbol} intraday sequence check failed: {e}")
+        return None
 
     # ------------------------------------------------------------------
     # DB helpers

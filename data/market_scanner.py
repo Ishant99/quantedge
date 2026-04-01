@@ -292,7 +292,10 @@ class MarketScanner:
 
     def _cache(self, df: pd.DataFrame, symbol: str) -> None:
         path = os.path.join(MARKET_DATA_DIR, f"{symbol}.csv")
-        df.to_csv(path, index=True)   # index=True preserves "date" column for reload
+        try:
+            df.to_csv(path, index=True)   # index=True preserves "date" column for reload
+        except Exception as e:
+            logger.debug(f"{symbol}: cache write failed — {e}")
 
     # ------------------------------------------------------------------
     # Symbol loading

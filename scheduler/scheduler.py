@@ -25,11 +25,15 @@ from apscheduler.triggers.cron import CronTrigger
 import pytz
 import requests
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TRADING_MODE
+from config import (
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TRADING_MODE,
+    US_USD_PER_TRADE, CRYPTO_USDT_PER_TRADE,
+)
 from utils import get_logger
 
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
+PID_FILE = "logs/scheduler.pid"
 
 
 # =============================================================================
@@ -65,21 +69,6 @@ def run_daily_scan():
 
         memory  = PortfolioMemory()
         summary = memory.get_stats()
-
-        from execution.executor import get_executor
-        from config import VIRTUAL_CAPITAL
-        exec_ = get_executor()
-        pv    = exec_.get_portfolio_value()
-        memory.save_snapshot({
-            "portfolio_value": pv,
-            "cash":            pv,
-            "pnl":             pv - VIRTUAL_CAPITAL,
-            "pnl_pct":         (pv - VIRTUAL_CAPITAL) / VIRTUAL_CAPITAL * 100,
-            "open_positions":  exec_.get_open_positions_count(),
-            "total_trades":    summary["total_trades"],
-            "win_rate":        summary["win_rate_pct"],
-        })
-
         send_telegram_alert(signals, summary)
 
         # Options signals — Nifty/BankNifty weekly CE/PE ideas
@@ -407,7 +396,7 @@ def run_us_scan():
                 continue
             if ta.signal == "bullish":
                 tid = broker.open_position(
-                    symbol=symbol, direction="LONG", usd_amount=500.0,
+                    symbol=symbol, direction="LONG", usd_amount=US_USD_PER_TRADE,
                     reasoning=f"US LONG | TA {ta.score:.1f} | {ta.reasoning[:80]}",
                 )
                 if tid:
@@ -462,7 +451,7 @@ def run_crypto_scan():
             if ta.signal == "bullish":
                 tid = broker.open_position(
                     symbol=symbol, direction="LONG",
-                    usdt_amount=100.0,
+                    usdt_amount=CRYPTO_USDT_PER_TRADE,
                     reasoning=f"Crypto LONG | TA {ta.score:.1f} | {ta.reasoning[:80]}",
                 )
                 if tid:
@@ -470,7 +459,7 @@ def run_crypto_scan():
             elif ta.signal == "bearish":
                 tid = broker.open_position(
                     symbol=symbol, direction="SHORT",
-                    usdt_amount=100.0,
+                    usdt_amount=CRYPTO_USDT_PER_TRADE,
                     reasoning=f"Crypto SHORT | TA {ta.score:.1f} | {ta.reasoning[:80]}",
                 )
                 if tid:
@@ -558,6 +547,10 @@ def send_telegram_message(text: str):
 # =============================================================================
 
 if __name__ == "__main__":
+    os.makedirs("logs", exist_ok=True)
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
     from config import SCAN_TIME_1, SCAN_TIME_2
 
     def _parse_time(t: str):

@@ -44,16 +44,18 @@ class EarningsGuard:
         except Exception:
             return True, ""
 
-    def filter_signals(self, signals: list) -> list:
+    def filter_signals(self, signals: list) -> tuple[list, list]:
         """Filter out signals where earnings are too close."""
         safe = []
+        blocked = []
         for sig in signals:
             ok, reason = self.is_safe(sig.symbol)
             if ok:
                 safe.append(sig)
             else:
                 logger.info(f"EarningsGuard blocked {sig.symbol}: {reason}")
-        return safe
+                blocked.append(sig)
+        return safe, blocked
 
     def _load_or_fetch(self) -> dict:
         """Load cached calendar or fetch fresh from NSE."""

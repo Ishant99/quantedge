@@ -77,11 +77,16 @@ def _cmd_start(token, chat_id):
 
 def _cmd_status(token, chat_id):
     try:
-        pf   = _load_json("logs/virtual_portfolio.json")
-        cash = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
-        vc   = _cfg("VIRTUAL_CAPITAL", 1_000_000)
-        nse_pnl = cash - vc
-        pos  = pf.get("positions", {})
+        from execution.executor import get_executor
+
+        exec_ = get_executor()
+        vc = _cfg("VIRTUAL_CAPITAL", 1_000_000)
+        portfolio_value = exec_.get_portfolio_value()
+        open_positions = exec_.get_open_positions_count()
+        pf = _load_json("logs/virtual_portfolio.json")
+        cash = pf.get("cash", portfolio_value)
+        deployed = max(0, portfolio_value - cash)
+        nse_pnl = portfolio_value - vc
 
         inr = _cfg("INR_PER_USD", 83.0)
         fno_pnl = cry_pnl = us_pnl = 0.0
@@ -104,14 +109,15 @@ def _cmd_status(token, chat_id):
         _send(token, chat_id, f"""*Portfolio Status*
 _Updated: {datetime.now().strftime('%d %b %Y %H:%M IST')}_
 
-💼 *NSE Equity:* Rs.{cash:,.0f}
+💼 *NSE Equity:* Rs.{portfolio_value:,.0f}
+Cash: Rs.{cash:,.0f} | Deployed: Rs.{deployed:,.0f}
 📈 NSE P&L:    Rs.{sign(nse_pnl)}{nse_pnl:,.0f}
 📊 F&O P&L:    Rs.{sign(fno_pnl)}{fno_pnl:,.0f}
 ₿  Crypto P&L: Rs.{sign(cry_pnl)}{cry_pnl:,.0f}
 🇺🇸 US P&L:    Rs.{sign(us_pnl)}{us_pnl:,.0f}
 
 *Combined P&L: Rs.{sign(combined)}{combined:,.0f}*
-Open positions: {len(pos)} NSE""")
+Open positions: {open_positions} NSE""")
     except Exception as e:
         _send(token, chat_id, f"Error fetching status: `{e}`")
 
