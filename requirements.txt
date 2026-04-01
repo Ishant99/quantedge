@@ -25,6 +25,7 @@ plotly>=5.18.0
 
 # Telegram alerts
 python-telegram-bot>=20.0
+discord.py>=2.4.0
 
 # Zerodha (only for live mode — uncomment when ready)
 # kiteconnect>=5.0.0
