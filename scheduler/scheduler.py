@@ -399,10 +399,11 @@ def run_us_scan():
                              f"P&L ${t['pnl_usd']:+.2f} ({t['pnl_pct']:+.1f}%)")
             send_telegram_message("\n".join(lines))
 
-        # New signals
+        # New signals — use ta.score/10 as confidence (TAResult has no .confidence)
         new_signals = []
         for symbol, ta in ta_results.items():
-            if not ta.tradeable or ta.confidence < MIN_CONFIDENCE:
+            ta_conf = ta.score / 10.0
+            if not ta.tradeable or ta_conf < MIN_CONFIDENCE:
                 continue
             if ta.signal == "bullish":
                 tid = broker.open_position(
@@ -451,13 +452,14 @@ def run_crypto_scan():
                              f"P&L {t['pnl_usdt']:+.2f} USDT ({t['pnl_pct']:+.1f}%)")
             send_telegram_message("\n".join(lines))
 
-        # New signals
+        # New signals — use ta.score/10 as confidence (TAResult has no .confidence)
         from config import MIN_CONFIDENCE
         new_signals = []
         for symbol, ta in ta_results.items():
-            if not ta.tradeable:
+            ta_conf = ta.score / 10.0
+            if not ta.tradeable or ta_conf < MIN_CONFIDENCE:
                 continue
-            if ta.signal == "bullish" and ta.confidence >= MIN_CONFIDENCE:
+            if ta.signal == "bullish":
                 tid = broker.open_position(
                     symbol=symbol, direction="LONG",
                     usdt_amount=100.0,
@@ -465,7 +467,7 @@ def run_crypto_scan():
                 )
                 if tid:
                     new_signals.append((symbol, "LONG", tid))
-            elif ta.signal == "bearish" and ta.confidence >= MIN_CONFIDENCE:
+            elif ta.signal == "bearish":
                 tid = broker.open_position(
                     symbol=symbol, direction="SHORT",
                     usdt_amount=100.0,
