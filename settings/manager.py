@@ -24,6 +24,8 @@ DEFAULTS: dict = {
     # ---- API & Integration ----
     "TELEGRAM_BOT_TOKEN":  "",
     "TELEGRAM_CHAT_ID":    "",
+    "DISCORD_BOT_TOKEN":   "",
+    "DISCORD_CHANNEL_ID":  "",
     "KITE_API_KEY":        "",
     "KITE_API_SECRET":     "",
 

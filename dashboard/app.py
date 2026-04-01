@@ -1940,6 +1940,41 @@ elif page == "CONFIG":
             except Exception as e:
                 st.error(str(e))
 
+        st.markdown('<div class="bb-header" style="margin-top:14px;">DISCORD</div>',
+                    unsafe_allow_html=True)
+        dc_ok = bool(cfg.get("DISCORD_BOT_TOKEN") and cfg.get("DISCORD_CHANNEL_ID"))
+        if dc_ok:
+            st.success("Discord configured")
+        else:
+            st.warning("Discord not configured — bot commands disabled")
+
+        dc_tok = st.text_input("BOT TOKEN", value=cfg.get("DISCORD_BOT_TOKEN", ""),
+                                type="password", help="From Discord Developer Portal → Bot → Token",
+                                key="dc_tok")
+        dc_ch  = st.text_input("CHANNEL ID", value=cfg.get("DISCORD_CHANNEL_ID", ""),
+                                help="Right-click channel → Copy ID (enable Developer Mode first)",
+                                key="dc_ch")
+
+        if st.button("TEST DISCORD", use_container_width=True):
+            try:
+                import requests as _req
+                r = _req.post(
+                    f"https://discord.com/api/v10/channels/{dc_ch}/messages",
+                    headers={"Authorization": f"Bot {dc_tok}",
+                             "Content-Type": "application/json"},
+                    json={"content": "QuantEdge: Discord test OK ✅"},
+                    timeout=8,
+                )
+                st.success("Discord OK!") if r.status_code in (200, 201) \
+                    else st.error(f"Failed ({r.status_code}): {r.text[:150]}")
+            except Exception as e:
+                st.error(str(e))
+
+        if st.button("SAVE DISCORD KEYS", use_container_width=True):
+            S.save({"DISCORD_BOT_TOKEN": dc_tok, "DISCORD_CHANNEL_ID": dc_ch})
+            st.success("Discord keys saved. Restart scheduler to apply.")
+            st.rerun()
+
         st.markdown('<div class="bb-header" style="margin-top:14px;">ZERODHA KITE</div>',
                     unsafe_allow_html=True)
         kite_ok = bool(cfg.get("KITE_API_KEY"))

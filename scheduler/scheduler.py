@@ -690,11 +690,19 @@ if __name__ == "__main__":
 
     # Start Telegram bot in background thread
     try:
-        from telegram.bot import start_bot_thread
-        start_bot_thread()
+        from telegram.bot import start_bot_thread as _tg_start
+        _tg_start()
         logger.info("Telegram bot thread started")
     except Exception as e:
         logger.warning(f"Telegram bot failed to start: {e}")
+
+    # Start Discord bot in background thread
+    try:
+        from discord_bot.bot import start_bot_thread as _dc_start
+        _dc_start()
+        logger.info("Discord bot thread started")
+    except Exception as e:
+        logger.warning(f"Discord bot failed to start: {e}")
 
     try:
         scheduler.start()

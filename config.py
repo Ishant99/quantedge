@@ -199,10 +199,16 @@ US_TP_PCT             = float(_S("US_TP_PCT",             default=0.06))   # 6% 
 US_SL_PCT             = float(_S("US_SL_PCT",             default=0.03))   # 3% stop loss
 
 # -----------------------------------------------------------------------------
-# ALERTS — Telegram (M9)
+# ALERTS — Telegram
 # -----------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN  = _S("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID    = _S("TELEGRAM_CHAT_ID",   "TELEGRAM_CHAT_ID",   "")
+
+# -----------------------------------------------------------------------------
+# ALERTS — Discord
+# -----------------------------------------------------------------------------
+DISCORD_BOT_TOKEN   = _S("DISCORD_BOT_TOKEN",  "DISCORD_BOT_TOKEN",  "")
+DISCORD_CHANNEL_ID  = _S("DISCORD_CHANNEL_ID", "DISCORD_CHANNEL_ID", "")
 
 # -----------------------------------------------------------------------------
 # LOGGING
