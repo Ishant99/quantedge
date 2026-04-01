@@ -309,16 +309,21 @@ hr { border-color: #1e1e1e !important; margin: 8px 0 !important; }
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# HELPERS
+# HELPERS  (all data-loaders are cached to avoid re-fetching on every render)
 # =============================================================================
+
+@st.cache_data(ttl=30)
 def _load_pf():
+    """Cached 30s — portfolio changes only when a trade executes."""
     f = "logs/virtual_portfolio.json"
     if os.path.exists(f):
         with open(f) as fp: return json.load(fp)
     vc = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     return {"cash": vc, "positions": {}, "total_trades": 0, "wins": 0}
 
+@st.cache_data(ttl=60)
 def _load_json(path, default=None):
+    """Cached 60s — regime/PCR/FII files update at most once per scan."""
     if os.path.exists(path):
         try:
             with open(path) as f: return json.load(f)
@@ -337,12 +342,22 @@ def _plotly_cfg(height=260, **kwargs):
     base.update(kwargs)
     return base
 
-def _chart(symbol, period="3mo", height=200):
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_chart_data(symbol: str, period: str = "3mo"):
+    """Cached 5 min — charts don't need real-time updates."""
     try:
-        df = yf.Ticker(f"{symbol}.NS").history(period=period, interval="1d")
-        if df.empty: return
+        ticker = f"{symbol}.NS" if not symbol.startswith("^") else symbol
+        df = yf.Ticker(ticker).history(period=period, interval="1d")
+        if df.empty: return None
         df["EMA20"] = df["Close"].ewm(span=20).mean()
         df["EMA50"] = df["Close"].ewm(span=50).mean()
+        return df
+    except Exception: return None
+
+def _chart(symbol, period="3mo", height=200):
+    df = _fetch_chart_data(symbol, period)
+    if df is None: return
+    try:
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
             x=df.index, open=df["Open"], high=df["High"],
@@ -362,11 +377,67 @@ def _chart(symbol, period="3mo", height=200):
         st.plotly_chart(fig, use_container_width=True)
     except Exception: pass
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _live_price(symbol):
+    """Cached 60s — price per symbol, avoids repeated yfinance calls."""
     try:
         h = yf.Ticker(f"{symbol}.NS").history(period="1d", interval="15m")
         return float(h["Close"].iloc[-1]) if not h.empty else None
     except Exception: return None
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _get_banknifty_return():
+    """Cached 2 min — BankNifty daily return for ticker strip."""
+    try:
+        _bn = yf.Ticker("^NSEBANK").history(period="5d", interval="1d")
+        return float((_bn["Close"].iloc[-1] - _bn["Close"].iloc[-2]) /
+                     _bn["Close"].iloc[-2] * 100) if len(_bn) >= 2 else 0.0
+    except Exception: return 0.0
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_memory_stats():
+    """Cached 60s — SQLite stats query."""
+    return PortfolioMemory().get_stats()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_recent_signals(limit=100):
+    """Cached 60s — signal history from SQLite/ChromaDB."""
+    return PortfolioMemory().get_recent_signals(limit=limit)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_equity_snapshots():
+    """Cached 60s — equity curve snapshots."""
+    return PortfolioMemory().get_snapshots()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_fno_stats():
+    """Cached 60s — F&O broker stats + positions."""
+    try:
+        from execution.brokers.fno_paper_broker import FNOPaperBroker
+        b = FNOPaperBroker()
+        return b.get_stats(), b.get_open_positions(), b.get_closed_trades(limit=20)
+    except Exception as e:
+        return {}, [], []
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_crypto_stats():
+    """Cached 60s — Crypto broker stats + positions."""
+    try:
+        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
+        b = CryptoPaperBroker()
+        return b.get_stats(), b.get_open_positions(), b.get_closed_trades(limit=20)
+    except Exception as e:
+        return {}, [], []
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_us_stats():
+    """Cached 60s — US broker stats + positions."""
+    try:
+        from execution.brokers.us_paper_broker import USPaperBroker
+        b = USPaperBroker()
+        return b.get_stats(), b.get_open_positions(), b.get_closed_trades(limit=20)
+    except Exception as e:
+        return {}, [], []
 
 def _sig_ns(d):
     return SimpleNamespace(
@@ -461,19 +532,16 @@ with st.sidebar:
     vc   = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     pnl  = cash - vc
     pc   = "#00C805" if pnl >= 0 else "#FF3B3B"
-    # Combined P&L across all markets
-    try:
-        from execution.brokers.fno_paper_broker import FNOPaperBroker
-        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
-        from execution.brokers.us_paper_broker import USPaperBroker
-        _sb_inr = _cfg("INR_PER_USD", 83.0)
-        _sb_fno = FNOPaperBroker().get_stats().get("total_pnl", 0) or 0
-        _sb_cry = (CryptoPaperBroker().get_stats().get("total_pnl_usdt", 0) or 0) * _sb_inr
-        _sb_us  = (USPaperBroker().get_stats().get("total_pnl_usd", 0) or 0) * _sb_inr
-        _sb_comb = pnl + _sb_fno + _sb_cry + _sb_us
-        _sb_extra = True
-    except Exception:
-        _sb_comb = pnl; _sb_extra = False
+    # Combined P&L across all markets (cached)
+    _sb_inr  = _cfg("INR_PER_USD", 83.0)
+    _sb_fs, _, _ = _get_fno_stats()
+    _sb_cs, _, _ = _get_crypto_stats()
+    _sb_us_s,_, _= _get_us_stats()
+    _sb_fno  = _sb_fs.get("total_pnl", 0) or 0
+    _sb_cry  = (_sb_cs.get("total_pnl_usdt", 0) or 0) * _sb_inr
+    _sb_us   = (_sb_us_s.get("total_pnl_usd", 0) or 0) * _sb_inr
+    _sb_comb = pnl + _sb_fno + _sb_cry + _sb_us
+    _sb_extra = True
     _cpc = "#00C805" if _sb_comb >= 0 else "#FF3B3B"
     st.markdown(f"""
     <div style="background:#111111;border:1px solid #1e1e1e;padding:10px;
@@ -488,8 +556,12 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    if st.button("⟳ REFRESH", use_container_width=True, key="sidebar_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
     st.markdown(f"""
-    <div style="font-size:9px;color:#333;margin-top:8px;text-align:right;">
+    <div style="font-size:9px;color:#333;margin-top:4px;text-align:right;">
         {datetime.now().strftime('%d %b %Y  %H:%M')}</div>
     """, unsafe_allow_html=True)
 
@@ -498,7 +570,7 @@ with st.sidebar:
 # PAGE: TODAY
 # =============================================================================
 if page == "TODAY":
-    stats = memory.get_stats()
+    stats = _get_memory_stats()
     pf    = _load_pf()
     cash  = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
     vc    = _cfg("VIRTUAL_CAPITAL", 1_000_000)
@@ -512,13 +584,8 @@ if page == "TODAY":
     pcr_d   = _load_json("logs/pcr_signal.json")
     pcr_val = pcr_d.get("pcr", 0) if pcr_d else 0
 
-    # BankNifty 1-day return
-    try:
-        _bn = yf.Ticker("^NSEBANK").history(period="5d", interval="1d")
-        bn_ret = float((_bn["Close"].iloc[-1] - _bn["Close"].iloc[-2]) /
-                       _bn["Close"].iloc[-2] * 100) if len(_bn) >= 2 else 0.0
-    except Exception:
-        bn_ret = 0.0
+    # BankNifty 1-day return (cached 2 min)
+    bn_ret = _get_banknifty_return()
 
     # FII net from file
     fii_d   = _load_json("logs/fii_signal.json")
@@ -537,26 +604,19 @@ if page == "TODAY":
     rg_str = reg.get("regime", "unknown").upper() if reg else "---"
     rg_col = {"BULL": "#00C805", "BEAR": "#FF3B3B"}.get(rg_str, "#FFB347")
 
-    # Multi-market stats for strip (loaded once, reused below)
+    # Multi-market stats for strip (all cached 60s)
     _inr = _cfg("INR_PER_USD", 83.0)
-    try:
-        from execution.brokers.fno_paper_broker import FNOPaperBroker
-        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
-        from execution.brokers.us_paper_broker import USPaperBroker
-        _fno_s = FNOPaperBroker().get_stats()
-        _cry_s = CryptoPaperBroker().get_stats()
-        _us_s  = USPaperBroker().get_stats()
-    except Exception:
-        _fno_s = _cry_s = _us_s = {"total_pnl": 0, "total_pnl_usdt": 0,
-                                    "total_pnl_usd": 0, "open_positions": 0}
+    _fno_s,  _, _ = _get_fno_stats()
+    _cry_s,  _, _ = _get_crypto_stats()
+    _us_s,   _, _ = _get_us_stats()
 
-    _fno_pnl = _fno_s.get("total_pnl", 0) or 0
-    _cry_pnl = (_cry_s.get("total_pnl_usdt", 0) or 0) * _inr
-    _us_pnl  = (_us_s.get("total_pnl_usd", 0)  or 0) * _inr
-    _comb    = pnl + _fno_pnl + _cry_pnl + _us_pnl
+    _fno_pnl  = _fno_s.get("total_pnl", 0) or 0
+    _cry_pnl  = (_cry_s.get("total_pnl_usdt", 0) or 0) * _inr
+    _us_pnl   = (_us_s.get("total_pnl_usd",   0) or 0) * _inr
+    _comb     = pnl + _fno_pnl + _cry_pnl + _us_pnl
     _fno_open = _fno_s.get("open_positions", 0) or 0
     _cry_open = _cry_s.get("open_positions", 0) or 0
-    _us_open  = _us_s.get("open_positions", 0)  or 0
+    _us_open  = _us_s.get("open_positions",  0) or 0
     _total_open = len(pos) + _fno_open + _cry_open + _us_open
 
     # ── Ticker strip ──────────────────────────────────────────────────────────
@@ -652,7 +712,7 @@ if page == "TODAY":
                 """, unsafe_allow_html=True)
 
             # Equity curve
-            snaps = memory.get_snapshots()
+            snaps = _get_equity_snapshots()
             if snaps:
                 st.markdown('<div class="bb-header">EQUITY CURVE</div>', unsafe_allow_html=True)
                 df_s = pd.DataFrame(snaps)
@@ -671,7 +731,7 @@ if page == "TODAY":
 
             # Recent signals
             st.markdown('<div class="bb-header">RECENT SIGNALS</div>', unsafe_allow_html=True)
-            sigs = memory.get_recent_signals(limit=6)
+            sigs = _get_recent_signals(limit=6)
             if sigs:
                 rows = ""
                 for s in sigs:
@@ -765,6 +825,7 @@ if page == "TODAY":
                     st.success(f"Done — {len(sigs)} signals")
                     time.sleep(1); st.rerun()
             if st.button("REFRESH PAGE", use_container_width=True):
+                st.cache_data.clear()
                 st.rerun()
             st.markdown(f"""
             <div style="font-size:10px;color:#444;margin-top:6px;">
@@ -785,7 +846,7 @@ if page == "TODAY":
         if sc3.button("REFRESH"):
             st.rerun()
 
-        all_sigs  = memory.get_recent_signals(limit=100)
+        all_sigs  = _get_recent_signals(limit=100)
         today_str = datetime.now().strftime("%Y-%m-%d")
         buy_sigs  = [s for s in all_sigs if s["action"]=="BUY" and s["timestamp"].startswith(today_str)]
         if not buy_sigs:
@@ -881,15 +942,7 @@ if page == "TODAY":
     with tab_crypto:
         st.markdown('<div class="bb-header">CRYPTO PAPER TRADING</div>',
                     unsafe_allow_html=True)
-        try:
-            from execution.brokers.crypto_paper_broker import CryptoPaperBroker
-            cb     = CryptoPaperBroker()
-            c_stats  = cb.get_stats()
-            c_open   = cb.get_open_positions()
-            c_closed = cb.get_closed_trades(limit=20)
-        except Exception as e:
-            st.error(f"Crypto broker error: {e}")
-            c_stats, c_open, c_closed = {}, [], []
+        c_stats, c_open, c_closed = _get_crypto_stats()
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("OPEN",       c_stats.get("open_positions", 0))
@@ -952,15 +1005,7 @@ if page == "TODAY":
     with tab_us:
         st.markdown('<div class="bb-header">US STOCKS PAPER TRADING</div>',
                     unsafe_allow_html=True)
-        try:
-            from execution.brokers.us_paper_broker import USPaperBroker
-            ub     = USPaperBroker()
-            u_stats  = ub.get_stats()
-            u_open   = ub.get_open_positions()
-            u_closed = ub.get_closed_trades(limit=20)
-        except Exception as e:
-            st.error(f"US broker error: {e}")
-            u_stats, u_open, u_closed = {}, [], []
+        u_stats, u_open, u_closed = _get_us_stats()
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("OPEN",       u_stats.get("open_positions", 0))
@@ -1025,15 +1070,7 @@ if page == "TODAY":
     with tab_fno:
         st.markdown('<div class="bb-header">F&O PAPER TRADING BOOK</div>',
                     unsafe_allow_html=True)
-        try:
-            from execution.brokers.fno_paper_broker import FNOPaperBroker
-            fno = FNOPaperBroker()
-            fno_stats  = fno.get_stats()
-            open_pos   = fno.get_open_positions()
-            closed_pos = fno.get_closed_trades(limit=20)
-        except Exception as e:
-            st.error(f"F&O broker error: {e}")
-            open_pos, closed_pos, fno_stats = [], [], {}
+        fno_stats, open_pos, closed_pos = _get_fno_stats()
 
         # KPIs
         c1, c2, c3, c4 = st.columns(4)
@@ -1173,33 +1210,26 @@ if page == "TODAY":
 # PAGE: PORTFOLIO
 # =============================================================================
 elif page == "PORTFOLIO":
-    stats = memory.get_stats()
+    stats = _get_memory_stats()
     pf    = _load_pf()
     cash  = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
     vc    = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     pnl   = cash - vc
-    snaps = memory.get_snapshots()
+    snaps = _get_equity_snapshots()
     positions = pf.get("positions", {})
 
     st.markdown('<div class="bb-header" style="font-size:12px;">PORTFOLIO</div>',
                 unsafe_allow_html=True)
 
-    # Combined P&L across all markets
-    try:
-        from execution.brokers.fno_paper_broker import FNOPaperBroker
-        from execution.brokers.crypto_paper_broker import CryptoPaperBroker
-        from execution.brokers.us_paper_broker import USPaperBroker
-        fno_s  = FNOPaperBroker().get_stats()
-        cry_s  = CryptoPaperBroker().get_stats()
-        us_s   = USPaperBroker().get_stats()
-        _pf_inr = _cfg("INR_PER_USD", 83.0)
-        fno_pnl = fno_s.get("total_pnl", 0)
-        cry_pnl_inr = cry_s.get("total_pnl_usdt", 0) * _pf_inr
-        us_pnl_inr  = us_s.get("total_pnl_usd", 0)  * _pf_inr
-        combined_pnl = pnl + fno_pnl + cry_pnl_inr + us_pnl_inr
-    except Exception:
-        fno_pnl = cry_pnl_inr = us_pnl_inr = combined_pnl = 0
-        fno_s = cry_s = us_s = {"open_positions": 0, "win_rate": 0}
+    # Combined P&L across all markets (all cached 60s)
+    _pf_inr = _cfg("INR_PER_USD", 83.0)
+    fno_s,  _, _ = _get_fno_stats()
+    cry_s,  _, _ = _get_crypto_stats()
+    us_s,   _, _ = _get_us_stats()
+    fno_pnl     = fno_s.get("total_pnl", 0) or 0
+    cry_pnl_inr = (cry_s.get("total_pnl_usdt", 0) or 0) * _pf_inr
+    us_pnl_inr  = (us_s.get("total_pnl_usd",  0) or 0) * _pf_inr
+    combined_pnl = pnl + fno_pnl + cry_pnl_inr + us_pnl_inr
 
     c1,c2,c3,c4,c5,c6 = st.columns(6)
     c1.metric("NSE EQUITY",   f"Rs.{cash:,.0f}", delta=f"Rs.{pnl:+,.0f}")
@@ -1742,7 +1772,7 @@ elif page == "HISTORY":
     tab_tr, tab_sig, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "READINESS"])
 
     with tab_tr:
-        trades = memory.get_recent_trades(limit=500)
+        trades = PortfolioMemory().get_recent_trades(limit=500)
         if not trades:
             st.info("No closed trades yet — paper trades will appear here after SL/TP hits")
         else:
