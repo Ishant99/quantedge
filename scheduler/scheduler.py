@@ -685,7 +685,16 @@ if __name__ == "__main__":
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  EOD digest         : 18:00 IST (Mon-Fri, all markets)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
+    logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)
+
+    # Start Telegram bot in background thread
+    try:
+        from telegram.bot import start_bot_thread
+        start_bot_thread()
+        logger.info("Telegram bot thread started")
+    except Exception as e:
+        logger.warning(f"Telegram bot failed to start: {e}")
 
     try:
         scheduler.start()
