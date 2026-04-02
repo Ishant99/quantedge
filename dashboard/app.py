@@ -27,6 +27,7 @@ from services.runtime_state import (
 from services.dashboard_data import (
     build_activity_feed as svc_build_activity_feed,
     build_live_watchlist as svc_build_live_watchlist,
+    normalise_trade_frame as svc_normalise_trade_frame,
     outcome_bucket_analytics as svc_outcome_bucket_analytics,
     quote_snapshot as svc_quote_snapshot,
     signal_analytics as svc_signal_analytics,
@@ -604,6 +605,10 @@ def _file_freshness_rows() -> list[dict]:
 
 def _trade_analytics(closed: pd.DataFrame) -> dict:
     return svc_trade_analytics(closed)
+
+
+def _normalise_trade_frame(trades) -> pd.DataFrame:
+    return svc_normalise_trade_frame(trades)
 
 
 def _signal_analytics(signals: pd.DataFrame) -> dict:
@@ -2116,8 +2121,8 @@ elif page == "HISTORY":
         if not trades:
             st.info("No closed trades yet — paper trades will appear here after SL/TP hits")
         else:
-            df = pd.DataFrame(trades)
-            closed = df[df["status"]=="closed"]
+            df = _normalise_trade_frame(trades)
+            closed = df[df["status"].str.lower() == "closed"].copy()
 
             if not closed.empty:
                 c1,c2,c3,c4 = st.columns(4)
@@ -2176,8 +2181,10 @@ elif page == "HISTORY":
             sf    = f1.selectbox("FILTER STATUS", ["All","open","closed"])
             sym_f = f2.text_input("FILTER SYMBOL", "")
             filtered = df.copy()
-            if sf != "All": filtered = filtered[filtered["status"]==sf]
-            if sym_f: filtered = filtered[filtered["symbol"].str.contains(sym_f.upper())]
+            if sf != "All":
+                filtered = filtered[filtered["status"].str.lower() == sf.lower()]
+            if sym_f:
+                filtered = filtered[filtered["symbol"].str.upper().str.contains(sym_f.upper(), na=False)]
             st.dataframe(filtered, use_container_width=True, height=360)
 
     with tab_sig:

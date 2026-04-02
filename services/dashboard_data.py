@@ -5,6 +5,39 @@ from memory.portfolio_memory import PortfolioMemory
 from services.runtime_state import read_scheduler_status
 
 
+def normalise_trade_frame(trades) -> pd.DataFrame:
+    frame = pd.DataFrame(trades or [])
+    expected_defaults = {
+        "symbol": "",
+        "action": "",
+        "status": "",
+        "qty": 0,
+        "entry_price": 0.0,
+        "exit_price": 0.0,
+        "entry_time": "",
+        "exit_time": "",
+        "pnl": 0.0,
+        "pnl_pct": 0.0,
+        "mode": "",
+    }
+    for column, default in expected_defaults.items():
+        if column not in frame.columns:
+            frame[column] = default
+
+    if frame.empty:
+        return frame
+
+    frame["symbol"] = frame["symbol"].fillna("").astype(str)
+    frame["action"] = frame["action"].fillna("").astype(str)
+    frame["status"] = frame["status"].fillna("").astype(str)
+    frame["mode"] = frame["mode"].fillna("").astype(str)
+    for numeric in ["qty", "entry_price", "exit_price", "pnl", "pnl_pct"]:
+        frame[numeric] = pd.to_numeric(frame[numeric], errors="coerce").fillna(0)
+    frame["entry_time"] = frame["entry_time"].fillna("").astype(str)
+    frame["exit_time"] = frame["exit_time"].fillna("").astype(str)
+    return frame
+
+
 def quote_snapshot(symbol: str) -> dict:
     try:
         hist = yf.Ticker(f"{symbol}.NS").history(period="5d", interval="1d", auto_adjust=True)
@@ -99,10 +132,9 @@ def build_activity_feed(limit: int = 12) -> pd.DataFrame:
 
 
 def trade_analytics(closed: pd.DataFrame) -> dict:
-    if closed.empty:
+    frame = normalise_trade_frame(closed.to_dict(orient="records") if isinstance(closed, pd.DataFrame) else closed)
+    if frame.empty:
         return {}
-
-    frame = closed.copy()
     frame["entry_time"] = pd.to_datetime(frame["entry_time"], errors="coerce")
     frame["exit_time"] = pd.to_datetime(frame["exit_time"], errors="coerce")
     frame["weekday"] = frame["exit_time"].dt.day_name().fillna("Unknown")
