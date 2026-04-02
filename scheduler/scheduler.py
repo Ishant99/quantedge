@@ -30,11 +30,52 @@ from config import (
     US_USD_PER_TRADE, CRYPTO_USDT_PER_TRADE,
 )
 from utils import get_logger
+from utils.housekeeping import cleanup_runtime_artifacts
 from utils.discord import send as send_discord_message_raw
+from services.runtime_state import (
+    PID_FILE,
+    acquire_pid_file as svc_acquire_pid_file,
+    release_pid_file as svc_release_pid_file,
+    write_scheduler_status as svc_write_scheduler_status,
+)
 
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
-PID_FILE = "logs/scheduler.pid"
+
+
+def _release_pid_file():
+    svc_release_pid_file(PID_FILE)
+
+
+def _acquire_pid_file() -> bool:
+    ok, message = svc_acquire_pid_file(PID_FILE)
+    if message:
+        if ok:
+            logger.warning(message)
+        else:
+            logger.error(message)
+    return ok
+
+
+def run_housekeeping():
+    """Trim stale logs/caches so Oracle Free VM storage stays healthy."""
+    _write_scheduler_status("housekeeping", "running")
+    try:
+        summary = cleanup_runtime_artifacts()
+        logger.info(
+            f"Housekeeping complete | removed={summary.get('removed_files', 0)} | "
+            f"logs={summary.get('log_files', 0)} ({summary.get('log_size_mb', 0.0):.2f} MB) | "
+            f"cache={summary.get('cache_size_mb', 0.0):.2f} MB | "
+            f"db={summary.get('db_size_mb', 0.0):.2f} MB"
+        )
+        _write_scheduler_status("housekeeping", "ok", f"Removed files: {summary.get('removed_files', 0)}")
+    except Exception as e:
+        _write_scheduler_status("housekeeping", "error", str(e))
+        logger.warning(f"Housekeeping failed: {e}")
+
+
+def _write_scheduler_status(job_name: str, state: str, detail: str = ""):
+    svc_write_scheduler_status(job_name, state, detail)
 
 
 # =============================================================================
@@ -56,8 +97,10 @@ def _preflight_check() -> bool:
 
 def run_daily_scan():
     """Full pipeline — runs every weekday at configured scan times."""
+    _write_scheduler_status("daily_scan", "running")
     logger.info(f"Scheduled scan triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     if not _preflight_check():
+        _write_scheduler_status("daily_scan", "skipped", "Pre-flight failed")
         send_telegram_message("*Pre-flight FAILED* — skipping scan (network issue?)")
         return
     try:
@@ -78,8 +121,10 @@ def run_daily_scan():
         _run_futures_signals()
         # Options selling — straddle/strangle (Tue/Wed/Thu only)
         _run_selling_signals()
+        _write_scheduler_status("daily_scan", "ok", f"Signals processed: {len(signals)}")
 
     except Exception as e:
+        _write_scheduler_status("daily_scan", "error", str(e))
         logger.error(f"Scheduled scan failed: {e}")
         send_telegram_message(f"*Agent ERROR (scan)*\n`{e}`")
 
@@ -130,6 +175,7 @@ def _run_options_signals():
 
 def run_fno_monitor():
     """Check all open F&O paper positions (options + futures) for TP/SL/expiry."""
+    _write_scheduler_status("fno_monitor", "running")
     try:
         from execution.brokers.fno_paper_broker import FNOPaperBroker
         broker = FNOPaperBroker()
@@ -143,7 +189,9 @@ def run_fno_monitor():
                 )
             send_telegram_message("\n".join(lines))
             logger.info(f"F&O monitor: closed {len(closed)} positions")
+        _write_scheduler_status("fno_monitor", "ok", f"Closed positions: {len(closed)}")
     except Exception as e:
+        _write_scheduler_status("fno_monitor", "error", str(e))
         logger.error(f"F&O monitor failed: {e}")
 
 
@@ -214,6 +262,7 @@ def run_price_monitor():
     Check all open positions for SL/TP hits and trailing stop updates.
     Runs every 15 minutes during market hours.
     """
+    _write_scheduler_status("price_monitor", "running")
     logger.debug(f"Price monitor tick at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
         from execution.price_monitor import PriceMonitor
@@ -233,8 +282,14 @@ def run_price_monitor():
             send_telegram_message("\n".join(lines))
         if trails:
             logger.info(f"Price monitor: {len(trails)} trailing stop updates")
+        _write_scheduler_status(
+            "price_monitor",
+            "ok",
+            f"Exits: {len(exits)} | Trail updates: {len(trails)}",
+        )
 
     except Exception as e:
+        _write_scheduler_status("price_monitor", "error", str(e))
         logger.error(f"Price monitor failed: {e}")
 
 
@@ -244,6 +299,7 @@ def run_price_monitor():
 
 def run_eod_close():
     """Force-close all intraday positions at 3:25 PM."""
+    _write_scheduler_status("eod_close", "running")
     logger.info(f"EOD close triggered at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
         from execution.price_monitor import PriceMonitor
@@ -260,7 +316,9 @@ def run_eod_close():
             send_telegram_message("\n".join(lines))
         else:
             logger.info("EOD: no intraday positions to close")
+        _write_scheduler_status("eod_close", "ok", f"Closed positions: {len(results)}")
     except Exception as e:
+        _write_scheduler_status("eod_close", "error", str(e))
         logger.error(f"EOD close failed: {e}")
 
 
@@ -270,6 +328,7 @@ def run_eod_close():
 
 def run_eod_digest():
     """Send 6 PM all-market daily summary to Telegram."""
+    _write_scheduler_status("eod_digest", "running")
     logger.info(f"EOD digest at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
         import sqlite3, os
@@ -319,7 +378,9 @@ def run_eod_digest():
         ]
         send_telegram_message("\n".join(lines))
         logger.info(f"EOD digest sent — combined P&L Rs.{combined:+,.0f}")
+        _write_scheduler_status("eod_digest", "ok", f"Combined P&L: Rs.{combined:+,.0f}")
     except Exception as e:
+        _write_scheduler_status("eod_digest", "error", str(e))
         logger.error(f"EOD digest failed: {e}")
 
 
@@ -329,6 +390,7 @@ def run_eod_digest():
 
 def run_intraday_scan():
     """15-min EMA/VWAP intraday signals on top swing candidates."""
+    _write_scheduler_status("intraday_scan", "running")
     logger.info(f"Intraday scan at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
         from execution.intraday_agent import IntradayAgent
@@ -339,7 +401,9 @@ def run_intraday_scan():
             logger.info(f"Intraday: {len(signals)} entries placed")
         else:
             logger.info("Intraday: no setups found this hour")
+        _write_scheduler_status("intraday_scan", "ok", f"Signals: {len(signals)}")
     except Exception as e:
+        _write_scheduler_status("intraday_scan", "error", str(e))
         logger.error(f"Intraday scan failed: {e}")
 
 
@@ -349,13 +413,20 @@ def run_intraday_scan():
 
 def run_outcome_tracker():
     """Check all open signals — mark TP_HIT / SL_HIT / EXPIRED outcomes."""
+    _write_scheduler_status("outcome_tracker", "running")
     logger.info(f"Outcome tracker triggered at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
         from analysis.outcome_tracker import OutcomeTracker
         result = OutcomeTracker().run()
         logger.info(f"Outcomes: TP={result['tp_hit']} SL={result['sl_hit']} "
                     f"EXPIRED={result['expired']} OPEN={result['still_open']}")
+        _write_scheduler_status(
+            "outcome_tracker",
+            "ok",
+            f"TP={result['tp_hit']} SL={result['sl_hit']} EXP={result['expired']}",
+        )
     except Exception as e:
+        _write_scheduler_status("outcome_tracker", "error", str(e))
         logger.error(f"Outcome tracker failed: {e}")
 
 
@@ -365,6 +436,7 @@ def run_outcome_tracker():
 
 def run_us_scan():
     """US stocks scan — runs at 7:00 PM IST (US market open), Mon-Fri."""
+    _write_scheduler_status("us_scan", "running")
     logger.info(f"US scan at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     try:
         from data.us_scanner import USScanner
@@ -412,12 +484,15 @@ def run_us_scan():
 
         stats = broker.get_stats()
         logger.info(f"US scan: {len(new_signals)} new | open={stats['open_positions']}")
+        _write_scheduler_status("us_scan", "ok", f"New signals: {len(new_signals)}")
     except Exception as e:
+        _write_scheduler_status("us_scan", "error", str(e))
         logger.error(f"US scan failed: {e}")
 
 
 def run_crypto_scan():
     """Crypto market scan — runs every 4 hours, 24/7."""
+    _write_scheduler_status("crypto_scan", "running")
     logger.info(f"Crypto scan at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     try:
         from data.crypto_scanner import CryptoScanner
@@ -477,18 +552,23 @@ def run_crypto_scan():
         logger.info(f"Crypto scan done: {len(new_signals)} new | "
                     f"open={stats['open_positions']} | "
                     f"total P&L={stats['total_pnl_usdt']:+.2f} USDT")
+        _write_scheduler_status("crypto_scan", "ok", f"New signals: {len(new_signals)}")
     except Exception as e:
+        _write_scheduler_status("crypto_scan", "error", str(e))
         logger.error(f"Crypto scan failed: {e}")
         send_telegram_message(f"*Agent ERROR (crypto)*\n`{e}`")
 
 
 def run_weekly_summary():
     """Send weekly performance report to Telegram."""
+    _write_scheduler_status("weekly_summary", "running")
     logger.info(f"Weekly summary triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     try:
         from automation.weekly_summary import send_weekly_summary
         send_weekly_summary()
+        _write_scheduler_status("weekly_summary", "ok", "Weekly summary sent")
     except Exception as e:
+        _write_scheduler_status("weekly_summary", "error", str(e))
         logger.error(f"Weekly summary failed: {e}")
         send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
 
@@ -555,9 +635,11 @@ def send_telegram_message(text: str):
 # =============================================================================
 
 if __name__ == "__main__":
-    os.makedirs("logs", exist_ok=True)
-    with open(PID_FILE, "w") as f:
-        f.write(str(os.getpid()))
+    if not _acquire_pid_file():
+        sys.exit(1)
+
+    _write_scheduler_status("scheduler", "booting", "Scheduler process started")
+    run_housekeeping()
 
     from config import SCAN_TIME_1, SCAN_TIME_2
 
@@ -673,8 +755,15 @@ if __name__ == "__main__":
         name="Weekly Summary (Sun 20:00 IST)",
     )
 
+    scheduler.add_job(
+        run_housekeeping,
+        CronTrigger(hour=6, minute=5, timezone=IST),
+        id="housekeeping",
+        name="Housekeeping (06:05 IST)",
+    )
+
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  —  10 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  11 JOBS")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
     logger.info(f"  NSE afternoon scan : {SCAN_TIME_2} IST (Mon-Fri)")
     logger.info("  Intraday scan      : hourly 09:30-14:30 (Mon-Fri)")
@@ -686,6 +775,7 @@ if __name__ == "__main__":
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  EOD digest         : 18:00 IST (Mon-Fri, all markets)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
+    logger.info("  Housekeeping       : 06:05 IST (daily)")
     logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)
 
@@ -709,3 +799,5 @@ if __name__ == "__main__":
         scheduler.start()
     except KeyboardInterrupt:
         logger.info("Scheduler stopped")
+    finally:
+        _release_pid_file()

@@ -42,8 +42,8 @@ RUN useradd -m -u 1000 trader \
     && chown -R trader:trader /app
 USER trader
 
-# Expose Streamlit port
-EXPOSE 8501
+# Expose Streamlit + optional API ports
+EXPOSE 8501 8000
 
 # Default: run the scheduler (overridden in docker-compose for dashboard service)
 CMD ["python", "scheduler/scheduler.py"]

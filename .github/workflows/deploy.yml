@@ -24,6 +24,11 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: "Branch or ref to deploy manually"
+        required: false
+        default: "main"
 
 jobs:
   lint:
@@ -32,6 +37,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_ref || github.ref_name }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -75,16 +82,19 @@ jobs:
           set -e
 
           DEPLOY_DIR="/home/ubuntu/quantedge"
+          DEPLOY_REF="${{ github.event_name == 'workflow_dispatch' && inputs.deploy_ref || github.ref_name }}"
           mkdir -p "$DEPLOY_DIR"
           cd "$DEPLOY_DIR"
 
           if [ -d ".git" ]; then
-            echo "[GIT] Pulling latest..."
-            git fetch origin main
-            git reset --hard origin/main
+            echo "[GIT] Pulling latest for ${DEPLOY_REF}..."
+            git fetch origin "$DEPLOY_REF"
+            git checkout -B "$DEPLOY_REF" "origin/$DEPLOY_REF"
           else
             echo "[GIT] Fresh clone..."
             git clone https://x-access-token:${GH_PAT}@github.com/Ishant99/quantedge.git .
+            git fetch origin "$DEPLOY_REF"
+            git checkout -B "$DEPLOY_REF" "origin/$DEPLOY_REF"
           fi
 
           if [ ! -f .env ]; then

@@ -8,12 +8,32 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import json, time
+import sqlite3
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 import yfinance as yf
 
 import settings.manager as S
 from memory.portfolio_memory import PortfolioMemory
+from utils.housekeeping import cleanup_runtime_artifacts, summarize_runtime_storage
+from services.runtime_state import (
+    file_freshness_rows as svc_file_freshness_rows,
+    format_age as svc_format_age,
+    get_health_snapshot as svc_get_health_snapshot,
+    pid_running as svc_pid_running,
+    read_scheduler_status as svc_read_scheduler_status,
+    safe_mtime as svc_safe_mtime,
+)
+from services.dashboard_data import (
+    build_activity_feed as svc_build_activity_feed,
+    build_live_watchlist as svc_build_live_watchlist,
+    outcome_bucket_analytics as svc_outcome_bucket_analytics,
+    quote_snapshot as svc_quote_snapshot,
+    signal_analytics as svc_signal_analytics,
+    signal_time_analytics as svc_signal_time_analytics,
+    symbol_edge_analytics as svc_symbol_edge_analytics,
+    trade_analytics as svc_trade_analytics,
+)
 
 # ── read live settings (not cached module-level config) ──────────────────────
 def _cfg(key, default=None):
@@ -471,6 +491,186 @@ def _bb_row(label, val, color="#cccccc"):
         <span style="color:{color};font-weight:500;">{val}</span>
     </div>"""
 
+
+def _safe_mtime(path):
+    return svc_safe_mtime(path)
+
+
+def _format_age(ts: float) -> str:
+    return svc_format_age(ts)
+
+
+def _pid_running(pid: int) -> bool:
+    return svc_pid_running(pid)
+
+
+def _load_scheduler_status():
+    return svc_read_scheduler_status()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _get_health_snapshot():
+    return svc_get_health_snapshot(_cfg)
+
+
+def _render_health_panel(snapshot: dict, show_actions: bool = False):
+    scheduler_state = "RUNNING" if snapshot["scheduler_running"] else "STOPPED"
+    scheduler_delta = f"PID {snapshot['scheduler_pid']}" if snapshot["scheduler_pid"] else "No PID file"
+    db_state = "OK" if snapshot["db_ok"] else "ERROR"
+    db_delta = f"{snapshot['storage']['db_size_mb']:.2f} MB"
+    alert_ready = int(snapshot["telegram_ready"]) + int(snapshot["discord_ready"])
+    alert_delta = []
+    if snapshot["telegram_ready"]:
+        alert_delta.append("TG")
+    if snapshot["discord_ready"]:
+        alert_delta.append("DC")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("SCHEDULER", scheduler_state, delta=scheduler_delta)
+    c2.metric("DATABASE", db_state, delta=db_delta)
+    c3.metric("ALERT CHANNELS", f"{alert_ready}/2", delta=", ".join(alert_delta) if alert_delta else "None")
+    c4.metric("LOG FOOTPRINT", f"{snapshot['storage']['log_size_mb']:.2f} MB",
+              delta=f"{snapshot['storage']['log_files']} files")
+
+    status_rows = pd.DataFrame([
+        {"Component": "Latest scan artifact", "Status": _format_age(snapshot["latest_signal_ts"])},
+        {"Component": "Latest agent log", "Status": _format_age(snapshot["latest_log_ts"])},
+        {"Component": "Settings sync", "Status": _format_age(snapshot["settings_ts"])},
+        {"Component": "Market cache", "Status": f"{snapshot['storage']['cache_files']} files / {snapshot['storage']['cache_size_mb']:.2f} MB"},
+        {"Component": "Chroma storage", "Status": f"{snapshot['storage']['chroma_size_mb']:.2f} MB"},
+        {"Component": "Backtest artifacts", "Status": f"{snapshot['storage']['backtest_files']} files / {snapshot['storage']['backtest_size_mb']:.2f} MB"},
+        {"Component": "SQLite journal", "Status": "Present" if snapshot["storage"]["db_journal_present"] else "Clear"},
+    ])
+    st.dataframe(status_rows, use_container_width=True, hide_index=True, height=286)
+
+    st.markdown('<div class="bb-header" style="margin-top:10px;">DATA FRESHNESS</div>', unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(_file_freshness_rows()), use_container_width=True, hide_index=True, height=216)
+
+    if not snapshot["db_ok"] and snapshot["db_error"]:
+        st.warning(f"Database health check failed: {snapshot['db_error']}")
+
+    jobs = (snapshot.get("scheduler_status") or {}).get("jobs", {})
+    if jobs:
+        st.markdown('<div class="bb-header" style="margin-top:10px;">JOB STATUS</div>', unsafe_allow_html=True)
+        job_rows = []
+        for name in [
+            "daily_scan", "price_monitor", "fno_monitor", "intraday_scan",
+            "eod_close", "outcome_tracker", "us_scan", "crypto_scan",
+            "eod_digest", "weekly_summary", "housekeeping",
+        ]:
+            item = jobs.get(name, {})
+            if not item:
+                continue
+            job_rows.append({
+                "Job": name.replace("_", " ").upper(),
+                "State": item.get("state", "---").upper(),
+                "Updated": item.get("timestamp", "---"),
+                "Detail": item.get("detail", ""),
+            })
+        if job_rows:
+            st.dataframe(pd.DataFrame(job_rows), use_container_width=True, hide_index=True, height=320)
+
+    if show_actions:
+        a1, a2 = st.columns([1, 1])
+        if a1.button("RUN CLEANUP NOW", use_container_width=True):
+            result = cleanup_runtime_artifacts()
+            st.cache_data.clear()
+            st.success(
+                f"Cleanup finished. Removed {result.get('removed_files', 0)} file(s); "
+                f"logs now {result.get('log_size_mb', 0.0):.2f} MB."
+            )
+            st.rerun()
+        if a2.button("REFRESH HEALTH", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+
+def _should_live_refresh(page_name: str) -> bool:
+    enabled = bool(st.session_state.get("live_refresh_enabled", False))
+    return enabled and page_name in {"TODAY", "PORTFOLIO"}
+
+
+def _queue_live_refresh(page_name: str):
+    if _should_live_refresh(page_name):
+        refresh_sec = int(_cfg("DASHBOARD_REFRESH_SEC", 30))
+        st.caption(f"LIVE REFRESH ACTIVE · reruns every {refresh_sec}s on this page")
+        time.sleep(refresh_sec)
+        st.rerun()
+
+
+def _file_freshness_rows() -> list[dict]:
+    return svc_file_freshness_rows()
+
+
+def _trade_analytics(closed: pd.DataFrame) -> dict:
+    return svc_trade_analytics(closed)
+
+
+def _signal_analytics(signals: pd.DataFrame) -> dict:
+    return svc_signal_analytics(signals)
+
+
+def _outcome_bucket_analytics(outcomes: pd.DataFrame) -> dict:
+    return svc_outcome_bucket_analytics(outcomes)
+
+
+def _symbol_edge_analytics(outcomes: pd.DataFrame, min_sample: int = 3) -> dict:
+    return svc_symbol_edge_analytics(outcomes, min_sample=min_sample)
+
+
+def _signal_time_analytics(signals: pd.DataFrame) -> dict:
+    return svc_signal_time_analytics(signals)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _quote_snapshot(symbol: str) -> dict:
+    return svc_quote_snapshot(symbol)
+
+
+def _live_watchlist(signals: list[dict], positions: dict, limit: int = 8) -> pd.DataFrame:
+    return svc_build_live_watchlist(signals, positions, limit=limit)
+
+
+def _activity_feed(limit: int = 12) -> pd.DataFrame:
+    return svc_build_activity_feed(limit=limit)
+
+
+def _scheduler_heartbeat_label(snapshot: dict) -> str:
+    status = snapshot.get("scheduler_status") or {}
+    heartbeat = status.get("heartbeat", "")
+    return heartbeat or "No heartbeat yet"
+
+
+def _render_config_summary(cfg: dict, snapshot: dict):
+    st.markdown('<div class="bb-header">ADMIN SNAPSHOT</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("TRADING MODE", str(cfg.get("TRADING_MODE", "paper")).upper())
+    c2.metric("AGENT MODE", str(cfg.get("AGENT_MODE", "copilot")).upper())
+    c3.metric(
+        "ALERT READY",
+        f"{int(bool(cfg.get('TELEGRAM_BOT_TOKEN') and cfg.get('TELEGRAM_CHAT_ID'))) + int(bool(cfg.get('DISCORD_BOT_TOKEN') and cfg.get('DISCORD_CHANNEL_ID')))}/2",
+        delta="TG/DC",
+    )
+    c4.metric(
+        "SCHEDULER",
+        "RUNNING" if snapshot.get("scheduler_running") else "STOPPED",
+        delta=_scheduler_heartbeat_label(snapshot),
+    )
+
+    q1, q2, q3 = st.columns(3)
+    if q1.button("RELOAD SETTINGS", use_container_width=True, key="cfg_reload_settings"):
+        S.reload()
+        st.cache_data.clear()
+        st.rerun()
+    if q2.button("CLEAR DASHBOARD CACHE", use_container_width=True, key="cfg_clear_cache"):
+        st.cache_data.clear()
+        st.success("Dashboard caches cleared.")
+        st.rerun()
+    if q3.button("REFRESH OPS SNAPSHOT", use_container_width=True, key="cfg_refresh_health"):
+        st.cache_data.clear()
+        st.rerun()
+
+
 memory = PortfolioMemory()
 
 # =============================================================================
@@ -497,6 +697,10 @@ with st.sidebar:
         regime_col = {"bull":"#00C805","bear":"#FF3B3B"}.get(rg,"#FFB347")
         regime_str = f"NIFTY [{rg.upper()}]"
 
+    _sb_health = _get_health_snapshot()
+    _sb_sched_col = "#00C805" if _sb_health["scheduler_running"] else "#FF3B3B"
+    _sb_sched_lbl = "RUNNING" if _sb_health["scheduler_running"] else "STOPPED"
+
     st.markdown(f"""
     <div style="font-size:10px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
@@ -510,6 +714,10 @@ with st.sidebar:
         <div style="display:flex;justify-content:space-between;">
             <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Market</span>
             <span style="color:{regime_col};font-weight:600;">{regime_str}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;">
+            <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Scheduler</span>
+            <span style="color:{_sb_sched_col};font-weight:600;">{_sb_sched_lbl}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -559,6 +767,14 @@ with st.sidebar:
     if st.button("⟳ REFRESH", use_container_width=True, key="sidebar_refresh"):
         st.cache_data.clear()
         st.rerun()
+
+    refresh_sec = int(_cfg("DASHBOARD_REFRESH_SEC", 30))
+    st.toggle(
+        "LIVE REFRESH",
+        key="live_refresh_enabled",
+        help=f"Opt-in lightweight rerun loop for Today and Portfolio pages ({refresh_sec}s interval).",
+    )
+    st.caption(f"Interval: {refresh_sec}s")
 
     st.markdown(f"""
     <div style="font-size:9px;color:#333;margin-top:4px;text-align:right;">
@@ -674,18 +890,19 @@ if page == "TODAY":
     """, unsafe_allow_html=True)
 
     # ── KPI row ───────────────────────────────────────────────────────────────
-    k1,k2,k3,k4,k5,k6 = st.columns(6)
+    k1,k2,k3 = st.columns(3)
     k1.metric("PORTFOLIO",      f"Rs.{cash:,.0f}")
     k2.metric("NSE P&L",        f"Rs.{pnl:+,.0f}",     delta=f"{pnl/vc*100:+.2f}%")
     k3.metric("OPEN POSITIONS", _total_open, delta=f"NSE:{len(pos)} F&O:{_fno_open}")
+    k4,k5,k6 = st.columns(3)
     k4.metric("TOTAL TRADES",   stats["total_trades"])
     k5.metric("WIN RATE",       f"{stats['win_rate_pct']:.1f}%")
     k6.metric("COMBINED P&L",   f"Rs.{_comb:+,.0f}")
 
     st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
 
-    tab_ov, tab_sig, tab_fno, tab_crypto, tab_us = st.tabs([
-        "OVERVIEW", "SIGNALS", "F&O BOOK", "CRYPTO", "US STOCKS"
+    tab_ov, tab_sig, tab_live, tab_alerts, tab_fno, tab_crypto, tab_us, tab_health = st.tabs([
+        "OVERVIEW", "SIGNALS", "LIVE DESK", "ALERT CENTER", "F&O BOOK", "CRYPTO", "US STOCKS", "HEALTH"
     ])
 
     # ── Overview ──────────────────────────────────────────────────────────────
@@ -733,19 +950,16 @@ if page == "TODAY":
             st.markdown('<div class="bb-header">RECENT SIGNALS</div>', unsafe_allow_html=True)
             sigs = _get_recent_signals(limit=6)
             if sigs:
-                rows = ""
+                sig_rows = []
                 for s in sigs:
-                    ep  = s.get("entry_price") or 0
-                    act = s.get("action","")
-                    sc  = "#00C805" if act=="BUY" else "#FF3B3B"
-                    rows += f"""<div class="bb-row">
-                        <span style="color:#eeeeee;font-weight:600;min-width:90px;">{s['symbol']}</span>
-                        <span style="color:{sc};font-size:10px;min-width:40px;">{act}</span>
-                        <span style="color:#888;font-size:10px;">{s['confidence']:.0%}</span>
-                        <span style="color:#cccccc;">Rs.{ep:,.0f}</span>
-                        <span style="color:#444;font-size:10px;">{s['timestamp'][:16]}</span>
-                    </div>"""
-                st.markdown(rows, unsafe_allow_html=True)
+                    sig_rows.append({
+                        "Symbol": s.get("symbol", ""),
+                        "Action": s.get("action", ""),
+                        "Conf": f"{s.get('confidence', 0):.0%}",
+                        "Entry": f"Rs.{(s.get('entry_price') or 0):,.0f}",
+                        "Time": (s.get("timestamp") or "")[:16],
+                    })
+                st.dataframe(pd.DataFrame(sig_rows), use_container_width=True, hide_index=True, height=220)
             else:
                 st.info("No signals yet")
 
@@ -836,7 +1050,7 @@ if page == "TODAY":
 
     # ── Signals ───────────────────────────────────────────────────────────────
     with tab_sig:
-        sc1, sc2, sc3 = st.columns([2,1,1])
+        sc1, sc2, sc3, sc4 = st.columns([2,1,1,1])
         auto = sc1.toggle("AUTO-REFRESH 60s", value=False)
         if sc2.button("RUN SCAN", type="primary"):
             with st.spinner("Scanning NSE 500..."):
@@ -845,6 +1059,7 @@ if page == "TODAY":
                 st.rerun()
         if sc3.button("REFRESH"):
             st.rerun()
+        show_signal_charts = sc4.toggle("LOAD CHARTS", value=False)
 
         all_sigs  = _get_recent_signals(limit=100)
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -854,6 +1069,7 @@ if page == "TODAY":
 
         if buy_sigs:
             top_n = int(_cfg("TOP_N_SIGNALS", 10))
+            display_count = min(top_n, 5 if not show_signal_charts else top_n)
             k1,k2,k3,k4 = st.columns(4)
             k1.metric("BUY SIGNALS", len(buy_sigs))
             k2.metric("AVG CONF",    f"{sum(s['confidence'] for s in buy_sigs)/len(buy_sigs):.0%}")
@@ -861,7 +1077,7 @@ if page == "TODAY":
             k4.metric("POS SENT",    sum(1 for s in buy_sigs if s.get("sentiment")=="positive"))
             st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
 
-            for sig in buy_sigs[:top_n]:
+            for sig in buy_sigs[:display_count]:
                 ep  = sig.get("entry_price") or 0
                 sl  = sig.get("stop_loss")   or 0
                 tp  = sig.get("take_profit") or 0
@@ -925,8 +1141,11 @@ if page == "TODAY":
                     if cr.button(f"SKIP", key=f"sk_{sig['symbol']}"):
                         st.info(f"{sig['symbol']} skipped")
 
-                with st.expander(f"CHART  {sig['symbol']}", expanded=False):
-                    _chart(sig["symbol"])
+                if show_signal_charts:
+                    with st.expander(f"CHART  {sig['symbol']}", expanded=False):
+                        _chart(sig["symbol"])
+            if not show_signal_charts and len(buy_sigs) > display_count:
+                st.caption(f"Showing top {display_count} signals. Enable LOAD CHARTS to inspect the full set with charts.")
         else:
             st.markdown("""
             <div style="text-align:center;padding:40px;color:#444;font-size:12px;">
@@ -937,6 +1156,101 @@ if page == "TODAY":
 
         if auto:
             time.sleep(60); st.rerun()
+
+    with tab_live:
+        st.markdown('<div class="bb-header">LIVE WATCHLIST</div>', unsafe_allow_html=True)
+        live_signals = _get_recent_signals(limit=20)
+        watch_df = _live_watchlist(live_signals, pos, limit=8)
+        if watch_df.empty:
+            st.info("No watchlist symbols yet. Run the agent or open positions to populate this panel.")
+        else:
+            st.dataframe(watch_df, use_container_width=True, hide_index=True, height=320)
+
+        desk_left, desk_right = st.columns(2)
+        with desk_left:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">OPEN POSITIONS SNAPSHOT</div>',
+                        unsafe_allow_html=True)
+            if pos:
+                pos_rows = []
+                for sym, p in list(pos.items())[:6]:
+                    quote = _quote_snapshot(sym)
+                    curr = quote.get("price") if quote.get("price") is not None else p["entry"]
+                    pnl_now = (curr - p["entry"]) * p["qty"]
+                    pos_rows.append({
+                        "Symbol": sym,
+                        "Entry": round(p["entry"], 2),
+                        "Now": round(curr, 2),
+                        "Qty": p["qty"],
+                        "P&L": round(pnl_now, 2),
+                    })
+                st.dataframe(pd.DataFrame(pos_rows), use_container_width=True, hide_index=True, height=220)
+            else:
+                st.info("No open NSE positions.")
+        with desk_right:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">MARKET PULSE</div>',
+                        unsafe_allow_html=True)
+            pulse_rows = pd.DataFrame([
+                {"Metric": "Nifty 1M", "Value": f"{ret_1m:+.2f}%"},
+                {"Metric": "BankNifty 1D", "Value": f"{bn_ret:+.2f}%"},
+                {"Metric": "PCR", "Value": f"{pcr_val:.2f}"},
+                {"Metric": "FII Flow", "Value": f"{fii_net:+,.0f} Cr"},
+                {"Metric": "Regime", "Value": rg_str},
+                {"Metric": "Open Positions", "Value": _total_open},
+            ])
+            st.dataframe(pulse_rows, use_container_width=True, hide_index=True, height=220)
+
+    with tab_alerts:
+        st.markdown('<div class="bb-header">ACTIVITY FEED</div>', unsafe_allow_html=True)
+        feed = _activity_feed(limit=16)
+        if feed.empty:
+            st.info("No recent activity yet.")
+        else:
+            st.dataframe(feed, use_container_width=True, hide_index=True, height=360)
+
+        alert_left, alert_right = st.columns(2)
+        with alert_left:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">SCHEDULER JOBS</div>',
+                        unsafe_allow_html=True)
+            jobs = (_load_scheduler_status().get("jobs") or {})
+            job_rows = []
+            for name, payload in jobs.items():
+                job_rows.append({
+                    "Job": name.replace("_", " ").upper(),
+                    "State": payload.get("state", "").upper(),
+                    "Updated": payload.get("timestamp", ""),
+                })
+            if job_rows:
+                st.dataframe(pd.DataFrame(job_rows), use_container_width=True, hide_index=True, height=220)
+            else:
+                st.info("No scheduler job activity yet.")
+        with alert_right:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">LATEST OUTCOMES</div>',
+                        unsafe_allow_html=True)
+            try:
+                from analysis.outcome_tracker import OutcomeTracker
+                outcome_rows = OutcomeTracker.get_recent_outcomes(limit=8)
+            except Exception:
+                outcome_rows = []
+            if outcome_rows:
+                latest_outcomes = pd.DataFrame(outcome_rows)[["symbol", "outcome", "confidence", "outcome_date"]]
+                latest_outcomes.columns = ["Symbol", "Outcome", "Confidence", "Date"]
+                latest_outcomes["Confidence"] = latest_outcomes["Confidence"].map(lambda v: f"{v:.0%}")
+                st.dataframe(latest_outcomes, use_container_width=True, hide_index=True, height=220)
+            else:
+                st.info("No resolved outcomes yet.")
+
+    with tab_health:
+        st.markdown('<div class="bb-header">SYSTEM HEALTH</div>', unsafe_allow_html=True)
+        _render_health_panel(_get_health_snapshot(), show_actions=False)
+        with st.expander("RUNTIME NOTES", expanded=False):
+            st.markdown(
+                """
+                - Scheduler status comes from `logs/scheduler.pid`.
+                - Database health runs a lightweight SQLite ping.
+                - Storage totals help keep the Oracle Free VM healthy over long runs.
+                - If scans look stale, refresh this page first and then restart the scheduler if needed.
+                """
+            )
 
     # ── CRYPTO ────────────────────────────────────────────────────────────────
     with tab_crypto:
@@ -1205,6 +1519,8 @@ if page == "TODAY":
                               "Lots","Entry","Exit","P&L","P&L%","Reason","Closed At"]
             st.dataframe(df_cl, use_container_width=True, height=280)
 
+    _queue_live_refresh("TODAY")
+
 
 # =============================================================================
 # PAGE: PORTFOLIO
@@ -1231,10 +1547,11 @@ elif page == "PORTFOLIO":
     us_pnl_inr  = (us_s.get("total_pnl_usd",  0) or 0) * _pf_inr
     combined_pnl = pnl + fno_pnl + cry_pnl_inr + us_pnl_inr
 
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1,c2,c3 = st.columns(3)
     c1.metric("NSE EQUITY",   f"Rs.{cash:,.0f}", delta=f"Rs.{pnl:+,.0f}")
     c2.metric("F&O P&L",      f"Rs.{fno_pnl:+,.0f}")
     c3.metric("CRYPTO P&L",   f"Rs.{cry_pnl_inr:+,.0f}")
+    c4,c5,c6 = st.columns(3)
     c4.metric("US P&L",       f"Rs.{us_pnl_inr:+,.0f}")
     c5.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
     c6.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
@@ -1300,11 +1617,14 @@ elif page == "PORTFOLIO":
                 st.markdown(_bb_row(lbl, str(v)), unsafe_allow_html=True)
 
     with tab_pos:
-        if st.button("UPDATE PRICES + TRAILING STOPS", type="primary"):
+        pos_actions = st.columns([1, 1, 1])
+        load_position_charts = pos_actions[0].toggle("POSITION CHARTS", value=False)
+        if pos_actions[1].button("UPDATE PRICES + TRAILING STOPS", type="primary"):
             with st.spinner("Fetching live prices..."):
                 from risk.trailing_stop import TrailingStopMonitor
                 TrailingStopMonitor().run()
                 st.rerun()
+        compact_positions = pos_actions[2].toggle("COMPACT VIEW", value=True)
 
         if not positions:
             st.markdown("""
@@ -1327,54 +1647,74 @@ elif page == "PORTFOLIO":
             s3.metric("UNREALISED P&L",f"Rs.{total_unr:+,.0f}",
                       delta=f"{total_unr/total_invested*100:+.1f}%" if total_invested else "0%")
 
-            # Header row
-            st.markdown("""
-            <div class="pos-row" style="color:#444;font-size:10px;text-transform:uppercase;
-                                        border-bottom:1px solid #2a2a2a;padding:4px 12px;">
-                <span>Symbol</span><span>Entry / Current</span><span>SL / TP</span>
-                <span>Qty</span><span>Unrealised P&L</span><span>Progress</span>
-            </div>
-            """, unsafe_allow_html=True)
-
             sorted_pos = sorted(positions.items(),
                 key=lambda x: (live.get(x[0],x[1]["entry"]) - x[1]["entry"])*x[1]["qty"],
                 reverse=True)
 
+            position_rows = []
             for sym, p in sorted_pos:
-                curr    = live.get(sym, p["entry"])
+                curr = live.get(sym, p["entry"])
                 pnl_pos = (curr - p["entry"]) * p["qty"]
                 pnl_pct = (curr - p["entry"]) / p["entry"] * 100
-                pc      = "#00C805" if pnl_pos > 0 else "#FF3B3B"
-                sl_r    = p["take_profit"] - p["stop_loss"]
-                prog    = max(0, min(100, (curr - p["stop_loss"]) / sl_r * 100)) if sl_r > 0 else 50
-                pc2     = "#00C805" if prog > 50 else "#FF3B3B"
-                st.markdown(f"""
-                <div class="pos-row">
-                    <span style="color:#eeeeee;font-weight:600;">{sym}</span>
-                    <span>
-                        <span style="color:#888;font-size:10px;">Rs.{p['entry']:,.2f}</span><br>
-                        <span style="color:{pc};">Rs.{curr:,.2f}</span>
-                    </span>
-                    <span>
-                        <span style="color:#FF3B3B;font-size:10px;">SL {p['stop_loss']:,.0f}</span><br>
-                        <span style="color:#00C805;font-size:10px;">TP {p['take_profit']:,.0f}</span>
-                    </span>
-                    <span style="color:#cccccc;">{p['qty']}</span>
-                    <span style="color:{pc};font-weight:600;">
-                        Rs.{pnl_pos:+,.0f}<br>
-                        <span style="font-size:10px;">{pnl_pct:+.2f}%</span>
-                    </span>
-                    <span>
-                        <div style="background:#1e1e1e;height:4px;width:60px;">
-                            <div style="background:{pc2};height:4px;width:{prog:.0f}%;"></div>
-                        </div>
-                        <span style="font-size:9px;color:#555;">{prog:.0f}%</span>
-                    </span>
+                sl_r = p["take_profit"] - p["stop_loss"]
+                prog = max(0, min(100, (curr - p["stop_loss"]) / sl_r * 100)) if sl_r > 0 else 50
+                position_rows.append({
+                    "Symbol": sym,
+                    "Entry": round(p["entry"], 2),
+                    "Current": round(curr, 2),
+                    "SL": round(p["stop_loss"], 2),
+                    "TP": round(p["take_profit"], 2),
+                    "Qty": p["qty"],
+                    "P&L": round(pnl_pos, 2),
+                    "P&L %": round(pnl_pct, 2),
+                    "Progress %": round(prog, 0),
+                })
+
+            if compact_positions:
+                st.dataframe(pd.DataFrame(position_rows), use_container_width=True, hide_index=True, height=320)
+            else:
+                # Header row
+                st.markdown("""
+                <div class="pos-row" style="color:#444;font-size:10px;text-transform:uppercase;
+                                            border-bottom:1px solid #2a2a2a;padding:4px 12px;">
+                    <span>Symbol</span><span>Entry / Current</span><span>SL / TP</span>
+                    <span>Qty</span><span>Unrealised P&L</span><span>Progress</span>
                 </div>
                 """, unsafe_allow_html=True)
+                for row in position_rows:
+                    pc = "#00C805" if row["P&L"] > 0 else "#FF3B3B"
+                    pc2 = "#00C805" if row["Progress %"] > 50 else "#FF3B3B"
+                    st.markdown(f"""
+                    <div class="pos-row">
+                        <span style="color:#eeeeee;font-weight:600;">{row['Symbol']}</span>
+                        <span>
+                            <span style="color:#888;font-size:10px;">Rs.{row['Entry']:,.2f}</span><br>
+                            <span style="color:{pc};">Rs.{row['Current']:,.2f}</span>
+                        </span>
+                        <span>
+                            <span style="color:#FF3B3B;font-size:10px;">SL {row['SL']:,.0f}</span><br>
+                            <span style="color:#00C805;font-size:10px;">TP {row['TP']:,.0f}</span>
+                        </span>
+                        <span style="color:#cccccc;">{row['Qty']}</span>
+                        <span style="color:{pc};font-weight:600;">
+                            Rs.{row['P&L']:+,.0f}<br>
+                            <span style="font-size:10px;">{row['P&L %']:+.2f}%</span>
+                        </span>
+                        <span>
+                            <div style="background:#1e1e1e;height:4px;width:60px;">
+                                <div style="background:{pc2};height:4px;width:{row['Progress %']:.0f}%;"></div>
+                            </div>
+                            <span style="font-size:9px;color:#555;">{row['Progress %']:.0f}%</span>
+                        </span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                with st.expander(f"  {sym}", expanded=False):
-                    _chart(sym)
+            if load_position_charts:
+                for row in position_rows[: min(len(position_rows), 6)]:
+                    with st.expander(f"  {row['Symbol']}", expanded=False):
+                        _chart(row["Symbol"])
+
+    _queue_live_refresh("PORTFOLIO")
 
 
 # =============================================================================
@@ -1769,7 +2109,7 @@ elif page == "RESEARCH":
 elif page == "HISTORY":
     st.markdown('<div class="bb-header" style="font-size:12px;">HISTORY</div>',
                 unsafe_allow_html=True)
-    tab_tr, tab_sig, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "READINESS"])
+    tab_tr, tab_sig, tab_qual, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "SIGNAL QUALITY", "READINESS"])
 
     with tab_tr:
         trades = PortfolioMemory().get_recent_trades(limit=500)
@@ -1786,6 +2126,13 @@ elif page == "HISTORY":
                 c3.metric("WORST TRADE", f"Rs.{closed['pnl'].min():+,.0f}")
                 c4.metric("AVG P&L",     f"Rs.{closed['pnl'].mean():+,.0f}")
 
+                analytics = _trade_analytics(closed)
+                a1, a2, a3, a4 = st.columns(4)
+                a1.metric("EXPECTANCY", f"Rs.{analytics.get('expectancy', 0):+,.0f}")
+                a2.metric("AVG HOLD", f"{analytics.get('avg_hold_hours', 0):.1f}h")
+                a3.metric("AVG WIN", f"Rs.{analytics.get('avg_win', 0):+,.0f}")
+                a4.metric("AVG LOSS", f"Rs.{analytics.get('avg_loss', 0):+,.0f}")
+
                 fig = go.Figure()
                 colors = closed["pnl"].apply(lambda x: "#00C805" if x>0 else "#FF3B3B").tolist()
                 fig.add_trace(go.Bar(x=list(range(len(closed))), y=closed["pnl"],
@@ -1800,6 +2147,30 @@ elif page == "HISTORY":
                                   legend=dict(orientation="h",
                                               font=dict(color="#666", size=9, family="JetBrains Mono")))
                 st.plotly_chart(fig, use_container_width=True)
+
+                t_left, t_right = st.columns(2)
+                with t_left:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">BEST DAYS</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(analytics.get("weekday", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=240)
+                with t_right:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">BEST SYMBOLS</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(analytics.get("symbols", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=240)
+
+                p_left, p_right = st.columns(2)
+                with p_left:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">HOLDING PERIOD EDGE</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(analytics.get("hold_buckets", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
+                with p_right:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">ENTRY TIME EDGE</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(analytics.get("entry_hours", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
 
             f1, f2 = st.columns(2)
             sf    = f1.selectbox("FILTER STATUS", ["All","open","closed"])
@@ -1886,6 +2257,136 @@ elif page == "HISTORY":
                 </div>
                 """, unsafe_allow_html=True)
 
+    with tab_qual:
+        signals = _get_recent_signals(limit=500)
+        if not signals:
+            st.info("No signal history yet.")
+        else:
+            sig_df = pd.DataFrame(signals)
+            qa = _signal_analytics(sig_df)
+            time_qa = _signal_time_analytics(sig_df)
+
+            q1, q2, q3, q4, q5 = st.columns(5)
+            q1.metric("SIGNALS", qa.get("total_signals", 0))
+            q2.metric("EXECUTED", qa.get("executed_signals", 0))
+            q3.metric("EXEC RATE", f"{qa.get('execution_rate', 0):.1f}%")
+            q4.metric("AVG CONF", f"{qa.get('avg_confidence', 0):.1f}%")
+            q5.metric("AVG TA", f"{qa.get('avg_ta_score', 0):.2f}")
+
+            c_left, c_right = st.columns(2)
+            with c_left:
+                st.markdown('<div class="bb-header" style="margin-top:10px;">CONFIDENCE BUCKETS</div>',
+                            unsafe_allow_html=True)
+                st.dataframe(qa.get("confidence_table", pd.DataFrame()), use_container_width=True,
+                             hide_index=True, height=220)
+            with c_right:
+                st.markdown('<div class="bb-header" style="margin-top:10px;">TA BUCKETS</div>',
+                            unsafe_allow_html=True)
+                st.dataframe(qa.get("ta_table", pd.DataFrame()), use_container_width=True,
+                             hide_index=True, height=220)
+
+            st.markdown('<div class="bb-header" style="margin-top:10px;">ACTION MIX</div>',
+                        unsafe_allow_html=True)
+            st.dataframe(qa.get("action_table", pd.DataFrame()), use_container_width=True,
+                         hide_index=True, height=180)
+
+            daily_signal_trend = time_qa.get("daily", pd.DataFrame())
+            if not daily_signal_trend.empty:
+                st.markdown('<div class="bb-header" style="margin-top:10px;">RECENT SIGNAL FLOW</div>',
+                            unsafe_allow_html=True)
+                trend_fig = go.Figure()
+                trend_fig.add_trace(go.Bar(
+                    x=daily_signal_trend["day"],
+                    y=daily_signal_trend["Signals"],
+                    marker_color="#444444",
+                    name="Signals",
+                ))
+                trend_fig.add_trace(go.Scatter(
+                    x=daily_signal_trend["day"],
+                    y=daily_signal_trend["Exec %"],
+                    mode="lines+markers",
+                    line=dict(color="#FF6B00", width=2),
+                    marker=dict(size=6),
+                    name="Exec %",
+                    yaxis="y2",
+                ))
+                trend_fig.update_layout(
+                    **_plotly_cfg(260),
+                    showlegend=True,
+                    yaxis=dict(title="Signals", color="#666666", gridcolor="#1a1a1a"),
+                    yaxis2=dict(
+                        title="Exec %",
+                        overlaying="y",
+                        side="right",
+                        color="#FF6B00",
+                        gridcolor="rgba(0,0,0,0)",
+                    ),
+                    legend=dict(orientation="h", font=dict(color="#666", size=9, family="JetBrains Mono")),
+                )
+                st.plotly_chart(trend_fig, use_container_width=True)
+
+            try:
+                from analysis.outcome_tracker import OutcomeTracker
+                outcome_rows = OutcomeTracker.get_recent_outcomes(limit=300)
+            except Exception:
+                outcome_rows = []
+
+            if outcome_rows:
+                outcome_df = pd.DataFrame(outcome_rows)
+                ob = _outcome_bucket_analytics(outcome_df)
+
+                st.markdown('<div class="bb-header" style="margin-top:14px;">RESOLVED SIGNAL EDGE</div>',
+                            unsafe_allow_html=True)
+                o1, o2, o3, o4 = st.columns(4)
+                o1.metric("RESOLVED", ob.get("resolved", 0))
+                o2.metric("TP RATE", f"{ob.get('tp_rate', 0):.1f}%")
+                o3.metric("AVG CONF", f"{ob.get('avg_confidence', 0):.1f}%")
+                o4.metric("AVG TA", f"{ob.get('avg_ta_score', 0):.2f}")
+
+                ob_left, ob_right = st.columns(2)
+                with ob_left:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">CONFIDENCE VS OUTCOME</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(ob.get("confidence_outcomes", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
+                with ob_right:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">TA VS OUTCOME</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(ob.get("ta_outcomes", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
+
+                st.markdown('<div class="bb-header" style="margin-top:10px;">SENTIMENT VS OUTCOME</div>',
+                            unsafe_allow_html=True)
+                st.dataframe(ob.get("sentiment_outcomes", pd.DataFrame()), use_container_width=True,
+                             hide_index=True, height=180)
+
+                o_left, o_right = st.columns(2)
+                with o_left:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">WEEKDAY VS OUTCOME</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(ob.get("weekday_outcomes", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
+                with o_right:
+                    st.markdown('<div class="bb-header" style="margin-top:10px;">TIME TO OUTCOME</div>',
+                                unsafe_allow_html=True)
+                    st.dataframe(ob.get("time_to_outcome", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=220)
+
+                symbol_edge = _symbol_edge_analytics(outcome_df, min_sample=3)
+                st.markdown('<div class="bb-header" style="margin-top:10px;">SYMBOL EDGE (MIN 3 RESOLVED)</div>',
+                            unsafe_allow_html=True)
+                s_left, s_right = st.columns(2)
+                with s_left:
+                    st.dataframe(symbol_edge.get("best_symbols", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=240)
+                with s_right:
+                    st.dataframe(symbol_edge.get("weak_symbols", pd.DataFrame()), use_container_width=True,
+                                 hide_index=True, height=240)
+                st.caption(
+                    f"Qualified symbols: {symbol_edge.get('qualified_symbols', 0)} "
+                    f"with at least {symbol_edge.get('min_sample', 3)} resolved outcomes."
+                )
+
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
             with st.spinner("Checking gates..."):
@@ -1935,13 +2436,15 @@ elif page == "CONFIG":
     # Reload from disk on every page visit
     S.reload()
     cfg = S.all_settings()
+    cfg_health = _get_health_snapshot()
 
     st.info("All settings are saved to logs/user_settings.json on the server. "
             "Changes take effect immediately in the dashboard. "
             "Click RESTART SCHEDULER below to apply changes to the scheduler process.")
+    _render_config_summary(cfg, cfg_health)
 
-    tab_api, tab_mode, tab_strat, tab_risk, tab_sched, tab_markets, tab_tools = st.tabs([
-        "API KEYS", "MODE", "STRATEGY", "RISK", "SCHEDULER", "MARKETS", "TOOLS"
+    tab_api, tab_mode, tab_strat, tab_risk, tab_sched, tab_markets, tab_tools, tab_ops = st.tabs([
+        "API KEYS", "MODE", "STRATEGY", "RISK", "SCHEDULER", "MARKETS", "TOOLS", "OPS"
     ])
 
     # ── API Keys ──────────────────────────────────────────────────────────────
@@ -2080,6 +2583,7 @@ elif page == "CONFIG":
     # ── Strategy ──────────────────────────────────────────────────────────────
     with tab_strat:
         st.markdown('<div class="bb-header">SIGNAL GENERATION</div>', unsafe_allow_html=True)
+        st.caption("Tune entry quality first. These settings control how strict the shortlist becomes.")
         s1, s2 = st.columns(2)
         with s1:
             new_min_ta   = st.slider("MIN TA SCORE",    1.0, 9.0,
@@ -2108,9 +2612,48 @@ elif page == "CONFIG":
             st.success("Strategy settings saved.")
             st.rerun()
 
+        st.markdown('<div class="bb-header" style="margin-top:14px;">STRATEGY PROFILES</div>',
+                    unsafe_allow_html=True)
+        st.caption("Apply a preset if you want a faster admin workflow than moving each slider manually.")
+        p1, p2, p3 = st.columns(3)
+        if p1.button("CONSERVATIVE", use_container_width=True, key="strat_conservative"):
+            S.save({
+                "MIN_TA_SCORE": 6.5,
+                "MIN_CONFIDENCE": 0.70,
+                "TOP_N_SIGNALS": 6,
+                "TA_WEIGHT": 0.60,
+                "SENTIMENT_WEIGHT": 0.20,
+                "DASHBOARD_REFRESH_SEC": 45,
+            })
+            st.success("Applied conservative strategy profile.")
+            st.rerun()
+        if p2.button("BALANCED", use_container_width=True, key="strat_balanced"):
+            S.save({
+                "MIN_TA_SCORE": 5.5,
+                "MIN_CONFIDENCE": 0.60,
+                "TOP_N_SIGNALS": 10,
+                "TA_WEIGHT": 0.50,
+                "SENTIMENT_WEIGHT": 0.30,
+                "DASHBOARD_REFRESH_SEC": 30,
+            })
+            st.success("Applied balanced strategy profile.")
+            st.rerun()
+        if p3.button("AGGRESSIVE", use_container_width=True, key="strat_aggressive"):
+            S.save({
+                "MIN_TA_SCORE": 4.5,
+                "MIN_CONFIDENCE": 0.50,
+                "TOP_N_SIGNALS": 14,
+                "TA_WEIGHT": 0.45,
+                "SENTIMENT_WEIGHT": 0.35,
+                "DASHBOARD_REFRESH_SEC": 20,
+            })
+            st.success("Applied aggressive strategy profile.")
+            st.rerun()
+
     # ── Risk ──────────────────────────────────────────────────────────────────
     with tab_risk:
         st.markdown('<div class="bb-header">POSITION SIZING & STOPS</div>', unsafe_allow_html=True)
+        st.caption("These settings control capital deployment, stop behavior, and portfolio concentration.")
         r1, r2 = st.columns(2)
         with r1:
             new_risk    = st.slider("RISK PER TRADE %",    0.5, 5.0,
@@ -2142,10 +2685,48 @@ elif page == "CONFIG":
             st.success("Risk settings saved.")
             st.rerun()
 
+        st.markdown('<div class="bb-header" style="margin-top:14px;">RISK PROFILES</div>',
+                    unsafe_allow_html=True)
+        rp1, rp2, rp3 = st.columns(3)
+        if rp1.button("LOW RISK", use_container_width=True, key="risk_low"):
+            S.save({
+                "RISK_PER_TRADE_PCT": 0.01,
+                "MAX_OPEN_POSITIONS": 4,
+                "REWARD_RISK_RATIO": 2.0,
+                "TRAIL_PCT": 0.015,
+                "MAX_DAILY_LOSS_PCT": 0.02,
+                "MAX_SAME_SECTOR": 1,
+            })
+            st.success("Applied low-risk profile.")
+            st.rerun()
+        if rp2.button("STANDARD", use_container_width=True, key="risk_standard"):
+            S.save({
+                "RISK_PER_TRADE_PCT": 0.02,
+                "MAX_OPEN_POSITIONS": 5,
+                "REWARD_RISK_RATIO": 2.0,
+                "TRAIL_PCT": 0.02,
+                "MAX_DAILY_LOSS_PCT": 0.03,
+                "MAX_SAME_SECTOR": 2,
+            })
+            st.success("Applied standard risk profile.")
+            st.rerun()
+        if rp3.button("HIGH CONVICTION", use_container_width=True, key="risk_high_conviction"):
+            S.save({
+                "RISK_PER_TRADE_PCT": 0.03,
+                "MAX_OPEN_POSITIONS": 7,
+                "REWARD_RISK_RATIO": 2.5,
+                "TRAIL_PCT": 0.025,
+                "MAX_DAILY_LOSS_PCT": 0.04,
+                "MAX_SAME_SECTOR": 2,
+            })
+            st.success("Applied high-conviction risk profile.")
+            st.rerun()
+
     # ── Scheduler ────────────────────────────────────────────────────────────
     with tab_sched:
         st.markdown('<div class="bb-header">SCAN TIMES (IST, MON-FRI)</div>',
                     unsafe_allow_html=True)
+        st.caption(f"Scheduler heartbeat: {_scheduler_heartbeat_label(cfg_health)}")
         sc1, sc2 = st.columns(2)
         new_t1 = sc1.text_input("SCAN 1 (HH:MM)", value=cfg.get("SCAN_TIME_1","09:15"),
                                   help="e.g. 09:15")
@@ -2216,7 +2797,8 @@ elif page == "CONFIG":
                     unsafe_allow_html=True)
         display = {k: v for k, v in S.all_settings().items()
                    if k not in ("TELEGRAM_BOT_TOKEN","KITE_API_KEY","KITE_API_SECRET")}
-        st.json(display)
+        with st.expander("VIEW SETTINGS JSON", expanded=False):
+            st.json(display)
 
     # ── Markets ───────────────────────────────────────────────────────────────
     with tab_markets:
@@ -2365,3 +2947,19 @@ elif page == "CONFIG":
                 from execution.daily_report import DailyReporter
                 DailyReporter().send_report()
                 st.success("Report sent!")
+
+    with tab_ops:
+        st.markdown('<div class="bb-header">OPERATIONS</div>', unsafe_allow_html=True)
+        _render_health_panel(_get_health_snapshot(), show_actions=True)
+
+        st.markdown('<div class="bb-header" style="margin-top:14px;">DASHBOARD REFRESH</div>',
+                    unsafe_allow_html=True)
+        refresh_sec = st.slider(
+            "AUTO-REFRESH INTERVAL (SEC)",
+            15, 300, int(cfg.get("DASHBOARD_REFRESH_SEC", 30)), 15,
+            help="Used by lightweight live panels and future dashboard polling."
+        )
+        if st.button("SAVE OPS SETTINGS", type="primary", use_container_width=True):
+            S.save({"DASHBOARD_REFRESH_SEC": refresh_sec})
+            st.success("Operations settings saved.")
+            st.rerun()
