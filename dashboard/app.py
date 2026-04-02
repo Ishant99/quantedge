@@ -2318,8 +2318,7 @@ elif page == "HISTORY":
                     yaxis="y2",
                 ))
                 trend_fig.update_layout(
-                    **_plotly_cfg(260),
-                    showlegend=True,
+                    **_plotly_cfg(260, showlegend=True),
                     yaxis=dict(title="Signals", color="#666666", gridcolor="#1a1a1a"),
                     yaxis2=dict(
                         title="Exec %",
