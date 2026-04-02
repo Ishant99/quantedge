@@ -6,34 +6,40 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from utils import get_logger
+from utils.discord import send as send_discord
 
 logger = get_logger("Telegram")
 
 
 def send(text: str) -> bool:
-    """Send a plain text message to Telegram. Returns True if sent."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    """Send a plain text message to Telegram and Discord. Returns True if any send succeeds."""
+    sent_any = False
+
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id":    TELEGRAM_CHAT_ID,
+                    "text":       text,
+                    "parse_mode": "Markdown",
+                },
+                timeout=10,
+            )
+            if r.status_code == 200:
+                logger.info("Telegram alert sent")
+                sent_any = True
+            else:
+                logger.warning(f"Telegram failed: {r.status_code} — {r.text}")
+        except Exception as e:
+            logger.warning(f"Telegram error: {e}")
+    else:
         logger.warning("Telegram not configured — check .env for TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id":    TELEGRAM_CHAT_ID,
-                "text":       text,
-                "parse_mode": "Markdown",
-            },
-            timeout=10,
-        )
-        if r.status_code == 200:
-            logger.info("Telegram alert sent")
-            return True
-        else:
-            logger.warning(f"Telegram failed: {r.status_code} — {r.text}")
-            return False
-    except Exception as e:
-        logger.warning(f"Telegram error: {e}")
-        return False
+
+    if send_discord(text):
+        sent_any = True
+
+    return sent_any
 
 
 def send_signals(signals: list, stats: dict, mode: str = "paper", dry_run: bool = False):

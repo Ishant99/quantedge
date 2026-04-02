@@ -30,6 +30,7 @@ from config import (
     US_USD_PER_TRADE, CRYPTO_USDT_PER_TRADE,
 )
 from utils import get_logger
+from utils.discord import send as send_discord_message_raw
 
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
@@ -529,17 +530,24 @@ def send_telegram_alert(signals: list, stats: dict):
 
 
 def send_telegram_message(text: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-        logger.info("Telegram message sent")
-    except Exception as e:
-        logger.warning(f"Telegram send failed: {e}")
+    sent_any = False
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
+                timeout=10,
+            )
+            logger.info("Telegram message sent")
+            sent_any = True
+        except Exception as e:
+            logger.warning(f"Telegram send failed: {e}")
+
+    if send_discord_message_raw(text):
+        sent_any = True
+
+    if not sent_any:
+        logger.info("No Telegram/Discord alert channel available for this message")
 
 
 # =============================================================================
