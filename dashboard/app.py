@@ -2056,13 +2056,12 @@ elif page == "RESEARCH":
                               annotation_text="Overall",
                               annotation_font_color="#FF6B00",
                               annotation_font_size=9)
-                fig.update_layout(**_plotly_cfg(280),
-                                  xaxis=dict(range=[0, 100],
-                                             ticksuffix="%",
-                                             color="#555",
-                                             gridcolor="#1a1a1a"),
-                                  yaxis=dict(color="#888"),
-                                  showlegend=False)
+                fig.update_layout(**_plotly_cfg(
+                    280,
+                    xaxis=dict(range=[0, 100], ticksuffix="%", color="#555", gridcolor="#1a1a1a"),
+                    yaxis=dict(color="#888"),
+                    showlegend=False,
+                ))
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Detail table
@@ -2376,8 +2375,9 @@ elif page == "HISTORY":
                     name="Exec %",
                     yaxis="y2",
                 ))
-                trend_fig.update_layout(
-                    **_plotly_cfg(260, showlegend=True),
+                trend_fig.update_layout(**_plotly_cfg(
+                    260,
+                    showlegend=True,
                     yaxis=dict(title="Signals", color="#666666", gridcolor="#1a1a1a"),
                     yaxis2=dict(
                         title="Exec %",
@@ -2387,7 +2387,7 @@ elif page == "HISTORY":
                         gridcolor="rgba(0,0,0,0)",
                     ),
                     legend=dict(orientation="h", font=dict(color="#666", size=9, family="JetBrains Mono")),
-                )
+                ))
                 st.plotly_chart(trend_fig, use_container_width=True)
 
             try:
