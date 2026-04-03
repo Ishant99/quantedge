@@ -2355,12 +2355,14 @@ elif page == "HISTORY":
             qa = _signal_analytics(sig_df)
             time_qa = _signal_time_analytics(sig_df)
 
-            q1, q2, q3, q4, q5 = st.columns(5)
+            q1, q2, q3, q4, q5, q6, q7 = st.columns(7)
             q1.metric("SIGNALS", qa.get("total_signals", 0))
             q2.metric("EXECUTED", qa.get("executed_signals", 0))
             q3.metric("EXEC RATE", f"{qa.get('execution_rate', 0):.1f}%")
             q4.metric("AVG CONF", f"{qa.get('avg_confidence', 0):.1f}%")
             q5.metric("AVG TA", f"{qa.get('avg_ta_score', 0):.2f}")
+            q6.metric("AVG QUALITY", f"{qa.get('avg_quality_score', 0):.1f}")
+            q7.metric("AVG EXP", f"{qa.get('avg_expectancy_score', 0):+.2f}")
 
             c_left, c_right = st.columns(2)
             with c_left:
@@ -2378,6 +2380,11 @@ elif page == "HISTORY":
                         unsafe_allow_html=True)
             st.dataframe(qa.get("action_table", pd.DataFrame()), use_container_width=True,
                          hide_index=True, height=180)
+
+            st.markdown('<div class="bb-header" style="margin-top:10px;">SETUP QUALITY</div>',
+                        unsafe_allow_html=True)
+            st.dataframe(qa.get("setup_table", pd.DataFrame()), use_container_width=True,
+                         hide_index=True, height=220)
 
             daily_signal_trend = time_qa.get("daily", pd.DataFrame())
             if not daily_signal_trend.empty:

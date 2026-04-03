@@ -61,6 +61,13 @@ class PortfolioMemory:
                     position_size INTEGER,
                     ta_score      REAL,
                     sentiment     TEXT,
+                    setup_type    TEXT DEFAULT '',
+                    regime_tag    TEXT DEFAULT '',
+                    quality_score REAL DEFAULT 0,
+                    expectancy_score REAL DEFAULT 0,
+                    symbol_edge   REAL DEFAULT 0,
+                    setup_edge    REAL DEFAULT 0,
+                    quality_flags TEXT DEFAULT '',
                     reasoning     TEXT,
                     executed      INTEGER DEFAULT 0
                 );
@@ -94,6 +101,19 @@ class PortfolioMemory:
                     win_rate        REAL
                 );
             """)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()]
+            alter_statements = {
+                "setup_type": "ALTER TABLE signals ADD COLUMN setup_type TEXT DEFAULT ''",
+                "regime_tag": "ALTER TABLE signals ADD COLUMN regime_tag TEXT DEFAULT ''",
+                "quality_score": "ALTER TABLE signals ADD COLUMN quality_score REAL DEFAULT 0",
+                "expectancy_score": "ALTER TABLE signals ADD COLUMN expectancy_score REAL DEFAULT 0",
+                "symbol_edge": "ALTER TABLE signals ADD COLUMN symbol_edge REAL DEFAULT 0",
+                "setup_edge": "ALTER TABLE signals ADD COLUMN setup_edge REAL DEFAULT 0",
+                "quality_flags": "ALTER TABLE signals ADD COLUMN quality_flags TEXT DEFAULT ''",
+            }
+            for col, stmt in alter_statements.items():
+                if col not in cols:
+                    conn.execute(stmt)
 
     # ------------------------------------------------------------------
     # Write operations
@@ -120,14 +140,24 @@ class PortfolioMemory:
                     INSERT INTO signals
                     (timestamp, symbol, action, confidence, entry_price,
                      stop_loss, take_profit, position_size, ta_score,
-                     sentiment, reasoning, executed)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,0)
+                     sentiment, setup_type, regime_tag, quality_score,
+                     expectancy_score, symbol_edge, setup_edge, quality_flags,
+                     reasoning, executed)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
                 """, (
                     datetime.now().isoformat(),
                     signal.symbol, signal.action, signal.confidence,
                     signal.entry_price, signal.stop_loss, signal.take_profit,
                     signal.position_size, signal.ta_score,
-                    signal.sentiment, signal.reasoning,
+                    signal.sentiment,
+                    getattr(signal, "setup_type", ""),
+                    getattr(signal, "regime_tag", ""),
+                    getattr(signal, "quality_score", 0.0),
+                    getattr(signal, "expectancy_score", 0.0),
+                    getattr(signal, "symbol_edge", 0.0),
+                    getattr(signal, "setup_edge", 0.0),
+                    ",".join(getattr(signal, "quality_flags", []) or []),
+                    signal.reasoning,
                 ))
                 signal_id = cur.lastrowid
         except sqlite3.Error as e:
@@ -301,7 +331,9 @@ class PortfolioMemory:
                 rows = conn.execute("""
                     SELECT timestamp, symbol, action, confidence,
                            entry_price, stop_loss, take_profit, position_size,
-                           ta_score, sentiment, reasoning, executed
+                           ta_score, sentiment, setup_type, regime_tag,
+                           quality_score, expectancy_score, symbol_edge, setup_edge,
+                           quality_flags, reasoning, executed
                     FROM signals
                     ORDER BY id DESC LIMIT ?
                 """, (limit,)).fetchall()
@@ -311,7 +343,9 @@ class PortfolioMemory:
             return []
         cols = ["timestamp","symbol","action","confidence",
                 "entry_price","stop_loss","take_profit","position_size",
-                "ta_score","sentiment","reasoning","executed"]
+                "ta_score","sentiment","setup_type","regime_tag",
+                "quality_score","expectancy_score","symbol_edge","setup_edge",
+                "quality_flags","reasoning","executed"]
         return [dict(zip(cols, r)) for r in rows]
 
     def get_recent_trades(self, limit: int = 20) -> list[dict]:

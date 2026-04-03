@@ -1,0 +1,30 @@
+- Last session before this one:
+- Added NSE reconciliation tools, treasury clarity, review report generation, archive/reset flow, and V2 dashboard/API/runtime fixes on `codex-v2-phase-rollout`.
+- Current branch:
+- `codex-v2-phase-rollout`
+- What I worked on this session:
+- Added Strategy Quality scoring that tags setup families, scores symbol/setup expectancy from historical outcomes, adjusts confidence/size, and blocks weak-history symbols.
+- Extended signal persistence/sync so quality metadata is stored in SQLite, unified state, and dashboard analytics.
+- Expanded `HISTORY -> SIGNAL QUALITY` to show average quality/expectancy and setup-level execution tables.
+- Files created or modified:
+- [AGENT_HANDOFF.md](/D:/New%20folder/trading_agent_fixed/AGENT_HANDOFF.md): created handoff memory file for next agents.
+- [analysis/strategy_quality.py](/D:/New%20folder/trading_agent_fixed/analysis/strategy_quality.py): new historical edge scorer and setup classifier.
+- [main.py](/D:/New%20folder/trading_agent_fixed/main.py): integrated strategy-quality assessment into buy-signal enrichment, ranking, and sizing.
+- [strategy/engine.py](/D:/New%20folder/trading_agent_fixed/strategy/engine.py): extended `TradeSignal` with setup/quality metadata and quality-aware sorting.
+- [memory/portfolio_memory.py](/D:/New%20folder/trading_agent_fixed/memory/portfolio_memory.py): added signal schema columns for setup/quality metadata and persisted them.
+- [services/state_sync.py](/D:/New%20folder/trading_agent_fixed/services/state_sync.py): synced new signal quality fields into unified state and unified SQLite tables.
+- [services/dashboard_data.py](/D:/New%20folder/trading_agent_fixed/services/dashboard_data.py): added quality/expectancy/setup analytics on signal history.
+- [dashboard/app.py](/D:/New%20folder/trading_agent_fixed/dashboard/app.py): surfaced average quality/expectancy and setup quality table in `HISTORY -> SIGNAL QUALITY`.
+- [config.py](/D:/New%20folder/trading_agent_fixed/config.py): added tunable strategy-quality config values.
+- [settings/manager.py](/D:/New%20folder/trading_agent_fixed/settings/manager.py): added persistent defaults for strategy-quality settings.
+- Current state:
+- Working in code/syntax; all touched files pass AST parsing.
+- Local runtime smoke still hits existing SQLite/Chroma `disk I/O error`, so historical quality stats load as empty on this machine.
+- Changes are not yet committed/pushed in this session.
+- Blockers / decisions:
+- Need deployed/healthy storage to verify historical symbol/setup scoring against real data.
+- Decide whether weak-history symbols should be blocked hard or only penalized; current default is hard block when sample threshold is met.
+- Exact next steps:
+- Run `sync_unified_state()` or a dry run on a healthy environment and confirm quality fields populate in `signals`.
+- Verify `HISTORY -> SIGNAL QUALITY` renders avg quality/setup tables on deployed V2.
+- Commit and push this Strategy Quality pass on `codex-v2-phase-rollout` if validation looks good.

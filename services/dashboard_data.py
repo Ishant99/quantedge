@@ -67,7 +67,11 @@ def unified_signal_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFra
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
-    for col in ["confidence", "entry_price", "stop_loss", "take_profit", "position_size", "ta_score", "executed"]:
+    for col in [
+        "confidence", "entry_price", "stop_loss", "take_profit",
+        "position_size", "ta_score", "executed", "quality_score",
+        "expectancy_score", "symbol_edge", "setup_edge",
+    ]:
         if col in frame.columns:
             frame[col] = pd.to_numeric(frame[col], errors="coerce").fillna(0)
     return frame
@@ -222,6 +226,12 @@ def signal_analytics(signals: pd.DataFrame) -> dict:
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
     frame["confidence"] = pd.to_numeric(frame["confidence"], errors="coerce").fillna(0.0)
     frame["ta_score"] = pd.to_numeric(frame["ta_score"], errors="coerce").fillna(0.0)
+    if "quality_score" not in frame.columns:
+        frame["quality_score"] = 0.0
+    if "expectancy_score" not in frame.columns:
+        frame["expectancy_score"] = 0.0
+    frame["quality_score"] = pd.to_numeric(frame["quality_score"], errors="coerce").fillna(0.0)
+    frame["expectancy_score"] = pd.to_numeric(frame["expectancy_score"], errors="coerce").fillna(0.0)
     frame["executed"] = pd.to_numeric(frame["executed"], errors="coerce").fillna(0).astype(int)
     conf_bins = pd.cut(frame["confidence"], bins=[0.0, 0.5, 0.65, 0.8, 1.01], labels=["0-50%", "50-65%", "65-80%", "80%+"], include_lowest=True)
     ta_bins = pd.cut(frame["ta_score"], bins=[0.0, 4.0, 6.0, 8.0, 10.1], labels=["0-4", "4-6", "6-8", "8-10"], include_lowest=True)
@@ -234,15 +244,31 @@ def signal_analytics(signals: pd.DataFrame) -> dict:
     action_table = frame.groupby("action").agg(Signals=("symbol", "count"), Executed=("executed", "sum")).reset_index().sort_values("Signals", ascending=False)
     action_table["Exec %"] = action_table.apply(lambda row: round((row["Executed"] / row["Signals"] * 100), 1) if row["Signals"] else 0.0, axis=1)
     action_table.columns = ["Action", "Signals", "Executed", "Exec %"]
+    if "setup_type" in frame.columns:
+        setup_table = frame.groupby("setup_type").agg(
+            Signals=("symbol", "count"),
+            Executed=("executed", "sum"),
+            AvgQuality=("quality_score", "mean"),
+            AvgExpectancy=("expectancy_score", "mean"),
+        ).reset_index().sort_values(["AvgQuality", "Signals"], ascending=[False, False])
+        setup_table["Exec %"] = setup_table.apply(
+            lambda row: round((row["Executed"] / row["Signals"] * 100), 1) if row["Signals"] else 0.0, axis=1
+        )
+        setup_table.columns = ["Setup", "Signals", "Executed", "Avg Quality", "Avg Expectancy", "Exec %"]
+    else:
+        setup_table = pd.DataFrame(columns=["Setup", "Signals", "Executed", "Avg Quality", "Avg Expectancy", "Exec %"])
     return {
         "total_signals": int(frame.shape[0]),
         "executed_signals": int(frame["executed"].sum()),
         "execution_rate": round(frame["executed"].mean() * 100, 1) if not frame.empty else 0.0,
         "avg_confidence": round(frame["confidence"].mean() * 100, 1) if not frame.empty else 0.0,
         "avg_ta_score": round(frame["ta_score"].mean(), 2) if not frame.empty else 0.0,
+        "avg_quality_score": round(frame["quality_score"].mean(), 2) if not frame.empty else 0.0,
+        "avg_expectancy_score": round(frame["expectancy_score"].mean(), 3) if not frame.empty else 0.0,
         "confidence_table": conf_table,
         "ta_table": ta_table,
         "action_table": action_table,
+        "setup_table": setup_table,
     }
 
 

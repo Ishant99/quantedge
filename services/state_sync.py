@@ -168,7 +168,9 @@ def _map_signal_rows(conn: sqlite3.Connection) -> list[dict]:
         """
         SELECT id, timestamp, symbol, action, confidence, entry_price,
                stop_loss, take_profit, position_size, ta_score,
-               sentiment, reasoning, executed
+               sentiment, setup_type, regime_tag, quality_score,
+               expectancy_score, symbol_edge, setup_edge, quality_flags,
+               reasoning, executed
         FROM signals
         ORDER BY id DESC LIMIT 500
         """,
@@ -187,6 +189,13 @@ def _map_signal_rows(conn: sqlite3.Connection) -> list[dict]:
             "position_size": float(row.get("position_size", 0) or 0),
             "ta_score": float(row.get("ta_score", 0) or 0),
             "sentiment": row.get("sentiment", ""),
+            "setup_type": row.get("setup_type", ""),
+            "regime_tag": row.get("regime_tag", ""),
+            "quality_score": float(row.get("quality_score", 0) or 0),
+            "expectancy_score": float(row.get("expectancy_score", 0) or 0),
+            "symbol_edge": float(row.get("symbol_edge", 0) or 0),
+            "setup_edge": float(row.get("setup_edge", 0) or 0),
+            "quality_flags": row.get("quality_flags", ""),
             "timestamp": row.get("timestamp", ""),
             "executed": int(row.get("executed", 0) or 0),
             "source": "signals",
@@ -364,6 +373,13 @@ def _ensure_sync_tables(conn: sqlite3.Connection):
             position_size  REAL,
             ta_score       REAL,
             sentiment      TEXT,
+            setup_type     TEXT,
+            regime_tag     TEXT,
+            quality_score  REAL,
+            expectancy_score REAL,
+            symbol_edge    REAL,
+            setup_edge     REAL,
+            quality_flags  TEXT,
             timestamp      TEXT,
             executed       INTEGER,
             source         TEXT,
@@ -521,14 +537,20 @@ def sync_unified_state() -> dict:
                 INSERT INTO unified_signals (
                     signal_key, market, symbol, action, confidence, entry_price,
                     stop_loss, take_profit, position_size, ta_score, sentiment,
-                    timestamp, executed, source, reasoning, raw_json, synced_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    setup_type, regime_tag, quality_score, expectancy_score,
+                    symbol_edge, setup_edge, quality_flags, timestamp, executed,
+                    source, reasoning, raw_json, synced_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     (
                         row["signal_key"], row["market"], row["symbol"], row["action"],
                         row["confidence"], row["entry_price"], row["stop_loss"], row["take_profit"],
-                        row["position_size"], row["ta_score"], row["sentiment"], row["timestamp"],
+                        row["position_size"], row["ta_score"], row["sentiment"],
+                        row.get("setup_type", ""), row.get("regime_tag", ""),
+                        row.get("quality_score", 0.0), row.get("expectancy_score", 0.0),
+                        row.get("symbol_edge", 0.0), row.get("setup_edge", 0.0),
+                        row.get("quality_flags", ""), row["timestamp"],
                         row["executed"], row["source"], row["reasoning"], json.dumps(row), synced_at
                     )
                     for row in state["signals"]

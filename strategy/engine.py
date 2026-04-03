@@ -38,6 +38,13 @@ class TradeSignal:
     sentiment:      str
     sentiment_score: float
     reasoning:      str           # single human-readable string
+    setup_type:     str = "technical_base"
+    regime_tag:     str = ""
+    quality_score:  float = 0.0
+    expectancy_score: float = 0.0
+    symbol_edge:    float = 0.0
+    setup_edge:     float = 0.0
+    quality_flags:  list[str] = field(default_factory=list)
     raw_ta:         dict = field(default_factory=dict)
 
 
@@ -158,10 +165,16 @@ class StrategyEngine:
             signals.append(sig)
 
         # Sort: BUY first by confidence desc, then SELL, then HOLD
-        buy_sigs  = sorted([s for s in signals if s.action == "BUY"],
-                           key=lambda x: x.confidence, reverse=True)
-        sell_sigs = sorted([s for s in signals if s.action == "SELL"],
-                           key=lambda x: x.confidence, reverse=True)
+        buy_sigs  = sorted(
+            [s for s in signals if s.action == "BUY"],
+            key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
+            reverse=True,
+        )
+        sell_sigs = sorted(
+            [s for s in signals if s.action == "SELL"],
+            key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
+            reverse=True,
+        )
         hold_sigs = [s for s in signals if s.action == "HOLD"]
 
         top = buy_sigs + sell_sigs + hold_sigs

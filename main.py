@@ -19,6 +19,7 @@ from analysis.fii_dii import FIIDIIAnalyser
 from analysis.pcr_signal import PCRAnalyser
 from analysis.earnings_guard import EarningsGuard
 from analysis.momentum_filter import MomentumFilter
+from analysis.strategy_quality import StrategyQualityEngine
 from strategy.engine import StrategyEngine
 from execution.executor import get_executor
 from memory.portfolio_memory import PortfolioMemory
@@ -171,6 +172,7 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     logger.info("[M4/M5] Generating signals...")
     strategy = StrategyEngine()
+    quality_engine = StrategyQualityEngine()
     signals  = strategy.generate_all(
         ta_results               = tradeable,
         sent_results             = sent_results,
@@ -235,6 +237,7 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     sizer = DynamicPositionSizer()
     enriched = []
+    blocked_quality = []
     for sig in buy_signals:
         pat  = pattern_results.get(sig.symbol)
         sr   = sr_results.get(sig.symbol)
@@ -280,9 +283,43 @@ def run_agent(dry_run: bool = False) -> list:
         sig.capital_at_risk = sizing.capital_at_risk
         sig.stop_loss       = sizing.stop_loss
         sig.take_profit     = sizing.take_profit
+        quality = quality_engine.assess(
+            sig,
+            regime_tag=regime.regime,
+            pattern_name=pat.primary_pattern if pat else "",
+            pattern_bias=pat.bias if pat else "",
+            near_support=sr.near_support if sr else False,
+            vp_signal=vp.signal if vp else "",
+            weekly_trend=mtf.weekly_trend if mtf else "",
+            sector=sec,
+        )
+        if quality.blocked:
+            sig.reasoning += f". Quality block: {quality.block_reason}"
+            blocked_quality.append(sig)
+            continue
+        sig.setup_type = quality.setup_type
+        sig.regime_tag = regime.regime
+        sig.quality_score = quality.quality_score
+        sig.expectancy_score = quality.expectancy_score
+        sig.symbol_edge = quality.symbol_edge
+        sig.setup_edge = quality.setup_edge
+        sig.quality_flags = quality.flags
+        sig.confidence = quality.adjusted_confidence
+        sig.position_size = max(0, int(sig.position_size * quality.size_multiplier))
+        sig.capital_at_risk = round(sig.capital_at_risk * quality.size_multiplier, 2)
+        quality_note = (
+            f". Setup: {quality.setup_type}"
+            f". Quality {quality.quality_score:.1f}"
+            f". Expectancy {quality.expectancy_score:+.2f}"
+        )
+        if quality.flags:
+            quality_note += f". Flags: {', '.join(quality.flags[:3])}"
+        sig.reasoning += quality_note
         enriched.append(sig)
 
     buy_signals = enriched
+    if blocked_quality:
+        logger.info(f"[QUALITY] Blocked {len(blocked_quality)} weak-history BUY signals")
 
     # ------------------------------------------------------------------
     # 14. EARNINGS GUARD FILTER
@@ -298,7 +335,11 @@ def run_agent(dry_run: bool = False) -> list:
     buy_signals = CorrelationFilter().filter(buy_signals, market_data, symbol_sectors)
 
     # Final sort
-    buy_signals = sorted(buy_signals, key=lambda x: x.confidence, reverse=True)
+    buy_signals = sorted(
+        buy_signals,
+        key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
+        reverse=True,
+    )
     logger.info(f"Final: {len(buy_signals)} BUY signals after all 13 filters")
 
     remaining_slots = max(0, MAX_OPEN_POSITIONS - open_positions)
@@ -390,6 +431,8 @@ def _print_signals(signals: list, regime=None):
         print(f"    Take Profit: Rs.{s.take_profit:,.2f}")
         print(f"    Position   : {s.position_size} shares")
         print(f"    TA Score   : {s.ta_score}/10")
+        print(f"    Setup      : {getattr(s, 'setup_type', 'technical_base')}")
+        print(f"    Quality    : {getattr(s, 'quality_score', 0.0):.1f}")
         print(f"    Sentiment  : {s.sentiment}")
         print(f"    Reason     : {s.reasoning}")
     print("\n" + "=" * 70 + "\n")
