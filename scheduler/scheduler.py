@@ -38,6 +38,7 @@ from services.runtime_state import (
     release_pid_file as svc_release_pid_file,
     write_scheduler_status as svc_write_scheduler_status,
 )
+from services.state_sync import sync_unified_state
 
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
@@ -76,6 +77,19 @@ def run_housekeeping():
 
 def _write_scheduler_status(job_name: str, state: str, detail: str = ""):
     svc_write_scheduler_status(job_name, state, detail)
+
+
+def _sync_state(label: str):
+    try:
+        state = sync_unified_state()
+        logger.info(
+            f"Unified state synced after {label} | "
+            f"positions={len(state.get('positions', []))} "
+            f"trades={len(state.get('trades', []))} "
+            f"signals={len(state.get('signals', []))}"
+        )
+    except Exception as e:
+        logger.warning(f"Unified state sync failed after {label}: {e}")
 
 
 # =============================================================================
@@ -121,6 +135,7 @@ def run_daily_scan():
         _run_futures_signals()
         # Options selling — straddle/strangle (Tue/Wed/Thu only)
         _run_selling_signals()
+        _sync_state("daily_scan")
         _write_scheduler_status("daily_scan", "ok", f"Signals processed: {len(signals)}")
 
     except Exception as e:
@@ -189,6 +204,7 @@ def run_fno_monitor():
                 )
             send_telegram_message("\n".join(lines))
             logger.info(f"F&O monitor: closed {len(closed)} positions")
+        _sync_state("fno_monitor")
         _write_scheduler_status("fno_monitor", "ok", f"Closed positions: {len(closed)}")
     except Exception as e:
         _write_scheduler_status("fno_monitor", "error", str(e))
@@ -282,6 +298,7 @@ def run_price_monitor():
             send_telegram_message("\n".join(lines))
         if trails:
             logger.info(f"Price monitor: {len(trails)} trailing stop updates")
+        _sync_state("price_monitor")
         _write_scheduler_status(
             "price_monitor",
             "ok",
@@ -316,6 +333,7 @@ def run_eod_close():
             send_telegram_message("\n".join(lines))
         else:
             logger.info("EOD: no intraday positions to close")
+        _sync_state("eod_close")
         _write_scheduler_status("eod_close", "ok", f"Closed positions: {len(results)}")
     except Exception as e:
         _write_scheduler_status("eod_close", "error", str(e))
@@ -401,6 +419,7 @@ def run_intraday_scan():
             logger.info(f"Intraday: {len(signals)} entries placed")
         else:
             logger.info("Intraday: no setups found this hour")
+        _sync_state("intraday_scan")
         _write_scheduler_status("intraday_scan", "ok", f"Signals: {len(signals)}")
     except Exception as e:
         _write_scheduler_status("intraday_scan", "error", str(e))
@@ -420,6 +439,7 @@ def run_outcome_tracker():
         result = OutcomeTracker().run()
         logger.info(f"Outcomes: TP={result['tp_hit']} SL={result['sl_hit']} "
                     f"EXPIRED={result['expired']} OPEN={result['still_open']}")
+        _sync_state("outcome_tracker")
         _write_scheduler_status(
             "outcome_tracker",
             "ok",
@@ -484,6 +504,7 @@ def run_us_scan():
 
         stats = broker.get_stats()
         logger.info(f"US scan: {len(new_signals)} new | open={stats['open_positions']}")
+        _sync_state("us_scan")
         _write_scheduler_status("us_scan", "ok", f"New signals: {len(new_signals)}")
     except Exception as e:
         _write_scheduler_status("us_scan", "error", str(e))
@@ -552,6 +573,7 @@ def run_crypto_scan():
         logger.info(f"Crypto scan done: {len(new_signals)} new | "
                     f"open={stats['open_positions']} | "
                     f"total P&L={stats['total_pnl_usdt']:+.2f} USDT")
+        _sync_state("crypto_scan")
         _write_scheduler_status("crypto_scan", "ok", f"New signals: {len(new_signals)}")
     except Exception as e:
         _write_scheduler_status("crypto_scan", "error", str(e))
@@ -794,6 +816,8 @@ if __name__ == "__main__":
         logger.info("Discord bot thread started")
     except Exception as e:
         logger.warning(f"Discord bot failed to start: {e}")
+
+    _sync_state("scheduler_startup")
 
     try:
         scheduler.start()

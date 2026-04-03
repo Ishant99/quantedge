@@ -34,6 +34,9 @@ from services.dashboard_data import (
     signal_time_analytics as svc_signal_time_analytics,
     symbol_edge_analytics as svc_symbol_edge_analytics,
     trade_analytics as svc_trade_analytics,
+    unified_signal_frame as svc_unified_signal_frame,
+    unified_state as svc_unified_state,
+    unified_trade_frame as svc_unified_trade_frame,
 )
 
 # ── read live settings (not cached module-level config) ──────────────────────
@@ -609,6 +612,18 @@ def _trade_analytics(closed: pd.DataFrame) -> dict:
 
 def _normalise_trade_frame(trades) -> pd.DataFrame:
     return svc_normalise_trade_frame(trades)
+
+
+def _unified_state(auto_sync: bool = True) -> dict:
+    return svc_unified_state(auto_sync=auto_sync)
+
+
+def _unified_trade_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
+    return svc_unified_trade_frame(limit=limit, auto_sync=auto_sync)
+
+
+def _unified_signal_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
+    return svc_unified_signal_frame(limit=limit, auto_sync=auto_sync)
 
 
 def _signal_analytics(signals: pd.DataFrame) -> dict:
@@ -2117,11 +2132,10 @@ elif page == "HISTORY":
     tab_tr, tab_sig, tab_qual, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "SIGNAL QUALITY", "READINESS"])
 
     with tab_tr:
-        trades = PortfolioMemory().get_recent_trades(limit=500)
-        if not trades:
+        df = _unified_trade_frame(limit=500)
+        if df.empty:
             st.info("No closed trades yet — paper trades will appear here after SL/TP hits")
         else:
-            df = _normalise_trade_frame(trades)
             closed = df[df["status"].str.lower() == "closed"].copy()
 
             if not closed.empty:
@@ -2265,11 +2279,10 @@ elif page == "HISTORY":
                 """, unsafe_allow_html=True)
 
     with tab_qual:
-        signals = _get_recent_signals(limit=500)
-        if not signals:
+        sig_df = _unified_signal_frame(limit=500)
+        if sig_df.empty:
             st.info("No signal history yet.")
         else:
-            sig_df = pd.DataFrame(signals)
             qa = _signal_analytics(sig_df)
             time_qa = _signal_time_analytics(sig_df)
 

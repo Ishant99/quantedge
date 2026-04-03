@@ -13,6 +13,10 @@ from services.dashboard_data import (
     signal_time_analytics,
     symbol_edge_analytics,
     trade_analytics,
+    unified_position_frame,
+    unified_signal_frame,
+    unified_state,
+    unified_trade_frame,
 )
 from services.runtime_state import get_health_snapshot
 
@@ -56,11 +60,11 @@ def _load_portfolio_state():
 
 
 def _recent_signals(limit: int = 25):
-    return _cached(("recent_signals", limit), 30, lambda: PortfolioMemory().get_recent_signals(limit=limit))
+    return _cached(("recent_signals", limit), 30, lambda: unified_signal_frame(limit=limit).to_dict(orient="records"))
 
 
 def _recent_trades(limit: int = 200):
-    return _cached(("recent_trades", limit), 30, lambda: PortfolioMemory().get_recent_trades(limit=limit))
+    return _cached(("recent_trades", limit), 30, lambda: unified_trade_frame(limit=limit).to_dict(orient="records"))
 
 
 def _recent_outcomes(limit: int = 200):
@@ -169,6 +173,8 @@ def portfolio_payload() -> dict:
     cash = float(pf.get("cash", vc))
     positions = pf.get("positions", {}) or {}
     nse_pnl = cash - vc
+    state = unified_state()
+    summary = state.get("summary") or {}
     markets = _broker_market_stats()
     inr_per_usd = float(_cfg("INR_PER_USD", 83.0))
     combined_pnl = (
@@ -184,7 +190,8 @@ def portfolio_payload() -> dict:
         "nse_pnl": nse_pnl,
         "combined_pnl_inr": combined_pnl,
         "open_positions": positions,
-        "open_position_count": len(positions),
+        "open_position_count": int(summary.get("combined_open_positions", len(positions))),
+        "unified_open_positions": state.get("positions", []),
         "memory_stats": _memory_stats(),
         "markets": markets,
     }
@@ -221,6 +228,7 @@ def activity_payload(limit: int = 12) -> dict:
 def overview_payload() -> dict:
     market = _market_files()
     portfolio = portfolio_payload()
+    state = unified_state()
     return {
         "timestamp": datetime.now().isoformat(),
         "portfolio": {
@@ -230,23 +238,17 @@ def overview_payload() -> dict:
             "open_position_count": portfolio["open_position_count"],
         },
         "memory_stats": portfolio["memory_stats"],
+        "sync": state.get("summary", {}),
         "market": market,
         "health": get_health_snapshot(_cfg),
     }
 
 
 def analytics_summary_payload() -> dict:
-    trades = _recent_trades(limit=500)
-    trade_frame = None
-    if trades:
-        import pandas as pd
-        trade_frame = pd.DataFrame(trades)
-        trade_frame = trade_frame[trade_frame["status"] == "closed"].copy()
-    signals = _recent_signals(limit=500)
-    signal_frame = None
-    if signals:
-        import pandas as pd
-        signal_frame = pd.DataFrame(signals)
+    trade_frame = unified_trade_frame(limit=500)
+    if not trade_frame.empty:
+        trade_frame = trade_frame[trade_frame["status"].astype(str).str.lower() == "closed"].copy()
+    signal_frame = unified_signal_frame(limit=500)
     outcomes = _recent_outcomes(limit=300)
     outcome_frame = None
     if outcomes:

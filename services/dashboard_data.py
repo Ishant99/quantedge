@@ -3,6 +3,7 @@ import yfinance as yf
 
 from memory.portfolio_memory import PortfolioMemory
 from services.runtime_state import read_scheduler_status
+from services.state_sync import load_unified_state
 
 
 def normalise_trade_frame(trades) -> pd.DataFrame:
@@ -35,6 +36,40 @@ def normalise_trade_frame(trades) -> pd.DataFrame:
         frame[numeric] = pd.to_numeric(frame[numeric], errors="coerce").fillna(0)
     frame["entry_time"] = frame["entry_time"].fillna("").astype(str)
     frame["exit_time"] = frame["exit_time"].fillna("").astype(str)
+    return frame
+
+
+def unified_state(auto_sync: bool = True) -> dict:
+    return load_unified_state(auto_sync=auto_sync)
+
+
+def unified_trade_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
+    state = unified_state(auto_sync=auto_sync)
+    rows = (state.get("trades") or [])[:limit]
+    return normalise_trade_frame(rows)
+
+
+def unified_position_frame(limit: int = 200, auto_sync: bool = True) -> pd.DataFrame:
+    state = unified_state(auto_sync=auto_sync)
+    rows = (state.get("positions") or [])[:limit]
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    for col in ["quantity", "entry_price", "current_price", "pnl", "pnl_pct"]:
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce").fillna(0)
+    return frame
+
+
+def unified_signal_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
+    state = unified_state(auto_sync=auto_sync)
+    rows = (state.get("signals") or [])[:limit]
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    for col in ["confidence", "entry_price", "stop_loss", "take_profit", "position_size", "ta_score", "executed"]:
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce").fillna(0)
     return frame
 
 
@@ -83,25 +118,26 @@ def build_live_watchlist(signals: list[dict], positions: dict, limit: int = 8) -
 
 def build_activity_feed(limit: int = 12) -> pd.DataFrame:
     items: list[dict] = []
-    memory = PortfolioMemory()
+    state = unified_state(auto_sync=False)
 
-    for sig in memory.get_recent_signals(limit=6):
+    for sig in (state.get("signals") or [])[:6]:
         items.append({
             "Time": (sig.get("timestamp") or "")[:16],
             "Type": "SIGNAL",
-            "Item": sig.get("symbol", ""),
-            "Detail": f"{sig.get('action', '')} {sig.get('confidence', 0):.0%}",
+            "Item": f"{sig.get('market', '').upper()} {sig.get('symbol', '')}".strip(),
+            "Detail": f"{sig.get('action', '')} {sig.get('confidence', 0):.0%}".strip(),
         })
 
-    for trade in memory.get_recent_trades(limit=6):
+    for trade in (state.get("trades") or [])[:6]:
         ts = (trade.get("exit_time") or trade.get("entry_time") or "")[:16]
         pnl = trade.get("pnl")
-        pnl_txt = f" | Rs.{pnl:+,.0f}" if pnl is not None else ""
+        market = str(trade.get("market", "")).upper()
+        pnl_txt = f" | {pnl:+,.0f}" if pnl is not None else ""
         items.append({
             "Time": ts,
             "Type": "TRADE",
-            "Item": trade.get("symbol", ""),
-            "Detail": f"{trade.get('status', '').upper()} {trade.get('action', '')}{pnl_txt}",
+            "Item": f"{market} {trade.get('symbol', '')}".strip(),
+            "Detail": f"{trade.get('status', '').upper()} {trade.get('side', '')}{pnl_txt}".strip(),
         })
 
     try:
