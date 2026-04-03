@@ -400,9 +400,8 @@ def _chart(symbol, period="3mo", height=200):
             line=dict(color="#FF6B00", width=1), name="EMA20"))
         fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"],
             line=dict(color="#888888", width=1), name="EMA50"))
-        fig.update_layout(**_plotly_cfg(height=height),
+        fig.update_layout(**_plotly_cfg(height=height, showlegend=True),
                           xaxis_rangeslider_visible=False,
-                          showlegend=True,
                           legend=dict(orientation="h", y=1.05,
                                       font=dict(color="#666666", size=9)))
         st.plotly_chart(fig, use_container_width=True)
@@ -2207,8 +2206,7 @@ elif page == "HISTORY":
                 fig.add_trace(go.Scatter(x=list(range(len(closed))), y=closed["pnl"].cumsum(),
                                          mode="lines", line=dict(color="#FF6B00", width=1.5),
                                          name="Cumulative", yaxis="y2"))
-                fig.update_layout(**_plotly_cfg(220),
-                                  showlegend=True,
+                fig.update_layout(**_plotly_cfg(220, showlegend=True),
                                   yaxis2=dict(overlaying="y", side="right",
                                               color="#FF6B00", gridcolor="rgba(0,0,0,0)"),
                                   legend=dict(orientation="h",
