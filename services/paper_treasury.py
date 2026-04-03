@@ -129,7 +129,10 @@ def build_treasury_snapshot(state: dict | None = None) -> dict:
             bucket["position_count"] += 1
 
     reserved_cash_inr = round(sum(deployed.values()), 2)
-    available_cash_inr = round(base_cash_inr - deployed["fno"] - deployed["us"] - deployed["crypto"], 2)
+    available_cash_before_reserve_inr = round(base_cash_inr, 2)
+    spendable_cash_inr = round(base_cash_inr - reserved_cash_inr, 2)
+    over_allocation_inr = round(max(0.0, reserved_cash_inr - available_cash_before_reserve_inr), 2)
+    available_cash_inr = spendable_cash_inr
     total_equity_inr = round(base_cash_inr + unrealized, 2)
 
     warnings = []
@@ -153,8 +156,11 @@ def build_treasury_snapshot(state: dict | None = None) -> dict:
         "source_synced_at": state.get("synced_at", ""),
         "starting_capital_inr": round(start_capital, 2),
         "base_cash_inr": base_cash_inr,
+        "available_cash_before_reserve_inr": available_cash_before_reserve_inr,
         "available_cash_inr": available_cash_inr,
+        "spendable_cash_inr": spendable_cash_inr,
         "reserved_cash_inr": reserved_cash_inr,
+        "over_allocation_inr": over_allocation_inr,
         "unrealized_pnl_inr": round(unrealized, 2),
         "total_equity_inr": total_equity_inr,
         "market_deployed_inr": {k: round(v, 2) for k, v in deployed.items()},

@@ -44,6 +44,7 @@ from services.review_report import (
     render_review_markdown as svc_render_review_markdown,
     write_review_report as svc_write_review_report,
 )
+from services.paper_reset import archive_and_reset_paper_state
 from services.state_sync import sync_unified_state as svc_sync_unified_state
 
 # ── read live settings (not cached module-level config) ──────────────────────
@@ -656,6 +657,16 @@ def _render_treasury_warning(snapshot: dict):
             st.warning(f"Risk Warning: {warning}")
 
 
+def _render_nse_reconciliation_warning(state: dict):
+    summary = state.get("summary", {}) if isinstance(state, dict) else {}
+    if summary.get("nse_summary_mismatch"):
+        st.warning(
+            f"NSE reconciliation mismatch: summary P&L Rs.{float(summary.get('nse_total_pnl', 0) or 0):+,.0f} "
+            f"vs detailed trade P&L Rs.{float(summary.get('nse_detailed_trade_pnl', 0) or 0):+,.0f}. "
+            f"Delta Rs.{float(summary.get('nse_reconciliation_delta', 0) or 0):+,.0f}."
+        )
+
+
 def _unified_trade_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
     return svc_unified_trade_frame(limit=limit, auto_sync=auto_sync)
 
@@ -956,9 +967,13 @@ if page == "TODAY":
     k2.metric("NSE P&L",        f"Rs.{pnl:+,.0f}",     delta=f"{pnl/vc*100:+.2f}%")
     k3.metric("OPEN POSITIONS", _total_open, delta=f"NSE:{len(pos)} F&O:{_fno_open}")
     k4,k5,k6 = st.columns(3)
-    k4.metric("FREE CASH",      f"Rs.{float(_treasury.get('available_cash_inr', cash) or cash):,.0f}")
-    k5.metric("RESERVED",       f"Rs.{float(_treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
-    k6.metric("COMBINED P&L",   f"Rs.{_comb:+,.0f}")
+    k4.metric("CASH BEFORE RESERVE", f"Rs.{float(_treasury.get('available_cash_before_reserve_inr', cash) or cash):,.0f}")
+    k5.metric("RESERVED CAPITAL",    f"Rs.{float(_treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
+    k6.metric("OVER ALLOCATION",     f"Rs.{float(_treasury.get('over_allocation_inr', 0) or 0):,.0f}")
+    k7,k8,k9 = st.columns(3)
+    k7.metric("SPENDABLE CASH",      f"Rs.{float(_treasury.get('spendable_cash_inr', cash) or cash):,.0f}")
+    k8.metric("COMBINED P&L",        f"Rs.{_comb:+,.0f}")
+    k9.metric("TOTAL EQUITY",        f"Rs.{float(_treasury.get('total_equity_inr', cash) or cash):,.0f}")
 
     st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
 
@@ -1616,12 +1631,15 @@ elif page == "PORTFOLIO":
     c3.metric("CRYPTO P&L",   f"Rs.{cry_pnl_inr:+,.0f}")
     c4,c5,c6 = st.columns(3)
     c4.metric("US P&L",       f"Rs.{us_pnl_inr:+,.0f}")
-    c5.metric("FREE CASH",    f"Rs.{float(treasury.get('available_cash_inr', cash) or cash):,.0f}")
-    c6.metric("RESERVED",     f"Rs.{float(treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
+    c5.metric("CASH BEFORE RESERVE", f"Rs.{float(treasury.get('available_cash_before_reserve_inr', cash) or cash):,.0f}")
+    c6.metric("RESERVED CAPITAL",    f"Rs.{float(treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
     c7,c8,c9 = st.columns(3)
-    c7.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
-    c8.metric("TOTAL EQUITY", f"Rs.{float(treasury.get('total_equity_inr', cash) or cash):,.0f}")
+    c7.metric("OVER ALLOCATION", f"Rs.{float(treasury.get('over_allocation_inr', 0) or 0):,.0f}")
+    c8.metric("SPENDABLE CASH", f"Rs.{float(treasury.get('spendable_cash_inr', cash) or cash):,.0f}")
     c9.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
+    c10,c11 = st.columns(2)
+    c10.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
+    c11.metric("TOTAL EQUITY", f"Rs.{float(treasury.get('total_equity_inr', cash) or cash):,.0f}")
 
     tab_eq, tab_pos = st.tabs(["EQUITY", "POSITIONS"])
 
@@ -2179,9 +2197,11 @@ elif page == "HISTORY":
 
     with tab_tr:
         df = _unified_trade_frame(limit=500)
+        state = _unified_state(auto_sync=False)
         if df.empty:
             st.info("No closed trades yet — paper trades will appear here after SL/TP hits")
         else:
+            _render_nse_reconciliation_warning(state)
             closed = df[df["status"].str.lower() == "closed"].copy()
 
             if not closed.empty:
@@ -2236,10 +2256,14 @@ elif page == "HISTORY":
                     st.dataframe(analytics.get("entry_hours", pd.DataFrame()), use_container_width=True,
                                  hide_index=True, height=220)
 
-            f1, f2 = st.columns(2)
-            sf    = f1.selectbox("FILTER STATUS", ["All","open","closed"])
-            sym_f = f2.text_input("FILTER SYMBOL", "")
+            f1, f2, f3 = st.columns(3)
+            mf    = f1.selectbox("FILTER MARKET", ["All", "NSE", "F&O", "US", "Crypto"])
+            sf    = f2.selectbox("FILTER STATUS", ["All","open","closed"])
+            sym_f = f3.text_input("FILTER SYMBOL", "")
             filtered = df.copy()
+            if mf != "All":
+                market_map = {"NSE": "nse", "F&O": "fno", "US": "us", "Crypto": "crypto"}
+                filtered = filtered[filtered["market"].astype(str).str.lower() == market_map[mf]]
             if sf != "All":
                 filtered = filtered[filtered["status"].str.lower() == sf.lower()]
             if sym_f:
@@ -3016,6 +3040,42 @@ elif page == "CONFIG":
     with tab_ops:
         st.markdown('<div class="bb-header">OPERATIONS</div>', unsafe_allow_html=True)
         _render_health_panel(_get_health_snapshot(), show_actions=True)
+
+        st.markdown('<div class="bb-header" style="margin-top:14px;">STATE RECONCILIATION</div>',
+                    unsafe_allow_html=True)
+        st.caption("Rebuild unified history from DB/CSV sources, or archive the current paper book and start fresh from zero.")
+
+        ops1, ops2 = st.columns(2)
+        with ops1:
+            if st.button("REBUILD UNIFIED HISTORY", use_container_width=True):
+                try:
+                    svc_sync_unified_state()
+                    st.cache_data.clear()
+                    st.success("Unified history rebuilt from current runtime sources.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not rebuild unified history: {e}")
+        with ops2:
+            if st.button("ARCHIVE + RESET PAPER STATE", use_container_width=True):
+                try:
+                    result = archive_and_reset_paper_state()
+                    svc_sync_unified_state()
+                    st.cache_data.clear()
+                    st.success(
+                        f"Paper state reset. Archive saved to {result.get('archive_dir', 'logs/archive')}."
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not reset paper state: {e}")
+
+        ops_state = _unified_state(auto_sync=False)
+        ops_summary = ops_state.get("summary", {}) if isinstance(ops_state, dict) else {}
+        rec1, rec2, rec3, rec4 = st.columns(4)
+        rec1.metric("NSE SUMMARY P&L", f"Rs.{float(ops_summary.get('nse_total_pnl', 0) or 0):+,.0f}")
+        rec2.metric("NSE DETAIL P&L", f"Rs.{float(ops_summary.get('nse_detailed_trade_pnl', 0) or 0):+,.0f}")
+        rec3.metric("NSE TRADE ROWS", int(ops_summary.get("nse_trade_rows", 0) or 0))
+        rec4.metric("RECON DELTA", f"Rs.{float(ops_summary.get('nse_reconciliation_delta', 0) or 0):+,.0f}")
+        _render_nse_reconciliation_warning(ops_state)
 
         st.markdown('<div class="bb-header" style="margin-top:14px;">AGENT REVIEW REPORT</div>',
                     unsafe_allow_html=True)

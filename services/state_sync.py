@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import sqlite3
@@ -91,6 +92,74 @@ def _map_nse_trades(memory: PortfolioMemory, limit: int = 500) -> list[dict]:
             "capital": round(float(trade.get("entry_price", 0) or 0) * float(trade.get("qty", 0) or 0), 2),
         })
     return rows
+
+
+def _map_nse_csv_trades(limit: int = 500) -> list[dict]:
+    path = os.path.join("logs", "paper_trades.csv")
+    if not os.path.exists(path):
+        return []
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for idx, row in enumerate(reader, start=1):
+                symbol = str(row.get("symbol", "") or "")
+                trade_type = str(row.get("trade_type", "") or "paper")
+                action = str(row.get("action", "") or "")
+                timestamp = str(row.get("timestamp", "") or "")
+                qty = float(row.get("qty", 0) or 0)
+                entry_price = float(row.get("entry_price", 0) or 0)
+                exit_price = float(row.get("exit_price", 0) or 0)
+                pnl = float(row.get("pnl", 0) or 0)
+                pnl_pct = float(row.get("pnl_pct", 0) or 0)
+                status = "closed" if action.upper().startswith("CLOSED") or exit_price else "open"
+                rows.append({
+                    "trade_key": f"nsecsv:{symbol}:{timestamp}:{idx}",
+                    "market": "nse",
+                    "symbol": symbol,
+                    "instrument": symbol,
+                    "side": action or "SELL",
+                    "strategy": trade_type,
+                    "status": status,
+                    "quantity": qty,
+                    "entry_price": entry_price,
+                    "current_price": exit_price or entry_price,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "entry_time": timestamp,
+                    "exit_time": timestamp if status == "closed" else "",
+                    "expiry": "",
+                    "source": "csv_fallback",
+                    "reasoning": "",
+                    "capital": round(entry_price * qty, 2),
+                })
+    except Exception as exc:
+        logger.warning(f"Could not read NSE CSV trade audit: {exc}")
+        return []
+    return list(reversed(rows[-limit:]))
+
+
+def _dedupe_nse_trade_rows(rows: list[dict]) -> list[dict]:
+    deduped = []
+    seen = set()
+    for row in rows:
+        key = (
+            row.get("market"),
+            row.get("symbol"),
+            row.get("status"),
+            round(float(row.get("quantity", 0) or 0), 4),
+            round(float(row.get("entry_price", 0) or 0), 4),
+            round(float(row.get("exit_price", 0) or 0), 4),
+            round(float(row.get("pnl", 0) or 0), 4),
+            row.get("entry_time"),
+            row.get("exit_time"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
 
 
 def _map_signal_rows(conn: sqlite3.Connection) -> list[dict]:
@@ -332,7 +401,7 @@ def compose_unified_state() -> dict:
     )
 
     nse_positions = _nse_positions(portfolio)
-    nse_trades = _map_nse_trades(memory)
+    nse_trades = _dedupe_nse_trade_rows(_map_nse_trades(memory) + _map_nse_csv_trades())
 
     signals = []
     positions = list(nse_positions)
@@ -367,6 +436,9 @@ def compose_unified_state() -> dict:
     crypto_total = sum(float(t.get("pnl", 0) or 0) for t in trades if t.get("market") == "crypto" and t.get("status") == "closed")
     us_total = sum(float(t.get("pnl", 0) or 0) for t in trades if t.get("market") == "us" and t.get("status") == "closed")
     nse_total_pnl = round(float(portfolio.get("cash", VIRTUAL_CAPITAL)) - float(VIRTUAL_CAPITAL), 2)
+    nse_closed_rows = [row for row in nse_trades if str(row.get("status", "")).lower() == "closed"]
+    nse_detailed_pnl = round(sum(float(row.get("pnl", 0) or 0) for row in nse_closed_rows), 2)
+    nse_recon_delta = round(nse_total_pnl - nse_detailed_pnl, 2)
 
     return {
         "synced_at": datetime.now().isoformat(),
@@ -378,6 +450,10 @@ def compose_unified_state() -> dict:
             "nse_wins": int(portfolio.get("wins", 0) or 0),
             "nse_open_positions": len(nse_positions),
             "nse_total_pnl": nse_total_pnl,
+            "nse_detailed_trade_pnl": nse_detailed_pnl,
+            "nse_reconciliation_delta": nse_recon_delta,
+            "nse_trade_rows": len(nse_closed_rows),
+            "nse_summary_mismatch": abs(nse_recon_delta) > 1.0,
             "fno_open_positions": len(fno_positions),
             "fno_total_pnl": round(fno_total, 2),
             "crypto_open_positions": len(crypto_positions),
