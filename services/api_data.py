@@ -178,6 +178,7 @@ def portfolio_payload() -> dict:
     nse_pnl = cash - vc
     state = unified_state()
     summary = state.get("summary") or {}
+    treasury = state.get("treasury") or {}
     markets = _broker_market_stats()
     inr_per_usd = float(_cfg("INR_PER_USD", 83.0))
     combined_pnl = (
@@ -192,6 +193,7 @@ def portfolio_payload() -> dict:
         "cash": cash,
         "nse_pnl": nse_pnl,
         "combined_pnl_inr": combined_pnl,
+        "treasury": treasury,
         "open_positions": positions,
         "open_position_count": int(summary.get("combined_open_positions", len(positions))),
         "unified_open_positions": state.get("positions", []),
@@ -239,9 +241,12 @@ def overview_payload() -> dict:
             "nse_pnl": portfolio["nse_pnl"],
             "combined_pnl_inr": portfolio["combined_pnl_inr"],
             "open_position_count": portfolio["open_position_count"],
+            "treasury_available_cash_inr": (portfolio.get("treasury") or {}).get("available_cash_inr", 0),
+            "treasury_reserved_cash_inr": (portfolio.get("treasury") or {}).get("reserved_cash_inr", 0),
         },
         "memory_stats": portfolio["memory_stats"],
         "sync": state.get("summary", {}),
+        "treasury": state.get("treasury", {}),
         "market": market,
         "health": get_health_snapshot(_cfg),
     }

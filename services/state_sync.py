@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime
 
 from config import INR_PER_USD, INR_PER_USDT, SQLITE_DB_FILE, VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE
+from services.paper_treasury import reserve_for_fno_order, write_treasury_snapshot
 from memory.portfolio_memory import PortfolioMemory
 from services.review_report import write_review_report
 from utils import get_logger
@@ -58,6 +59,7 @@ def _nse_positions(portfolio: dict) -> list[dict]:
             "expiry": "",
             "source": "virtual_portfolio",
             "reasoning": "",
+            "capital": round(entry * qty, 2),
         })
     return rows
 
@@ -86,6 +88,7 @@ def _map_nse_trades(memory: PortfolioMemory, limit: int = 500) -> list[dict]:
             "expiry": "",
             "source": "portfolio_memory",
             "reasoning": "",
+            "capital": round(float(trade.get("entry_price", 0) or 0) * float(trade.get("qty", 0) or 0), 2),
         })
     return rows
 
@@ -154,7 +157,9 @@ def _map_fno_rows(conn: sqlite3.Connection) -> tuple[list[dict], list[dict], lis
             "expiry": row.get("expiry", ""),
             "source": "fno_trades",
             "reasoning": row.get("reasoning", ""),
+            "capital": 0.0,
         }
+        trade_record["capital"] = reserve_for_fno_order(symbol, side, entry, qty)
         trades.append(trade_record)
         if status == "open":
             positions.append({**trade_record, "position_key": trade_record["trade_key"]})
@@ -380,6 +385,7 @@ def compose_unified_state() -> dict:
             "us_open_positions": len(us_positions),
             "us_total_pnl": round(us_total, 4),
         },
+        "treasury": {},
         "positions": positions,
         "trades": trades[:500],
         "signals": signals[:500],
@@ -497,6 +503,9 @@ def sync_unified_state() -> dict:
     except sqlite3.Error as exc:
         logger.warning(f"Unified state could not write SQLite sync tables: {exc}")
 
+    with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2)
+    state["treasury"] = write_treasury_snapshot(state)
     with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2)
     write_review_report(state)

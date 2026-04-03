@@ -646,6 +646,17 @@ def _unified_state(auto_sync: bool = True) -> dict:
     return svc_unified_state(auto_sync=auto_sync)
 
 
+def _treasury_snapshot(auto_sync: bool = True) -> dict:
+    return (_unified_state(auto_sync=auto_sync).get("treasury") or {})
+
+
+def _render_treasury_warning(snapshot: dict):
+    warnings = list(snapshot.get("warnings") or [])
+    if warnings:
+        for warning in warnings[:3]:
+            st.warning(f"Risk Warning: {warning}")
+
+
 def _unified_trade_frame(limit: int = 500, auto_sync: bool = True) -> pd.DataFrame:
     return svc_unified_trade_frame(limit=limit, auto_sync=auto_sync)
 
@@ -882,6 +893,7 @@ if page == "TODAY":
     _cry_open = _cry_s.get("open_positions", 0) or 0
     _us_open  = _us_s.get("open_positions",  0) or 0
     _total_open = len(pos) + _fno_open + _cry_open + _us_open
+    _treasury = _treasury_snapshot(auto_sync=False)
 
     # ── Ticker strip ──────────────────────────────────────────────────────────
     st.markdown(f"""
@@ -937,14 +949,16 @@ if page == "TODAY":
     </div>
     """, unsafe_allow_html=True)
 
+    _render_treasury_warning(_treasury)
+
     # ── KPI row ───────────────────────────────────────────────────────────────
     k1,k2,k3 = st.columns(3)
     k1.metric("PORTFOLIO",      f"Rs.{cash:,.0f}")
     k2.metric("NSE P&L",        f"Rs.{pnl:+,.0f}",     delta=f"{pnl/vc*100:+.2f}%")
     k3.metric("OPEN POSITIONS", _total_open, delta=f"NSE:{len(pos)} F&O:{_fno_open}")
     k4,k5,k6 = st.columns(3)
-    k4.metric("TOTAL TRADES",   stats["total_trades"])
-    k5.metric("WIN RATE",       f"{stats['win_rate_pct']:.1f}%")
+    k4.metric("FREE CASH",      f"Rs.{float(_treasury.get('available_cash_inr', cash) or cash):,.0f}")
+    k5.metric("RESERVED",       f"Rs.{float(_treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
     k6.metric("COMBINED P&L",   f"Rs.{_comb:+,.0f}")
 
     st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
@@ -1594,6 +1608,8 @@ elif page == "PORTFOLIO":
     cry_pnl_inr = (cry_s.get("total_pnl_usdt", 0) or 0) * _pf_inr
     us_pnl_inr  = (us_s.get("total_pnl_usd",  0) or 0) * _pf_inr
     combined_pnl = pnl + fno_pnl + cry_pnl_inr + us_pnl_inr
+    treasury = _treasury_snapshot(auto_sync=False)
+    _render_treasury_warning(treasury)
 
     c1,c2,c3 = st.columns(3)
     c1.metric("NSE EQUITY",   f"Rs.{cash:,.0f}", delta=f"Rs.{pnl:+,.0f}")
@@ -1601,8 +1617,12 @@ elif page == "PORTFOLIO":
     c3.metric("CRYPTO P&L",   f"Rs.{cry_pnl_inr:+,.0f}")
     c4,c5,c6 = st.columns(3)
     c4.metric("US P&L",       f"Rs.{us_pnl_inr:+,.0f}")
-    c5.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
-    c6.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
+    c5.metric("FREE CASH",    f"Rs.{float(treasury.get('available_cash_inr', cash) or cash):,.0f}")
+    c6.metric("RESERVED",     f"Rs.{float(treasury.get('reserved_cash_inr', 0) or 0):,.0f}")
+    c7,c8,c9 = st.columns(3)
+    c7.metric("COMBINED P&L", f"Rs.{combined_pnl:+,.0f}")
+    c8.metric("TOTAL EQUITY", f"Rs.{float(treasury.get('total_equity_inr', cash) or cash):,.0f}")
+    c9.metric("WIN RATE",     f"{stats['win_rate_pct']:.1f}%")
 
     tab_eq, tab_pos = st.tabs(["EQUITY", "POSITIONS"])
 

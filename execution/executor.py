@@ -19,6 +19,7 @@ from config import (
     SQLITE_DB_FILE
 )
 from strategy.engine import TradeSignal
+from services.paper_treasury import can_allocate, log_treasury_event, write_treasury_snapshot
 from utils import get_logger
 
 logger = get_logger("Executor")
@@ -49,6 +50,9 @@ class PaperExecutor:
                 return {"status": "skipped", "reason": "position already open"}
 
             cost = signal.entry_price * signal.position_size
+            ok, reason, _ = can_allocate("nse", cost)
+            if not ok:
+                return {"status": "rejected", "reason": reason}
             if cost > self.portfolio["cash"]:
                 return {"status": "rejected", "reason": "insufficient cash"}
 
@@ -70,6 +74,7 @@ class PaperExecutor:
                 "mode":    "paper",
             }
             logger.info(f"PAPER BUY  {signal.symbol} × {signal.position_size} @ ₹{signal.entry_price}")
+            log_treasury_event("reserve_open", "nse", cost, f"{signal.symbol} BUY", {"symbol": signal.symbol})
 
         elif signal.action == "SELL":
             pos = self.portfolio["positions"].get(signal.symbol)
@@ -94,8 +99,10 @@ class PaperExecutor:
                 "mode":     "paper",
             }
             logger.info(f"PAPER SELL {signal.symbol} × {pos['qty']} @ ₹{signal.entry_price} | PnL ₹{pnl:+,.0f}")
+            log_treasury_event("release_close", "nse", pos["entry"] * pos["qty"], f"{signal.symbol} SELL", {"symbol": signal.symbol, "pnl": round(pnl, 2)})
 
         self._save_portfolio()
+        write_treasury_snapshot()
         self._log_trade(signal, result)
         return result
 

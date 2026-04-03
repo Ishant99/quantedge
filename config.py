@@ -36,6 +36,10 @@ TRADING_MODE = _S("TRADING_MODE", "TRADING_MODE", "paper")   # paper | live
 # -----------------------------------------------------------------------------
 VIRTUAL_CAPITAL = int(_S("VIRTUAL_CAPITAL", "VIRTUAL_CAPITAL", 1_000_000))
 VIRTUAL_PORTFOLIO_FILE = "logs/virtual_portfolio.json"
+PAPER_MAX_ALLOC_NSE_PCT    = float(_S("PAPER_MAX_ALLOC_NSE_PCT", default=0.40))
+PAPER_MAX_ALLOC_FNO_PCT    = float(_S("PAPER_MAX_ALLOC_FNO_PCT", default=0.30))
+PAPER_MAX_ALLOC_US_PCT     = float(_S("PAPER_MAX_ALLOC_US_PCT", default=0.20))
+PAPER_MAX_ALLOC_CRYPTO_PCT = float(_S("PAPER_MAX_ALLOC_CRYPTO_PCT", default=0.10))
 
 # -----------------------------------------------------------------------------
 # ZERODHA KITE API (live mode — fill via .env file)
@@ -179,6 +183,12 @@ FUTURES_RISK_FREE_RATE = float(_S("FUTURES_RISK_FREE_RATE", default=0.065))  # 6
 FUTURES_DEFAULT_DTE    = int(  _S("FUTURES_DEFAULT_DTE",    default=15))     # mid-month
 FUTURES_SL_PCT         = float(_S("FUTURES_SL_PCT",         default=0.02))   # 2% SL
 FUTURES_TP_PCT         = float(_S("FUTURES_TP_PCT",         default=0.03))   # 3% TP
+FNO_FUT_MARGIN_PCT     = float(_S("FNO_FUT_MARGIN_PCT",     default=0.15))
+FNO_SELL_RESERVE_MULT  = float(_S("FNO_SELL_RESERVE_MULT",  default=2.5))
+FNO_MAX_STRUCTURES_PER_UNDERLYING = int(_S("FNO_MAX_STRUCTURES_PER_UNDERLYING", default=2))
+FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT", default=0.15))
+FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT", default=0.15))
+FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE = bool(_S("FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE", default=True))
 
 # INR conversion rate for combined P&L display
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))

@@ -13,6 +13,12 @@ import sqlite3
 from datetime import datetime
 from config import SQLITE_DB_FILE
 from data.crypto_scanner import CryptoScanner
+from services.paper_treasury import (
+    can_allocate,
+    log_treasury_event,
+    reserve_for_crypto_order,
+    write_treasury_snapshot,
+)
 from utils import get_logger
 
 logger = get_logger("CryptoPaperBroker")
@@ -47,6 +53,11 @@ class CryptoPaperBroker:
                        else entry_price * (1 + SL_PCT), 6)
         tp     = round(entry_price * (1 + TP_PCT) if direction == "LONG"
                        else entry_price * (1 - TP_PCT), 6)
+        reserve_inr = reserve_for_crypto_order(usdt_amount)
+        ok, reason, _ = can_allocate("crypto", reserve_inr)
+        if not ok:
+            logger.warning(f"Crypto treasury block for {symbol}: {reason}")
+            return None
 
         with self._conn() as conn:
             cur = conn.execute("""
@@ -58,6 +69,8 @@ class CryptoPaperBroker:
                   usdt_amount, sl, tp,
                   datetime.now().isoformat(), "open", reasoning))
             trade_id = cur.lastrowid
+        log_treasury_event("reserve_open", "crypto", reserve_inr, f"{symbol} {direction}", {"trade_id": trade_id, "symbol": symbol})
+        write_treasury_snapshot()
 
         logger.info(f"CRYPTO OPEN: {symbol} {direction} @ {entry_price:.4f} | "
                     f"Qty {qty:.4f} | SL {sl:.4f} | TP {tp:.4f} | id={trade_id}")
@@ -92,6 +105,14 @@ class CryptoPaperBroker:
                 WHERE id=?
             """, (exit_price, exit_price, pnl_usdt, pnl_pct,
                   datetime.now().isoformat(), reason, trade_id))
+        log_treasury_event(
+            "release_close",
+            "crypto",
+            reserve_for_crypto_order(usdt_in),
+            f"{symbol} {direction}",
+            {"trade_id": trade_id, "symbol": symbol, "pnl_usdt": pnl_usdt},
+        )
+        write_treasury_snapshot()
 
         result = {"trade_id": trade_id, "symbol": symbol, "direction": direction,
                   "entry": entry, "exit": exit_price,

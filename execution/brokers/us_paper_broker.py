@@ -12,6 +12,12 @@ import sqlite3
 from datetime import datetime
 from config import SQLITE_DB_FILE
 from data.us_scanner import USScanner
+from services.paper_treasury import (
+    can_allocate,
+    log_treasury_event,
+    reserve_for_us_order,
+    write_treasury_snapshot,
+)
 from utils import get_logger
 
 logger = get_logger("USPaperBroker")
@@ -41,6 +47,11 @@ class USPaperBroker:
                      else entry_price * (1 + SL_PCT), 4)
         tp   = round(entry_price * (1 + TP_PCT) if direction == "LONG"
                      else entry_price * (1 - TP_PCT), 4)
+        reserve_inr = reserve_for_us_order(usd_amount)
+        ok, reason, _ = can_allocate("us", reserve_inr)
+        if not ok:
+            logger.warning(f"US treasury block for {symbol}: {reason}")
+            return None
 
         with self._conn() as conn:
             cur = conn.execute("""
@@ -52,6 +63,8 @@ class USPaperBroker:
                   usd_amount, sl, tp,
                   datetime.now().isoformat(), "open", reasoning))
             trade_id = cur.lastrowid
+        log_treasury_event("reserve_open", "us", reserve_inr, f"{symbol} {direction}", {"trade_id": trade_id, "symbol": symbol})
+        write_treasury_snapshot()
 
         logger.info(f"US OPEN: {symbol} {direction} @ ${entry_price:.2f} | "
                     f"Qty {qty:.4f} | SL ${sl:.2f} | TP ${tp:.2f} | id={trade_id}")
@@ -61,12 +74,12 @@ class USPaperBroker:
                        reason: str = "MANUAL") -> dict | None:
         with self._conn() as conn:
             row = conn.execute("""
-                SELECT symbol, direction, entry_price, qty
+                SELECT symbol, direction, entry_price, qty, usd_amount
                 FROM us_trades WHERE id=? AND status='open'
             """, (trade_id,)).fetchone()
         if not row:
             return None
-        symbol, direction, entry, qty = row
+        symbol, direction, entry, qty, usd_amount = row
         if exit_price is None:
             exit_price = self.scanner.get_current_price(symbol) or entry
 
@@ -85,6 +98,14 @@ class USPaperBroker:
                 WHERE id=?
             """, (exit_price, exit_price, pnl_usd, pnl_pct,
                   datetime.now().isoformat(), reason, trade_id))
+        log_treasury_event(
+            "release_close",
+            "us",
+            reserve_for_us_order(usd_amount),
+            f"{symbol} {direction}",
+            {"trade_id": trade_id, "symbol": symbol, "pnl_usd": pnl_usd},
+        )
+        write_treasury_snapshot()
 
         logger.info(f"US CLOSE: {symbol} | Exit ${exit_price:.2f} | "
                     f"P&L ${pnl_usd:+.2f} ({pnl_pct:+.2f}%) | {reason}")

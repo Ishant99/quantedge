@@ -12,7 +12,14 @@ import sqlite3
 from datetime import datetime
 from config import SQLITE_DB_FILE, FNO_LOT_SIZES, FNO_TP_MULT, FNO_SL_MULT, FNO_MAX_POSITIONS
 from data.nse_options_chain import NSEOptionsChain
+from services.paper_treasury import (
+    can_allocate,
+    log_treasury_event,
+    reserve_for_fno_order,
+    write_treasury_snapshot,
+)
 from utils import get_logger
+import settings.manager as S
 
 logger   = get_logger("FNOPaperBroker")
 TP_MULT  = FNO_TP_MULT
@@ -21,6 +28,62 @@ LOT_SIZES = FNO_LOT_SIZES
 
 
 class FNOPaperBroker:
+
+    def _cfg(self, key: str, default=None):
+        return S.get(key, default)
+
+    def _structure_key(self, row: dict) -> str:
+        option_type = str(row.get("option_type", "")).upper()
+        instrument = str(row.get("instrument", "")).upper()
+        strike = int(row.get("strike", 0) or 0)
+        expiry = str(row.get("expiry", "") or "")
+        if option_type.startswith("SELL-"):
+            return f"{instrument}:{option_type.split('-')[-1]}:{strike}:{expiry}"
+        if option_type.startswith("FUT-"):
+            return f"{instrument}:{option_type}:{expiry}"
+        return f"{instrument}:{option_type}:{strike}:{expiry}"
+
+    def _open_rows(self, index: str | None = None) -> list[dict]:
+        rows = self.get_open_positions()
+        if index:
+            rows = [row for row in rows if str(row.get("instrument", "")).upper() == str(index).upper()]
+        return rows
+
+    def _structure_count(self, index: str) -> int:
+        return len({self._structure_key(row) for row in self._open_rows(index=index)})
+
+    def _has_open_short_structure(self, index: str) -> bool:
+        return any(str(row.get("option_type", "")).upper().startswith("SELL-") for row in self._open_rows(index=index))
+
+    def _underlying_limit_pct(self, index: str) -> float:
+        return float(self._cfg(f"FNO_MAX_UNDERLYING_EXPOSURE_{str(index).upper()}_PCT", 0.15) or 0.15)
+
+    def _check_underlying_risk(self, index: str, reserve_inr: float) -> tuple[bool, str]:
+        from config import VIRTUAL_CAPITAL
+
+        max_structures = int(self._cfg("FNO_MAX_STRUCTURES_PER_UNDERLYING", 2) or 2)
+        if self._structure_count(index) >= max_structures:
+            return False, f"{index} structure cap reached ({max_structures})"
+
+        existing_reserve = sum(
+            reserve_for_fno_order(
+                index=index,
+                option_type=str(row.get("option_type", "")),
+                entry_price=float(row.get("entry_premium", 0) or 0),
+                qty=float(row.get("qty", 0) or 0),
+            )
+            for row in self._open_rows(index=index)
+        )
+        max_allowed = float(VIRTUAL_CAPITAL) * self._underlying_limit_pct(index)
+        if existing_reserve + reserve_inr > max_allowed:
+            return False, f"{index} exposure cap exceeded (limit Rs.{max_allowed:,.0f})"
+        return True, ""
+
+    def _within_position_cap(self, additional_positions: int = 1) -> tuple[bool, str]:
+        open_count = self.get_stats()["open_positions"]
+        if open_count + additional_positions > FNO_MAX_POSITIONS:
+            return False, f"F&O position limit reached ({FNO_MAX_POSITIONS})"
+        return True, ""
 
     def _is_expired(self, expiry: str, today: datetime | None = None) -> bool:
         """Robust expiry comparison for values like 03-Apr-2026."""
@@ -50,9 +113,9 @@ class FNOPaperBroker:
         Returns trade_id or None if premium unavailable or position limit reached.
         """
         # Enforce position limit
-        open_count = self.get_stats()["open_positions"]
-        if open_count >= FNO_MAX_POSITIONS:
-            logger.warning(f"F&O position limit reached ({FNO_MAX_POSITIONS}) — skipping {index} {direction}")
+        ok, reason = self._within_position_cap(1)
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {direction}")
             return None
 
         opt_type = "CE" if direction == "CALL" else "PE"
@@ -67,6 +130,15 @@ class FNOPaperBroker:
 
         qty = lots * lot_size
         capital_used = round(entry_premium * qty, 2)
+        reserve_inr = reserve_for_fno_order(index, opt_type, entry_premium, qty)
+        ok, reason, _ = can_allocate("fno", reserve_inr)
+        if not ok:
+            logger.warning(f"F&O treasury block for {index} {strike}{opt_type}: {reason}")
+            return None
+        ok, reason = self._check_underlying_risk(index, reserve_inr)
+        if not ok:
+            logger.warning(f"F&O underlying block for {index} {strike}{opt_type}: {reason}")
+            return None
 
         with self._conn() as conn:
             cur = conn.execute("""
@@ -78,6 +150,8 @@ class FNOPaperBroker:
                   entry_premium, entry_premium,
                   datetime.now().isoformat(), "open", reasoning))
             trade_id = cur.lastrowid
+        log_treasury_event("reserve_open", "fno", reserve_inr, f"{index} {strike}{opt_type}", {"trade_id": trade_id, "index": index})
+        write_treasury_snapshot()
 
         logger.info(f"F&O OPEN: {index} {strike}{opt_type} | "
                     f"Entry Rs.{entry_premium} x {qty} = Rs.{capital_used:,.0f} | "
@@ -115,6 +189,9 @@ class FNOPaperBroker:
                 WHERE id=?
             """, (exit_premium, exit_premium, pnl, pnl_pct,
                   datetime.now().isoformat(), reason, trade_id))
+        reserve_inr = reserve_for_fno_order(index, opt_type, entry_prem, qty)
+        log_treasury_event("release_close", "fno", reserve_inr, f"{index} {strike}{opt_type}", {"trade_id": trade_id, "index": index, "pnl": pnl})
+        write_treasury_snapshot()
 
         result = {"trade_id": trade_id, "index": index, "strike": strike,
                   "option_type": opt_type, "entry": entry_prem,
@@ -238,6 +315,22 @@ class FNOPaperBroker:
         """
         lot_size = LOT_SIZES.get(index, 25)
         qty = lots * lot_size
+        reserve_inr = (
+            reserve_for_fno_order(index, f"SELL-CE-{strategy}", ce_premium, qty)
+            + reserve_for_fno_order(index, f"SELL-PE-{strategy}", pe_premium, qty)
+        )
+        ok, reason = self._within_position_cap(2)
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {strategy}")
+            return None, None
+        ok, reason, _ = can_allocate("fno", reserve_inr)
+        if not ok:
+            logger.warning(f"F&O treasury block for {index} {strategy}: {reason}")
+            return None, None
+        ok, reason = self._check_underlying_risk(index, reserve_inr)
+        if not ok:
+            logger.warning(f"F&O underlying block for {index} {strategy}: {reason}")
+            return None, None
 
         ce_id = pe_id = None
         with self._conn() as conn:
@@ -262,6 +355,8 @@ class FNOPaperBroker:
                   datetime.now().isoformat(), "open",
                   f"SELL {strategy} PE leg | {reasoning}"))
             pe_id = cur.lastrowid
+        log_treasury_event("reserve_open", "fno", reserve_inr, f"{index} {strategy}", {"ce_trade_id": ce_id, "pe_trade_id": pe_id, "index": index})
+        write_treasury_snapshot()
 
         logger.info(f"SELL OPEN: {index} {strategy} | "
                     f"CE {ce_strike} @ Rs.{ce_premium} + PE {pe_strike} @ Rs.{pe_premium} | "
@@ -334,6 +429,23 @@ class FNOPaperBroker:
         lot_size = LOT_SIZES.get(index, 75)
         qty      = lots * lot_size
         margin   = get_margin_required(index, price, lots)
+        ok, reason = self._within_position_cap(1)
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} FUT-{direction}")
+            return None
+        reserve_inr = reserve_for_fno_order(index, f"FUT-{direction}", price, qty)
+        ok, reason, _ = can_allocate("fno", reserve_inr)
+        if not ok:
+            logger.warning(f"F&O treasury block for {index} FUT-{direction}: {reason}")
+            return None
+        if direction.upper() == "SHORT" and bool(self._cfg("FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE", True)):
+            if self._has_open_short_structure(index):
+                logger.warning(f"F&O duplicate short block for {index}: open short-vol structure already exists")
+                return None
+        ok, reason = self._check_underlying_risk(index, reserve_inr)
+        if not ok:
+            logger.warning(f"F&O underlying block for {index} FUT-{direction}: {reason}")
+            return None
 
         with self._conn() as conn:
             cur = conn.execute("""
@@ -346,6 +458,8 @@ class FNOPaperBroker:
                   price, price,
                   datetime.now().isoformat(), "open", reasoning))
             trade_id = cur.lastrowid
+        log_treasury_event("reserve_open", "fno", reserve_inr, f"{index} FUT-{direction}", {"trade_id": trade_id, "index": index})
+        write_treasury_snapshot()
 
         logger.info(f"FUT OPEN: {index} {direction} | "
                     f"Price {price:,.0f} × {qty} | Margin Rs.{margin:,.0f} | id={trade_id}")
