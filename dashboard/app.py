@@ -38,6 +38,13 @@ from services.dashboard_data import (
     unified_state as svc_unified_state,
     unified_trade_frame as svc_unified_trade_frame,
 )
+from services.review_report import (
+    REVIEW_REPORT_JSON,
+    REVIEW_REPORT_MD,
+    render_review_markdown as svc_render_review_markdown,
+    write_review_report as svc_write_review_report,
+)
+from services.state_sync import sync_unified_state as svc_sync_unified_state
 
 # ── read live settings (not cached module-level config) ──────────────────────
 def _cfg(key, default=None):
@@ -427,6 +434,27 @@ def _get_memory_stats():
 def _get_recent_signals(limit=100):
     """Cached 60s — signal history from SQLite/ChromaDB."""
     return PortfolioMemory().get_recent_signals(limit=limit)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_review_report_json():
+    if os.path.exists(REVIEW_REPORT_JSON):
+        try:
+            with open(REVIEW_REPORT_JSON, encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception:
+            pass
+    state = svc_unified_state(auto_sync=True)
+    return svc_write_review_report(state)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_review_report_markdown():
+    if os.path.exists(REVIEW_REPORT_MD):
+        try:
+            with open(REVIEW_REPORT_MD, encoding="utf-8") as handle:
+                return handle.read()
+        except Exception:
+            pass
+    return svc_render_review_markdown(_load_review_report_json())
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _get_equity_snapshots():
@@ -2970,6 +2998,58 @@ elif page == "CONFIG":
     with tab_ops:
         st.markdown('<div class="bb-header">OPERATIONS</div>', unsafe_allow_html=True)
         _render_health_panel(_get_health_snapshot(), show_actions=True)
+
+        st.markdown('<div class="bb-header" style="margin-top:14px;">AGENT REVIEW REPORT</div>',
+                    unsafe_allow_html=True)
+        st.caption("Generate a synced review snapshot for current positions, trades, signals, and exposure without opening the server.")
+
+        rr1, rr2 = st.columns(2)
+        with rr1:
+            if st.button("GENERATE REVIEW REPORT", use_container_width=True):
+                try:
+                    svc_sync_unified_state()
+                    _load_review_report_json.clear()
+                    _load_review_report_markdown.clear()
+                    st.success("Review report generated.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not generate review report: {e}")
+        with rr2:
+            if st.button("REFRESH REVIEW PREVIEW", use_container_width=True):
+                _load_review_report_json.clear()
+                _load_review_report_markdown.clear()
+                st.rerun()
+
+        review = _load_review_report_json()
+        review_md = _load_review_report_markdown()
+        review_summary = review.get("summary", {}) if isinstance(review, dict) else {}
+
+        sr1, sr2, sr3, sr4 = st.columns(4)
+        sr1.metric("OPEN POSITIONS", review_summary.get("combined_open_positions", 0))
+        sr2.metric("OPEN P&L", f"Rs.{float(review_summary.get('combined_open_pnl_inr', 0) or 0):,.0f}")
+        sr3.metric("EXECUTED SIGNALS", review_summary.get("executed_signal_count", 0))
+        sr4.metric("CLOSED TRADES", review_summary.get("closed_trade_count", 0))
+
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "DOWNLOAD REVIEW.md",
+                data=review_md,
+                file_name="agent_review_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with dl2:
+            st.download_button(
+                "DOWNLOAD REVIEW.json",
+                data=json.dumps(review, indent=2),
+                file_name="agent_review_report.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        with st.expander("VIEW REVIEW REPORT", expanded=False):
+            st.markdown(review_md)
 
         st.markdown('<div class="bb-header" style="margin-top:14px;">DASHBOARD REFRESH</div>',
                     unsafe_allow_html=True)

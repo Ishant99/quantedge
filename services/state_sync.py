@@ -5,6 +5,7 @@ from datetime import datetime
 
 from config import INR_PER_USD, INR_PER_USDT, SQLITE_DB_FILE, VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE
 from memory.portfolio_memory import PortfolioMemory
+from services.review_report import write_review_report
 from utils import get_logger
 
 
@@ -498,6 +499,7 @@ def sync_unified_state() -> dict:
 
     with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2)
+    write_review_report(state)
     logger.info(
         "Unified state synced | positions=%s trades=%s signals=%s",
         len(state["positions"]), len(state["trades"]), len(state["signals"])

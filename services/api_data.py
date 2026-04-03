@@ -18,6 +18,7 @@ from services.dashboard_data import (
     unified_state,
     unified_trade_frame,
 )
+from services.review_report import build_review_report, render_review_markdown
 from services.runtime_state import get_health_snapshot
 
 
@@ -155,6 +156,8 @@ def api_meta() -> dict:
             "/api/watchlist?limit=8",
             "/api/activity?limit=12",
             "/api/analytics/summary",
+            "/api/review",
+            "/api/review.md",
         ],
     }
 
@@ -263,3 +266,11 @@ def analytics_summary_payload() -> dict:
         "outcome_analytics": _serialise_tables(outcome_bucket_analytics(outcome_frame)) if outcome_frame is not None and not outcome_frame.empty else {},
         "symbol_edge": _serialise_tables(symbol_edge_analytics(outcome_frame, min_sample=3)) if outcome_frame is not None and not outcome_frame.empty else {},
     }
+
+
+def review_payload() -> dict:
+    return build_review_report(unified_state())
+
+
+def review_markdown() -> str:
+    return render_review_markdown(review_payload())

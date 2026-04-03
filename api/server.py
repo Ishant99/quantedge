@@ -15,6 +15,8 @@ from services.api_data import (  # noqa: E402
     health_payload,
     overview_payload,
     portfolio_payload,
+    review_markdown,
+    review_payload,
     signals_payload,
     watchlist_payload,
 )
@@ -44,6 +46,16 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(self, status: int, body_text: str, content_type: str = "text/plain; charset=utf-8"):
+        body = body_text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self):
         self._send_json(200, {"ok": True})
 
@@ -62,7 +74,15 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
             "/api/watchlist": lambda: watchlist_payload(limit=_int_query(query, "limit", 8, 1, 50)),
             "/api/activity": lambda: activity_payload(limit=_int_query(query, "limit", 12, 1, 100)),
             "/api/analytics/summary": lambda: analytics_summary_payload(),
+            "/api/review": lambda: review_payload(),
         }
+
+        if path == "/api/review.md":
+            try:
+                self._send_text(200, review_markdown(), "text/markdown; charset=utf-8")
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc), "path": path})
+            return
 
         handler = routes.get(path)
         if not handler:
