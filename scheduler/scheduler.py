@@ -467,6 +467,8 @@ def run_us_scan():
         scanner     = USScanner()
         market_data = scanner.run(max_workers=15)
         if not market_data:
+            logger.warning("US scan: no data returned")
+            _write_scheduler_status("us_scan", "skipped", "No market data returned")
             return
 
         ta_results = TechnicalAgent().analyse_all(market_data)
@@ -503,9 +505,17 @@ def run_us_scan():
             send_telegram_message("\n".join(lines))
 
         stats = broker.get_stats()
-        logger.info(f"US scan: {len(new_signals)} new | open={stats['open_positions']}")
+        detail = (
+            f"Universe: {len(market_data)} | Analysed: {len(ta_results)} | "
+            f"New signals: {len(new_signals)} | Closed: {len(closed)} | "
+            f"Open positions: {stats['open_positions']}"
+        )
+        if not new_signals:
+            logger.info(f"US scan: no new trades | {detail}")
+        else:
+            logger.info(f"US scan complete | {detail}")
         _sync_state("us_scan")
-        _write_scheduler_status("us_scan", "ok", f"New signals: {len(new_signals)}")
+        _write_scheduler_status("us_scan", "ok", detail)
     except Exception as e:
         _write_scheduler_status("us_scan", "error", str(e))
         logger.error(f"US scan failed: {e}")
@@ -524,6 +534,7 @@ def run_crypto_scan():
         market_data = scanner.run(max_workers=10)
         if not market_data:
             logger.warning("Crypto scan: no data returned")
+            _write_scheduler_status("crypto_scan", "skipped", "No market data returned")
             return
 
         ta_results  = TechnicalAgent().analyse_all(market_data)
@@ -570,11 +581,18 @@ def run_crypto_scan():
             send_telegram_message("\n".join(lines))
 
         stats = broker.get_stats()
-        logger.info(f"Crypto scan done: {len(new_signals)} new | "
-                    f"open={stats['open_positions']} | "
-                    f"total P&L={stats['total_pnl_usdt']:+.2f} USDT")
+        detail = (
+            f"Universe: {len(market_data)} | Analysed: {len(ta_results)} | "
+            f"New signals: {len(new_signals)} | Closed: {len(closed)} | "
+            f"Open positions: {stats['open_positions']} | "
+            f"Total P&L: {stats['total_pnl_usdt']:+.2f} USDT"
+        )
+        if not new_signals:
+            logger.info(f"Crypto scan: no new trades | {detail}")
+        else:
+            logger.info(f"Crypto scan complete | {detail}")
         _sync_state("crypto_scan")
-        _write_scheduler_status("crypto_scan", "ok", f"New signals: {len(new_signals)}")
+        _write_scheduler_status("crypto_scan", "ok", detail)
     except Exception as e:
         _write_scheduler_status("crypto_scan", "error", str(e))
         logger.error(f"Crypto scan failed: {e}")

@@ -53,3 +53,23 @@
 - Commit and push this watchlist + ADX/Stochastic + sentiment freshness pass on `codex-v2-phase-rollout`.
 - Deploy V2 and verify scanner universe count, sentiment behavior, and tradeability changes in live runs.
 - Review whether bullish signal count drops appropriately on weak/choppy names after a few sessions.
+- Last session before this one:
+- Added watchlist merge, ADX/Stochastic tradeability gates, and freshness-aware LLM sentiment weighting on `codex-v2-phase-rollout`.
+- Current branch:
+- `codex-v2-phase-rollout`
+- What I worked on this session:
+- Patched US and crypto scheduler scans so they no longer fail silently when no market data or no new setups are found.
+- Scheduler status now records richer detail for both scans: universe size, analysed symbols, new signals, closed trades, and open positions.
+- Files created or modified:
+- [scheduler/scheduler.py](/D:/New%20folder/trading_agent_fixed/scheduler/scheduler.py): wrote explicit `skipped` status for no-data cases and added detailed `ok` status strings for US/crypto scans.
+- [AGENT_HANDOFF.md](/D:/New%20folder/trading_agent_fixed/AGENT_HANDOFF.md): updated handoff notes for the next agent.
+- Current state:
+- Working in code/syntax; `scheduler/scheduler.py` passes AST parsing.
+- Change is local only until committed/pushed.
+- Blockers / decisions:
+- Need deployed verification that `HEALTH -> JOB STATUS` now clearly shows `us_scan` / `crypto_scan` as `SKIPPED` vs `OK`.
+- Decide later whether zero-signal runs should also send a compact alert, or remain dashboard/log only to avoid noise.
+- Exact next steps:
+- Commit and push the scheduler observability patch on `codex-v2-phase-rollout`.
+- Deploy V2 and confirm `us_scan` / `crypto_scan` detail strings appear in dashboard health.
+- If visibility is still insufficient, add a compact “0 setups / no data” status row to the `TODAY` market tabs.
