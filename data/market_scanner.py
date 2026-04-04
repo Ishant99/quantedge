@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    NSE_500_FILE, NSE_TOP_200_FILE, MARKET_DATA_DIR,
+    NSE_500_FILE, NSE_TOP_200_FILE, NSE_WATCHLIST_ADDITIONS_FILE, MARKET_DATA_DIR,
     EXCHANGE, SMA_LONG,
     SCANNER_BATCH_SIZE, SCANNER_WORKERS,
     SCANNER_RETRY_MAX, SCANNER_RETRY_DELAY,
@@ -311,6 +311,20 @@ class MarketScanner:
         required = {"symbol", "name", "sector"}
         if not required.issubset(df.columns):
             raise ValueError(f"CSV must have columns: {required}")
+
+        if os.path.exists(NSE_WATCHLIST_ADDITIONS_FILE):
+            extra = pd.read_csv(NSE_WATCHLIST_ADDITIONS_FILE)
+            if required.issubset(extra.columns):
+                for col in df.columns:
+                    if col not in extra.columns:
+                        extra[col] = "NIFTY500" if col == "index_membership" else (
+                            999 if col == "market_cap_rank" else ""
+                        )
+                extra = extra[df.columns]
+                df = pd.concat([df, extra], ignore_index=True)
+                logger.info(f"Merged {len(extra)} supplemental watchlist symbols from {NSE_WATCHLIST_ADDITIONS_FILE}")
+            else:
+                logger.warning(f"Supplemental watchlist missing required columns: {NSE_WATCHLIST_ADDITIONS_FILE}")
 
         # Drop duplicates and empty symbols
         df = df.dropna(subset=["symbol"])

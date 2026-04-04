@@ -45,6 +45,8 @@ DEFAULTS: dict = {
     "MIN_CONFIDENCE":        0.60,
     "TA_SIGNAL_BULLISH":     6.5,   # score >= this → bullish signal
     "TA_SIGNAL_BEARISH":     4.0,   # score <= this → bearish signal
+    "TA_MIN_TREND_ADX":      18.0,
+    "TA_MAX_BUY_STOCH":      88.0,
     "TOP_N_SIGNALS":      10,
     "TA_WEIGHT":          0.50,
     "SENTIMENT_WEIGHT":   0.30,

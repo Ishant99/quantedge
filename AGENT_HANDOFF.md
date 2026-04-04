@@ -28,3 +28,28 @@
 - Run `sync_unified_state()` or a dry run on a healthy environment and confirm quality fields populate in `signals`.
 - Verify `HISTORY -> SIGNAL QUALITY` renders avg quality/setup tables on deployed V2.
 - Commit and push this Strategy Quality pass on `codex-v2-phase-rollout` if validation looks good.
+- Last session before this one:
+- Added Strategy Quality scoring, persisted quality metadata, and created this handoff file on `codex-v2-phase-rollout`.
+- Current branch:
+- `codex-v2-phase-rollout`
+- What I worked on this session:
+- Implemented the next signal-quality pass: supplemental watchlist merging, stronger ADX/Stochastic long tradeability gates, and freshness-aware weighting for the LLM sentiment path.
+- Files created or modified:
+- [data/nse_watchlist_additions.csv](/D:/New%20folder/trading_agent_fixed/data/nse_watchlist_additions.csv): added supplemental NSE symbols for missing leadership/defence names.
+- [data/market_scanner.py](/D:/New%20folder/trading_agent_fixed/data/market_scanner.py): merged supplemental watchlist CSV into the primary scanner universe.
+- [analysis/technical_agent.py](/D:/New%20folder/trading_agent_fixed/analysis/technical_agent.py): added ADX/Stochastic tradeability gates to reduce bullish signals on choppy or overstretched names.
+- [analysis/sentiment_agent.py](/D:/New%20folder/trading_agent_fixed/analysis/sentiment_agent.py): made freshness weighting apply to the LLM sentiment path, not only the keyword fallback.
+- [config.py](/D:/New%20folder/trading_agent_fixed/config.py): added config for supplemental watchlist path and ADX/Stochastic tradeability thresholds.
+- [settings/manager.py](/D:/New%20folder/trading_agent_fixed/settings/manager.py): added persistent defaults for the new signal-quality thresholds.
+- [AGENT_HANDOFF.md](/D:/New%20folder/trading_agent_fixed/AGENT_HANDOFF.md): updated session notes and next steps.
+- Current state:
+- Working in code/syntax; touched files pass AST parsing.
+- Local scanner sanity check passed and now includes supplemental symbols (e.g. `BDL`).
+- Local runtime still has the existing SQLite/Chroma disk-I/O issue on this machine for deeper historical tests.
+- Blockers / decisions:
+- Decide whether to keep growing the supplemental watchlist manually or replace `nse500_symbols.csv` with a refreshed full-universe file later.
+- Need deployed validation to confirm ADX/Stochastic tradeability gates improve selection without overblocking.
+- Exact next steps:
+- Commit and push this watchlist + ADX/Stochastic + sentiment freshness pass on `codex-v2-phase-rollout`.
+- Deploy V2 and verify scanner universe count, sentiment behavior, and tradeability changes in live runs.
+- Review whether bullish signal count drops appropriately on weak/choppy names after a few sessions.

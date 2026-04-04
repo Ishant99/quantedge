@@ -53,6 +53,7 @@ KITE_ACCESS_TOKEN_FILE = "logs/kite_access_token.txt"
 # -----------------------------------------------------------------------------
 NSE_TOP_200_FILE  = "data/nse_top200_symbols.csv"   # legacy fallback
 NSE_500_FILE      = "data/nse500_symbols.csv"        # primary watchlist (500 stocks)
+NSE_WATCHLIST_ADDITIONS_FILE = "data/nse_watchlist_additions.csv"
 MARKET_DATA_DIR   = "logs/market_data/"
 SCAN_TIME_IST     = "09:00"
 EXCHANGE          = "NSE"
@@ -86,6 +87,8 @@ STOCH_D_PERIOD      = 3
 STOCH_OVERBOUGHT    = 80
 STOCH_OVERSOLD      = 20
 OBV_TREND_LOOKBACK  = 10
+TA_MIN_TREND_ADX    = float(_S("TA_MIN_TREND_ADX", default=18.0))
+TA_MAX_BUY_STOCH    = float(_S("TA_MAX_BUY_STOCH", default=88.0))
 
 # -----------------------------------------------------------------------------
 # SENTIMENT AGENT (M3)

@@ -115,7 +115,7 @@ class SentimentAgent:
             )
 
         if self.ollama_available and stock_headlines:
-            score, confidence = self._llm_sentiment(all_headlines, symbol, company_name)
+            score, confidence = self._llm_sentiment(all_headlines, all_weights, symbol, company_name)
         else:
             score, confidence = self._keyword_sentiment(all_headlines, all_weights)
 
@@ -160,9 +160,14 @@ class SentimentAgent:
     # LLM sentiment — improved prompt
     # ------------------------------------------------------------------
 
-    def _llm_sentiment(self, headlines: list[str],
+    def _llm_sentiment(self, headlines: list[str], weights: list[float],
                        symbol: str, company: str) -> tuple[float, float]:
-        headlines_text = "\n".join(f"- {h}" for h in headlines[:8])
+        weighted_lines = []
+        for headline, weight in zip(headlines[:8], (weights or [])[:8] or [1.0] * min(len(headlines), 8)):
+            freshness = "fresh" if weight >= 0.99 else "recent" if weight >= 0.5 else "stale"
+            weighted_lines.append(f"- [{freshness} | weight {weight:.2f}] {headline}")
+        headlines_text = "\n".join(weighted_lines)
+        llm_score, llm_conf = 0.1, 0.6
         prompt = f"""You are an expert Indian stock market analyst.
 
 Analyse these news headlines about {company or symbol} and give a sentiment score.
@@ -191,13 +196,16 @@ Return ONLY a JSON object, nothing else:
             match = re.search(r'\{.*?\}', text, re.DOTALL)
             if match:
                 data  = json.loads(match.group())
-                score = float(data.get("score", 0.1))
-                conf  = float(data.get("confidence", 0.6))
-                return max(-1.0, min(1.0, score)), max(0.0, min(1.0, conf))
+                llm_score = max(-1.0, min(1.0, float(data.get("score", 0.1))))
+                llm_conf = max(0.0, min(1.0, float(data.get("confidence", 0.6))))
         except Exception as e:
             logger.debug(f"LLM sentiment error: {e}")
 
-        return self._keyword_sentiment(headlines)
+        kw_score, kw_conf = self._keyword_sentiment(headlines, weights)
+        avg_weight = sum(weights[:len(headlines[:8])]) / max(1, len(headlines[:8])) if weights else 1.0
+        blended_score = round((llm_score * 0.7) + (kw_score * 0.3 * max(avg_weight, 0.25)), 3)
+        blended_conf = round(min(0.95, llm_conf * max(avg_weight, 0.35) + kw_conf * 0.25), 2)
+        return blended_score, blended_conf
 
     # ------------------------------------------------------------------
     # Keyword sentiment — expanded

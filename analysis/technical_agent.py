@@ -25,6 +25,7 @@ from config import (
     VOLUME_AVG_DAYS, MIN_TA_SCORE, TA_SIGNAL_BULLISH, TA_SIGNAL_BEARISH,
     ADX_PERIOD, STOCH_K_PERIOD, STOCH_D_PERIOD,
     STOCH_OVERBOUGHT, STOCH_OVERSOLD, OBV_TREND_LOOKBACK,
+    TA_MIN_TREND_ADX, TA_MAX_BUY_STOCH,
 )
 from utils import get_logger
 
@@ -284,13 +285,30 @@ class TechnicalAgent:
             else:
                 signal = "neutral"
 
+            tradeable = score >= MIN_TA_SCORE
+            if signal == "bullish":
+                if adx_val < TA_MIN_TREND_ADX:
+                    tradeable = False
+                    reasons.append(
+                        f"Tradeability blocked: ADX {adx_val:.1f} below trend gate {TA_MIN_TREND_ADX:.1f}"
+                    )
+                elif stoch_k >= TA_MAX_BUY_STOCH and stoch_k <= stoch_d:
+                    tradeable = False
+                    reasons.append(
+                        f"Tradeability blocked: Stochastic too stretched ({stoch_k:.1f}) without bullish turn"
+                    )
+            elif signal == "bearish" and adx_val < (TA_MIN_TREND_ADX - 2):
+                reasons.append(
+                    f"Bearish score present but ADX {adx_val:.1f} signals weak trend strength"
+                )
+
             return TAResult(
                 symbol    = symbol,
                 score     = score,
                 signal    = signal,
                 reasoning = reasons,
                 indicators= raw,
-                tradeable = score >= MIN_TA_SCORE,
+                tradeable = tradeable,
             )
 
         except Exception as e:
