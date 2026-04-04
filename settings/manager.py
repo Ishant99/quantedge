@@ -109,6 +109,15 @@ DEFAULTS: dict = {
     "US_TP_PCT":             0.06,
     "US_SL_PCT":             0.03,
 
+    # ---- Intraday trading ----
+    "INTRADAY_MAX_POSITIONS":  4,
+    "INTRADAY_RISK_MULT":      0.50,
+    "INTRADAY_RR":             1.5,
+    "INTRADAY_MIN_VOL_SPIKE":  1.5,
+    "INTRADAY_RSI_LO":         40,
+    "INTRADAY_RSI_HI":         65,
+    "INTRADAY_MIN_CRITERIA":   3,
+
     # ---- Dashboard ----
     "DASHBOARD_REFRESH_SEC": 30,
 }

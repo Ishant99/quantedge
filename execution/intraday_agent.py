@@ -4,21 +4,28 @@
 # Runs at 9:30, 10:30, 11:30, 12:30, 13:30, 14:30 IST on market days.
 # Scans stocks from the daily swing watchlist on 15-min candles.
 #
-# Strategy (must meet 3 of 4):
+# Strategy (must meet INTRADAY_MIN_CRITERIA of 5):
 #   1. EMA9 crosses above EMA21 on 15-min chart
-#   2. Price above VWAP (session)
-#   3. RSI(14) between 40-65 (not overbought, has room to run)
-#   4. Volume spike >= 1.5x 20-bar average on entry candle
+#   2. Price above VWAP (today's session)
+#   3. RSI(14) between RSI_LO and RSI_HI (not overbought, has room to run)
+#   4. Volume spike >= MIN_VOL_SPIKE × 20-bar average on entry candle
+#   5. MACD(12,26,9) bullish crossover on 15-min (fresh, within last bar)
+#
+# Candidate pool (priority order):
+#   1. Symbols from last daily scan's BUY signals (logs/unified_state.json)
+#   2. Fallback: top 20 Nifty 50 liquid stocks
 #
 # Position management:
 #   - SL  = low of last 3 candles
-#   - TP  = 1.5 x SL-distance (1.5 R:R intraday)
-#   - Position size = 50% of normal swing size (0.5% risk per trade)
-#   - Force-close at 3:15 PM (EOD) via price_monitor.close_all_intraday()
-#   - Max 2 intraday positions simultaneously
+#   - TP  = INTRADAY_RR × SL-distance
+#   - Position size = INTRADAY_RISK_MULT × normal swing risk
+#   - All positions entered via PaperExecutor (treasury-aware, correct schema)
+#   - Force-close at 3:15 PM via run_eod_close()
+#   - Max INTRADAY_MAX_POSITIONS simultaneously (default 4)
 # =============================================================================
 
-import sys, os
+import os
+import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -26,91 +33,120 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, time as dtime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pytz
 
-from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL, RISK_PER_TRADE_PCT
+from config import (
+    VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL, RISK_PER_TRADE_PCT,
+    INTRADAY_MAX_POSITIONS, INTRADAY_RISK_MULT, INTRADAY_RR,
+    INTRADAY_MIN_VOL_SPIKE, INTRADAY_RSI_LO, INTRADAY_RSI_HI,
+    INTRADAY_MIN_CRITERIA,
+)
 from utils import get_logger
 from utils.telegram import send
 
 logger = get_logger("IntradayAgent")
 IST = pytz.timezone("Asia/Kolkata")
 
-MAX_INTRADAY_POSITIONS = 2
-INTRADAY_RISK_MULT     = 0.50   # 50% of normal swing risk per trade
-INTRADAY_RR            = 1.5    # reward:risk ratio
-MIN_VOL_SPIKE          = 1.5    # current bar volume vs 20-bar avg
-INTRADAY_RSI_LO        = 40
-INTRADAY_RSI_HI        = 65
-MIN_CRITERIA           = 3      # must meet N out of 4 criteria
+# Fallback candidates when no daily scan data is available
+_FALLBACK_CANDIDATES = [
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "SBIN", "AXISBANK",
+    "WIPRO", "TITAN", "LT", "BAJFINANCE", "KOTAKBANK", "ITC", "HINDUNILVR",
+    "ASIANPAINT", "MARUTI", "SUNPHARMA", "ULTRACEMCO", "NESTLEIND", "ONGC",
+]
 
 
 @dataclass
 class IntradaySignal:
     symbol:         str
-    action:         str          # BUY
+    action:         str
     entry_price:    float
     stop_loss:      float
     take_profit:    float
     position_size:  int
-    capital_at_risk:float
+    capital_at_risk: float
     confidence:     float
     reasoning:      str
     vwap:           float = 0.0
     rsi_15m:        float = 0.0
+    macd_hist:      float = 0.0
+    criteria_met:   list  = field(default_factory=list)
     trade_type:     str   = "intraday"
 
 
 class IntradayAgent:
     """
-    Intraday scanner — 15-min EMA crossover + VWAP + RSI + volume.
-    Only trades stocks already passing the daily momentum filter.
-    Force-closes all positions at 3:15 PM via EOD close job.
+    Intraday scanner — 15-min EMA crossover + VWAP + RSI + volume + MACD.
+    Pulls candidates from the last daily scan via unified_state.json.
+    Uses PaperExecutor for trade entry (treasury-aware, correct DB schema).
     """
 
     def __init__(self):
-        self.portfolio = self._load_portfolio()
+        self._portfolio_value = self._read_portfolio_value()
+
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
 
     def scan_and_trade(self, swing_symbols: list = None) -> list:
-        """
-        Run intraday scan. Returns list of IntradaySignal.
-        swing_symbols = stocks already vetted by daily pipeline.
-        """
         now = datetime.now(IST)
         if not (dtime(9, 25) <= now.time() <= dtime(14, 45) and now.weekday() < 5):
             logger.info("IntradayAgent: outside trading window")
             return []
 
-        open_intraday = self._count_intraday_positions()
-        slots = MAX_INTRADAY_POSITIONS - open_intraday
+        open_count = self._count_intraday_positions()
+        slots = INTRADAY_MAX_POSITIONS - open_count
         if slots <= 0:
-            logger.info(f"IntradayAgent: max {MAX_INTRADAY_POSITIONS} positions reached")
+            logger.info(f"IntradayAgent: max {INTRADAY_MAX_POSITIONS} positions reached")
             return []
 
-        candidates = (swing_symbols or [
-            "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY",
-            "SBIN", "AXISBANK", "WIPRO", "TITAN", "LT",
-        ])[:20]
+        candidates = (swing_symbols or self._load_candidates())[:30]
+        logger.info(f"IntradayAgent: scanning {len(candidates)} candidates, {slots} slot(s) open")
 
-        portfolio_value = self.portfolio.get("cash", VIRTUAL_CAPITAL)
         signals = []
-
         for sym in candidates:
             if len(signals) >= slots:
                 break
-            sig = self._analyse(sym, portfolio_value)
+            sig = self._analyse(sym, self._portfolio_value)
             if sig:
-                signals.append(sig)
-                self._enter_trade(sig)
+                entered = self._enter_trade(sig)
+                if entered:
+                    signals.append(sig)
 
         if signals:
             self._send_telegram(signals)
             logger.info(f"IntradayAgent: {len(signals)} entries placed")
+        else:
+            logger.info("IntradayAgent: no setups found this hour")
 
         return signals
 
     # ------------------------------------------------------------------
-    # Per-stock analysis
+    # Candidate loading — uses daily scan output, falls back gracefully
+    # ------------------------------------------------------------------
+
+    def _load_candidates(self) -> list[str]:
+        """Pull BUY symbols from last daily scan via unified_state.json."""
+        state_file = os.path.join("logs", "unified_state.json")
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                state = json.load(f)
+            signals = state.get("signals", [])
+            syms = [
+                s["symbol"] for s in signals
+                if s.get("action") == "BUY" and s.get("market", "nse").lower() == "nse"
+            ]
+            if syms:
+                deduped = list(dict.fromkeys(syms))[:30]
+                logger.info(f"IntradayAgent: {len(deduped)} candidates from unified_state")
+                return deduped
+        except Exception as e:
+            logger.debug(f"IntradayAgent: could not load unified_state ({e}), using fallback")
+        logger.info(f"IntradayAgent: using fallback {len(_FALLBACK_CANDIDATES)} candidates")
+        return list(_FALLBACK_CANDIDATES)
+
+    # ------------------------------------------------------------------
+    # Per-stock 15-min analysis
     # ------------------------------------------------------------------
 
     def _analyse(self, symbol: str, portfolio_value: float) -> IntradaySignal | None:
@@ -118,7 +154,7 @@ class IntradayAgent:
             df = yf.Ticker(f"{symbol}.NS").history(
                 period="5d", interval="15m", auto_adjust=True
             )
-            if df.empty or len(df) < 25:
+            if df.empty or len(df) < 30:
                 return None
 
             df.columns = [c.lower() for c in df.columns]
@@ -128,13 +164,19 @@ class IntradayAgent:
             volume = df["volume"]
             last   = float(close.iloc[-1])
 
-            # EMA 9 / 21
-            ema9       = close.ewm(span=9,  adjust=False).mean()
-            ema21      = close.ewm(span=21, adjust=False).mean()
-            crossover  = (float(ema9.iloc[-2]) < float(ema21.iloc[-2]) and
-                          float(ema9.iloc[-1]) > float(ema21.iloc[-1]))
+            # ----------------------------------------------------------
+            # Criterion 1: EMA 9/21 bullish crossover
+            # ----------------------------------------------------------
+            ema9  = close.ewm(span=9,  adjust=False).mean()
+            ema21 = close.ewm(span=21, adjust=False).mean()
+            crossover = (
+                float(ema9.iloc[-2]) < float(ema21.iloc[-2]) and
+                float(ema9.iloc[-1]) > float(ema21.iloc[-1])
+            )
 
-            # VWAP (today's session only)
+            # ----------------------------------------------------------
+            # Criterion 2: Price above today's VWAP
+            # ----------------------------------------------------------
             try:
                 idx_tz = df.index.tz_convert(IST)
                 today  = datetime.now(IST).date()
@@ -142,32 +184,57 @@ class IntradayAgent:
                 td     = df[mask] if mask.any() else df.tail(26)
             except Exception:
                 td = df.tail(26)
-
             denom = td["volume"].sum()
             vwap  = float(
                 ((td["high"] + td["low"] + td["close"]) / 3 * td["volume"]).sum() / denom
             ) if denom > 0 else last
             above_vwap = last > vwap
 
-            # RSI(14) on 15-min
-            delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi   = float(100 - 100 / (1 + gain / loss.replace(0, np.nan)).iloc[-1])
+            # ----------------------------------------------------------
+            # Criterion 3: RSI(14) in neutral-bullish zone
+            # ----------------------------------------------------------
+            delta  = close.diff()
+            gain   = delta.clip(lower=0).rolling(14).mean()
+            loss   = (-delta.clip(upper=0)).rolling(14).mean()
+            rsi_s  = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+            rsi    = float(rsi_s.iloc[-1]) if not np.isnan(rsi_s.iloc[-1]) else 50.0
             rsi_ok = INTRADAY_RSI_LO <= rsi <= INTRADAY_RSI_HI
 
-            # Volume spike
-            vol_avg = float(volume.rolling(20).mean().iloc[-1])
-            vol_now = float(volume.iloc[-1])
-            vol_spike = (vol_now / vol_avg >= MIN_VOL_SPIKE) if vol_avg > 0 else False
+            # ----------------------------------------------------------
+            # Criterion 4: Volume spike
+            # ----------------------------------------------------------
+            vol_avg   = float(volume.rolling(20).mean().iloc[-1])
+            vol_now   = float(volume.iloc[-1])
+            vol_spike = (vol_now / vol_avg >= INTRADAY_MIN_VOL_SPIKE) if vol_avg > 0 else False
 
-            # Count how many criteria met
-            criteria  = [crossover, above_vwap, rsi_ok, vol_spike]
-            met       = sum(criteria)
-            if met < MIN_CRITERIA:
+            # ----------------------------------------------------------
+            # Criterion 5: MACD(12,26,9) bullish crossover (15-min)
+            # ----------------------------------------------------------
+            ema12    = close.ewm(span=12, adjust=False).mean()
+            ema26    = close.ewm(span=26, adjust=False).mean()
+            macd_l   = ema12 - ema26
+            macd_sig = macd_l.ewm(span=9, adjust=False).mean()
+            hist_now  = float(macd_l.iloc[-1])  - float(macd_sig.iloc[-1])
+            hist_prev = float(macd_l.iloc[-2])  - float(macd_sig.iloc[-2])
+            macd_bull = hist_now > 0 and hist_prev <= 0  # fresh crossover above zero
+
+            # ----------------------------------------------------------
+            # Gate check: must meet MIN_CRITERIA of 5
+            # ----------------------------------------------------------
+            criteria_labels = [
+                ("EMA9/21 cross",   crossover),
+                ("above VWAP",      above_vwap),
+                (f"RSI {rsi:.0f}",  rsi_ok),
+                (f"vol {vol_now/vol_avg:.1f}x", vol_spike),
+                ("MACD cross",      macd_bull),
+            ]
+            met_labels = [label for label, ok in criteria_labels if ok]
+            if len(met_labels) < INTRADAY_MIN_CRITERIA:
                 return None
 
-            # SL = low of last 3 candles
+            # ----------------------------------------------------------
+            # Position sizing
+            # ----------------------------------------------------------
             sl_low  = float(low.iloc[-3:].min())
             sl_dist = last - sl_low
             if sl_dist <= 0:
@@ -180,13 +247,7 @@ class IntradayAgent:
             qty = max(1, int(risk_per_trade / sl_dist))
             cap_at_risk = round(qty * sl_dist, 2)
 
-            confidence = 0.50 + met * 0.10   # 0.80 max (4/4)
-
-            reasons = []
-            if crossover:  reasons.append("EMA9/21 crossover")
-            if above_vwap: reasons.append(f"above VWAP {vwap:,.0f}")
-            if rsi_ok:     reasons.append(f"RSI {rsi:.0f}")
-            if vol_spike:  reasons.append(f"vol {vol_now/vol_avg:.1f}x spike")
+            confidence = round(0.45 + len(met_labels) * 0.10, 3)   # 0.75 max (5/5)
 
             return IntradaySignal(
                 symbol          = symbol,
@@ -196,10 +257,12 @@ class IntradayAgent:
                 take_profit     = tp,
                 position_size   = qty,
                 capital_at_risk = cap_at_risk,
-                confidence      = round(confidence, 3),
-                reasoning       = "INTRADAY 15m: " + ", ".join(reasons),
+                confidence      = confidence,
+                reasoning       = "INTRADAY 15m: " + ", ".join(met_labels),
                 vwap            = round(vwap, 2),
                 rsi_15m         = round(rsi, 1),
+                macd_hist       = round(hist_now, 4),
+                criteria_met    = met_labels,
                 trade_type      = "intraday",
             )
 
@@ -208,103 +271,88 @@ class IntradayAgent:
             return None
 
     # ------------------------------------------------------------------
-    # Trade management
+    # Trade entry — routes through PaperExecutor for proper tracking
     # ------------------------------------------------------------------
 
-    def _enter_trade(self, sig: IntradaySignal):
-        cost = sig.entry_price * sig.position_size
-        if cost > self.portfolio.get("cash", 0):
-            logger.warning(f"Insufficient cash for intraday {sig.symbol}")
-            return
-        self.portfolio["cash"] -= cost
-        self.portfolio.setdefault("positions", {})[sig.symbol] = {
-            "qty":        sig.position_size,
-            "entry":      sig.entry_price,
-            "stop_loss":  sig.stop_loss,
-            "take_profit":sig.take_profit,
-            "trade_type": "intraday",
-            "timestamp":  datetime.now().isoformat(),
-        }
-        self._save_portfolio()
-        self._record_open_trade(sig)
-        logger.info(f"INTRADAY BUY {sig.symbol} x{sig.position_size} "
-                    f"@ Rs.{sig.entry_price:,.0f} SL={sig.stop_loss:,.0f} TP={sig.take_profit:,.0f}")
-
-    def _record_open_trade(self, sig: IntradaySignal):
-        """Insert an open trade record into SQLite so PriceMonitor can close it."""
-        import sqlite3
-        from config import SQLITE_DB_FILE
+    def _enter_trade(self, sig: IntradaySignal) -> bool:
         try:
-            with sqlite3.connect(SQLITE_DB_FILE) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS trades (
-                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol      TEXT NOT NULL,
-                        action      TEXT,
-                        entry_price REAL,
-                        exit_price  REAL,
-                        stop_loss   REAL,
-                        take_profit REAL,
-                        qty         INTEGER,
-                        pnl         REAL DEFAULT 0,
-                        pnl_pct     REAL DEFAULT 0,
-                        status      TEXT DEFAULT 'open',
-                        trade_type  TEXT DEFAULT 'intraday',
-                        entry_time  TEXT,
-                        exit_time   TEXT,
-                        reasoning   TEXT
-                    )
-                """)
-                conn.execute("""
-                    INSERT INTO trades
-                    (symbol, action, entry_price, stop_loss, take_profit,
-                     qty, status, trade_type, entry_time, reasoning)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
-                """, (sig.symbol, "BUY", sig.entry_price, sig.stop_loss,
-                      sig.take_profit, sig.position_size, "open", "intraday",
-                      datetime.now().isoformat(), sig.reasoning))
-            logger.debug(f"SQLite: open trade recorded for {sig.symbol}")
+            from execution.executor import get_executor
+            from strategy.engine import TradeSignal
+            executor = get_executor()
+            ts = TradeSignal(
+                symbol          = sig.symbol,
+                action          = "BUY",
+                confidence      = sig.confidence,
+                entry_price     = sig.entry_price,
+                stop_loss       = sig.stop_loss,
+                take_profit     = sig.take_profit,
+                position_size   = sig.position_size,
+                capital_at_risk = sig.capital_at_risk,
+                reasoning       = sig.reasoning,
+                ta_score        = 0.0,
+            )
+            result = executor.execute(ts)
+            ok = result.get("status") == "filled"
+            if ok:
+                logger.info(
+                    f"INTRADAY BUY {sig.symbol} x{sig.position_size} "
+                    f"@ Rs.{sig.entry_price:,.0f}  SL={sig.stop_loss:,.0f}  "
+                    f"TP={sig.take_profit:,.0f}"
+                )
+            else:
+                logger.warning(
+                    f"INTRADAY {sig.symbol} rejected: {result.get('reason', 'unknown')}"
+                )
+            return ok
         except Exception as e:
-            logger.warning(f"SQLite open trade record failed ({sig.symbol}): {e}")
+            logger.error(f"IntradayAgent _enter_trade error ({sig.symbol}): {e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Position count — check how many intraday slots are occupied
+    # ------------------------------------------------------------------
 
     def _count_intraday_positions(self) -> int:
-        return sum(
-            1 for p in self.portfolio.get("positions", {}).values()
-            if p.get("trade_type") == "intraday"
-        )
+        try:
+            if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
+                with open(VIRTUAL_PORTFOLIO_FILE, encoding="utf-8") as f:
+                    pf = json.load(f)
+                return sum(
+                    1 for p in pf.get("positions", {}).values()
+                    if p.get("trade_type") == "intraday"
+                )
+        except Exception:
+            pass
+        return 0
+
+    def _read_portfolio_value(self) -> float:
+        try:
+            if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
+                with open(VIRTUAL_PORTFOLIO_FILE, encoding="utf-8") as f:
+                    pf = json.load(f)
+                return float(pf.get("cash", VIRTUAL_CAPITAL))
+        except Exception:
+            pass
+        return float(VIRTUAL_CAPITAL)
 
     # ------------------------------------------------------------------
-    # Telegram
+    # Telegram alert
     # ------------------------------------------------------------------
 
     def _send_telegram(self, signals: list):
         now_str = datetime.now(IST).strftime("%H:%M IST")
         lines   = [f"*Intraday Signals — {now_str}*", ""]
         for s in signals:
-            rr = round((s.take_profit - s.entry_price) /
-                       (s.entry_price - s.stop_loss), 1) if s.entry_price > s.stop_loss else 0
+            rr = round(
+                (s.take_profit - s.entry_price) / (s.entry_price - s.stop_loss), 1
+            ) if s.entry_price > s.stop_loss else 0
             lines += [
-                f"*{s.symbol}*  conf {s.confidence:.0%}",
+                f"*{s.symbol}*  conf {s.confidence:.0%}  ({len(s.criteria_met)}/5 criteria)",
                 f"Entry Rs.{s.entry_price:,.0f} | SL Rs.{s.stop_loss:,.0f} | "
                 f"TP Rs.{s.take_profit:,.0f} | R:R {rr}x",
-                f"VWAP Rs.{s.vwap:,.0f}  RSI {s.rsi_15m:.0f}",
-                f"_{s.reasoning}_",
+                f"VWAP Rs.{s.vwap:,.0f}  RSI {s.rsi_15m:.0f}  MACD hist {s.macd_hist:+.4f}",
+                f"_{', '.join(s.criteria_met)}_",
                 "",
             ]
         lines.append("_All positions closed at 15:25 IST_")
         send("\n".join(lines))
-
-    # ------------------------------------------------------------------
-    # Portfolio helpers
-    # ------------------------------------------------------------------
-
-    def _load_portfolio(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
-        if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
-            with open(VIRTUAL_PORTFOLIO_FILE) as f:
-                return json.load(f)
-        return {"cash": VIRTUAL_CAPITAL, "positions": {}}
-
-    def _save_portfolio(self):
-        with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
-            json.dump(self.portfolio, f, indent=2)

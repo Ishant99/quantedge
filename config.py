@@ -222,6 +222,17 @@ US_TP_PCT             = float(_S("US_TP_PCT",             default=0.06))   # 6% 
 US_SL_PCT             = float(_S("US_SL_PCT",             default=0.03))   # 3% stop loss
 
 # -----------------------------------------------------------------------------
+# INTRADAY TRADING
+# -----------------------------------------------------------------------------
+INTRADAY_MAX_POSITIONS = int(  _S("INTRADAY_MAX_POSITIONS", default=4))
+INTRADAY_RISK_MULT     = float(_S("INTRADAY_RISK_MULT",     default=0.50))  # fraction of normal swing risk
+INTRADAY_RR            = float(_S("INTRADAY_RR",            default=1.5))   # reward:risk ratio
+INTRADAY_MIN_VOL_SPIKE = float(_S("INTRADAY_MIN_VOL_SPIKE", default=1.5))   # current bar vol vs 20-bar avg
+INTRADAY_RSI_LO        = int(  _S("INTRADAY_RSI_LO",        default=40))
+INTRADAY_RSI_HI        = int(  _S("INTRADAY_RSI_HI",        default=65))
+INTRADAY_MIN_CRITERIA  = int(  _S("INTRADAY_MIN_CRITERIA",  default=3))     # must meet N of 5 criteria
+
+# -----------------------------------------------------------------------------
 # ALERTS — Telegram
 # -----------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN  = _S("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "")
