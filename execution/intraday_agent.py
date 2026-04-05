@@ -94,6 +94,11 @@ class IntradayAgent:
             logger.info("IntradayAgent: outside trading window")
             return []
 
+        # Bear regime guard — skip new long entries when market is bearish
+        if self._is_bear_regime():
+            logger.info("IntradayAgent: bear regime detected — skipping long entries")
+            return []
+
         open_count = self._count_intraday_positions()
         slots = INTRADAY_MAX_POSITIONS - open_count
         if slots <= 0:
@@ -311,6 +316,17 @@ class IntradayAgent:
     # ------------------------------------------------------------------
     # Position count — check how many intraday slots are occupied
     # ------------------------------------------------------------------
+
+    def _is_bear_regime(self) -> bool:
+        """Read latest regime from logs/market_regime.json. Defaults to False (allow buys) if missing."""
+        regime_file = os.path.join("logs", "market_regime.json")
+        try:
+            with open(regime_file, encoding="utf-8") as f:
+                data = json.load(f)
+            regime = str(data.get("regime", "")).lower()
+            return regime == "bear"
+        except Exception:
+            return False  # if no regime file, don't block
 
     def _count_intraday_positions(self) -> int:
         try:

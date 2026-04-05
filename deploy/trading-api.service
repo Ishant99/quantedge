@@ -1,0 +1,20 @@
+[Unit]
+Description=QuantEdge REST API Server
+After=network.target trading-agent.service
+Wants=trading-agent.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/quantedge
+Environment=PYTHONPATH=/home/ubuntu/quantedge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 api/server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-api
+
+[Install]
+WantedBy=multi-user.target

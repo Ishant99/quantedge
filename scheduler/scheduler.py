@@ -679,6 +679,26 @@ if __name__ == "__main__":
         sys.exit(1)
 
     _write_scheduler_status("scheduler", "booting", "Scheduler process started")
+
+    # Ollama availability check — sentiment quality depends on this
+    try:
+        import requests as _req
+        from config import OLLAMA_BASE_URL, SENTIMENT_MODEL
+        r = _req.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        if r.status_code == 200:
+            tags = [m.get("name", "") for m in r.json().get("models", [])]
+            if any(SENTIMENT_MODEL in t for t in tags):
+                logger.info(f"Ollama OK — model '{SENTIMENT_MODEL}' available")
+            else:
+                logger.warning(
+                    f"Ollama running but model '{SENTIMENT_MODEL}' not found. "
+                    f"Available: {tags}. Sentiment will use keyword fallback."
+                )
+        else:
+            logger.warning("Ollama not reachable — sentiment will use keyword fallback")
+    except Exception as _e:
+        logger.warning(f"Ollama not reachable ({_e}) — sentiment will use keyword fallback")
+
     run_housekeeping()
 
     from config import SCAN_TIME_1, SCAN_TIME_2
