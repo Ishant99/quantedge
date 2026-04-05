@@ -21,6 +21,7 @@ from datetime import datetime, time
 import pytz
 from dataclasses import dataclass
 from config import VIRTUAL_PORTFOLIO_FILE, VIRTUAL_CAPITAL, SQLITE_DB_FILE
+from execution.portfolio_lock import load_portfolio_locked, save_portfolio_locked
 from utils import get_logger
 from utils.telegram import send
 
@@ -251,9 +252,10 @@ class PriceMonitor:
         )
 
     def _fetch_price(self, symbol: str) -> float | None:
-        """Fetch latest price via yfinance."""
+        """Fetch latest price via yfinance. Handles INTRA: prefix for intraday positions."""
         try:
-            ticker = yf.Ticker(f"{symbol}.NS")
+            bare = symbol.replace("INTRA:", "")
+            ticker = yf.Ticker(f"{bare}.NS")
             hist   = ticker.history(period="1d", interval="15m")
             if not hist.empty:
                 return float(hist["Close"].iloc[-1])
@@ -315,12 +317,11 @@ class PriceMonitor:
 
     def _load_portfolio(self) -> dict:
         os.makedirs("logs", exist_ok=True)
-        if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
-            with open(VIRTUAL_PORTFOLIO_FILE) as f:
-                return json.load(f)
+        data = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
+        if data:
+            return data
         return {"cash": VIRTUAL_CAPITAL, "positions": {},
                 "total_trades": 0, "wins": 0}
 
     def _save_portfolio(self):
-        with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
-            json.dump(self.portfolio, f, indent=2)
+        save_portfolio_locked(VIRTUAL_PORTFOLIO_FILE, self.portfolio)

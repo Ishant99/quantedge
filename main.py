@@ -124,15 +124,10 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     logger.info("[S/R] Support/resistance analysis...")
     sr_results = SupportResistanceAnalyser().analyse_all(tradeable_data)
-    if bear_mode:
-        # In bear mode: keep stocks in sell_zone (resistance) — good SHORT setups
-        tradeable = {sym: r for sym, r in tradeable.items()
-                     if sr_results.get(sym, None)}
-    else:
-        tradeable = {sym: r for sym, r in tradeable.items()
-                     if sr_results.get(sym, None) and
-                     sr_results[sym].recommendation != "sell_zone"}
-    logger.info(f"[S/R] {len(tradeable)} pass S/R filter")
+    # Note: sell_zone stocks are kept but penalized later (SR_SELL_ZONE_PENALTY)
+    tradeable = {sym: r for sym, r in tradeable.items()
+                 if sr_results.get(sym, None)}
+    logger.info(f"[S/R] {len(tradeable)} have S/R data")
 
     # ------------------------------------------------------------------
     # 8. MULTI-TIMEFRAME CONFIRMATION
@@ -259,10 +254,18 @@ def run_agent(dry_run: bool = False) -> list:
             sig.reasoning += f". POC Rs.{vp.poc:,.0f}"
         if mtf:
             sig.reasoning += f". Weekly: {mtf.weekly_trend}"
+            if mtf.mtf_penalty > 0:
+                extra -= mtf.mtf_penalty
+                sig.reasoning += f" (MTF penalty -{mtf.mtf_penalty:.0%})"
         if fii_result.signal in ("buy", "strong_buy"):
             extra += 0.02
+        # S/R sell zone penalty (instead of hard-blocking)
+        if sr and sr.recommendation == "sell_zone":
+            from config import SR_SELL_ZONE_PENALTY
+            extra -= SR_SELL_ZONE_PENALTY
+            sig.reasoning += f" (S/R sell zone penalty -{SR_SELL_ZONE_PENALTY:.0%})"
 
-        sig.confidence = min(0.99, sig.confidence + extra)
+        sig.confidence = max(0.0, min(0.99, sig.confidence + extra))
 
         # Dynamic sizing
         df  = market_data.get(sig.symbol)

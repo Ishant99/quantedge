@@ -406,6 +406,79 @@ def run_eod_digest():
 # JOB 5 — Intraday scan every hour 9:30–14:30 (Mon-Fri)
 # =============================================================================
 
+def run_thesis_check():
+    """Re-evaluate held positions — sell if thesis has degraded significantly."""
+    _write_scheduler_status("thesis_check", "running")
+    logger.info(f"Thesis check at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        import json
+        from config import VIRTUAL_PORTFOLIO_FILE
+        from execution.portfolio_lock import load_portfolio_locked
+        from execution.executor import get_executor
+        from strategy.engine import StrategyEngine
+        from analysis.technical_agent import TechnicalAgent
+        from analysis.sentiment_agent import SentimentAgent
+
+        portfolio = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
+        if not portfolio:
+            _write_scheduler_status("thesis_check", "ok", "No portfolio")
+            return
+
+        positions = portfolio.get("positions", {})
+        # Only check swing positions (not INTRA: prefixed)
+        held = {sym: pos for sym, pos in positions.items()
+                if not sym.startswith("INTRA:") and pos.get("entry_confidence", 0) > 0}
+        if not held:
+            logger.info("Thesis check: no swing positions with entry_confidence")
+            _write_scheduler_status("thesis_check", "ok", "No held positions to check")
+            return
+
+        logger.info(f"Thesis check: re-evaluating {len(held)} held positions")
+        import yfinance as yf
+        ta_agent = TechnicalAgent()
+        sent_agent = SentimentAgent()
+        engine = StrategyEngine()
+        executor = get_executor()
+        sells = 0
+
+        for sym, pos in held.items():
+            try:
+                # Fetch fresh data for this symbol
+                df = yf.Ticker(f"{sym}.NS").history(period="6mo", auto_adjust=True)
+                if df is None or df.empty:
+                    continue
+                df.columns = [c.lower() for c in df.columns]
+                ta_result = ta_agent.analyse(sym, df)
+                sent_result = sent_agent.analyse(sym)
+
+                signal = engine.generate(
+                    ta=ta_result, sentiment=sent_result, df=df,
+                    held_position=True,
+                    entry_confidence=pos["entry_confidence"],
+                )
+                if signal.action == "SELL":
+                    # Use current price for the sell
+                    signal.entry_price = float(df["close"].iloc[-1])
+                    result = executor.execute(signal)
+                    if result.get("status") == "filled":
+                        sells += 1
+                        logger.info(f"Thesis SELL {sym}: {signal.reasoning}")
+            except Exception as e:
+                logger.debug(f"Thesis check error for {sym}: {e}")
+
+        _sync_state("thesis_check")
+        _write_scheduler_status("thesis_check", "ok", f"Checked: {len(held)}, Sells: {sells}")
+        if sells:
+            send_telegram_message(
+                f"*Thesis Re-evaluation*\n"
+                f"Checked {len(held)} positions, exited {sells} "
+                f"(confidence degraded)"
+            )
+    except Exception as e:
+        _write_scheduler_status("thesis_check", "error", str(e))
+        logger.error(f"Thesis check failed: {e}")
+
+
 def run_intraday_scan():
     """15-min EMA/VWAP intraday signals on top swing candidates."""
     _write_scheduler_status("intraday_scan", "running")
@@ -775,6 +848,14 @@ if __name__ == "__main__":
         name="Intraday Scan (hourly 09:30-14:30 IST)",
     )
 
+    # --- Job 5b: Thesis re-evaluation at 1:00 PM ---
+    scheduler.add_job(
+        run_thesis_check,
+        CronTrigger(hour=13, minute=0, day_of_week="mon-fri", timezone=IST),
+        id="thesis_check",
+        name="Thesis Re-evaluation (13:00 IST)",
+    )
+
     # --- Job 6: Outcome tracker at 3:30 PM (after market close) ---
     scheduler.add_job(
         run_outcome_tracker,
@@ -823,12 +904,13 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  11 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  12 JOBS")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
     logger.info(f"  NSE afternoon scan : {SCAN_TIME_2} IST (Mon-Fri)")
     logger.info("  Intraday scan      : hourly 09:30-14:30 (Mon-Fri)")
     logger.info("  Price monitor      : every 15 min 09:15-15:25 (Mon-Fri)")
     logger.info("  F&O paper monitor  : every 15 min 09:15-15:25 (Mon-Fri)")
+    logger.info("  Thesis re-eval     : 13:00 IST (Mon-Fri)")
     logger.info("  EOD close          : 15:25 IST (Mon-Fri)")
     logger.info("  Outcome tracker    : 15:30 IST (Mon-Fri)")
     logger.info("  US stocks scan     : 19:00 IST (Mon-Fri)")

@@ -285,7 +285,7 @@ class IntradayAgent:
             from strategy.engine import TradeSignal
             executor = get_executor()
             ts = TradeSignal(
-                symbol          = sig.symbol,
+                symbol          = f"INTRA:{sig.symbol}",
                 action          = "BUY",
                 confidence      = sig.confidence,
                 entry_price     = sig.entry_price,
@@ -334,8 +334,8 @@ class IntradayAgent:
                 with open(VIRTUAL_PORTFOLIO_FILE, encoding="utf-8") as f:
                     pf = json.load(f)
                 return sum(
-                    1 for p in pf.get("positions", {}).values()
-                    if p.get("trade_type") == "intraday"
+                    1 for sym in pf.get("positions", {})
+                    if sym.startswith("INTRA:") or pf["positions"][sym].get("trade_type") == "intraday"
                 )
         except Exception:
             pass

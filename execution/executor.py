@@ -20,6 +20,7 @@ from config import (
 )
 from strategy.engine import TradeSignal
 from services.paper_treasury import can_allocate, log_treasury_event, write_treasury_snapshot
+from execution.portfolio_lock import load_portfolio_locked, save_portfolio_locked
 from utils import get_logger
 
 logger = get_logger("Executor")
@@ -58,11 +59,13 @@ class PaperExecutor:
 
             self.portfolio["cash"] -= cost
             self.portfolio["positions"][signal.symbol] = {
-                "qty":        signal.position_size,
-                "entry":      signal.entry_price,
-                "stop_loss":  signal.stop_loss,
-                "take_profit":signal.take_profit,
-                "timestamp":  datetime.now().isoformat(),
+                "qty":              signal.position_size,
+                "entry":            signal.entry_price,
+                "stop_loss":        signal.stop_loss,
+                "take_profit":      signal.take_profit,
+                "entry_confidence": signal.confidence,
+                "trade_type":       getattr(signal, "trade_type", "swing"),
+                "timestamp":        datetime.now().isoformat(),
             }
             result = {
                 "status":  "filled",
@@ -81,7 +84,15 @@ class PaperExecutor:
             if not pos:
                 return {"status": "skipped", "reason": "no open position to sell"}
 
-            proceeds = signal.entry_price * pos["qty"]
+            # Use live price if signal.entry_price looks stale (same as original entry)
+            sell_price = signal.entry_price
+            if abs(sell_price - pos["entry"]) < 0.01:
+                live = self._get_mark_price(signal.symbol)
+                if live:
+                    sell_price = live
+                    logger.debug(f"SELL {signal.symbol}: using live price ₹{live:,.2f} instead of stale entry")
+
+            proceeds = sell_price * pos["qty"]
             pnl      = proceeds - (pos["entry"] * pos["qty"])
             self.portfolio["cash"] += proceeds
             del self.portfolio["positions"][signal.symbol]
@@ -94,11 +105,11 @@ class PaperExecutor:
                 "action":   "SELL",
                 "symbol":   signal.symbol,
                 "qty":      pos["qty"],
-                "price":    signal.entry_price,
+                "price":    sell_price,
                 "pnl":      round(pnl, 2),
                 "mode":     "paper",
             }
-            logger.info(f"PAPER SELL {signal.symbol} × {pos['qty']} @ ₹{signal.entry_price} | PnL ₹{pnl:+,.0f}")
+            logger.info(f"PAPER SELL {signal.symbol} × {pos['qty']} @ ₹{sell_price:,.2f} | PnL ₹{pnl:+,.0f}")
             log_treasury_event("release_close", "nse", pos["entry"] * pos["qty"], f"{signal.symbol} SELL", {"symbol": signal.symbol, "pnl": round(pnl, 2)})
 
         self._save_portfolio()
@@ -140,9 +151,9 @@ class PaperExecutor:
 
     def _load_portfolio(self) -> dict:
         os.makedirs("logs", exist_ok=True)
-        if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
-            with open(VIRTUAL_PORTFOLIO_FILE) as f:
-                return json.load(f)
+        data = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
+        if data:
+            return data
         return {
             "cash":         VIRTUAL_CAPITAL,
             "positions":    {},
@@ -152,8 +163,7 @@ class PaperExecutor:
         }
 
     def _save_portfolio(self):
-        with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
-            json.dump(self.portfolio, f, indent=2)
+        save_portfolio_locked(VIRTUAL_PORTFOLIO_FILE, self.portfolio)
 
     def _get_mark_price(self, symbol: str) -> float | None:
         """Best-effort live mark for paper-mode risk checks and reporting."""

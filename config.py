@@ -111,8 +111,10 @@ SENTIMENT_DECAY_FACTOR    = 0.5        # weight halved for each extra 6h window
 TA_WEIGHT        = float(_S("TA_WEIGHT",        "TA_WEIGHT",        0.50))
 SENTIMENT_WEIGHT = float(_S("SENTIMENT_WEIGHT", "SENTIMENT_WEIGHT", 0.30))
 TREND_WEIGHT     = 0.20
-MIN_CONFIDENCE   = float(_S("MIN_CONFIDENCE",   "MIN_CONFIDENCE",   0.60))
-TOP_N_SIGNALS    = int(  _S("TOP_N_SIGNALS",    "TOP_N_SIGNALS",    10))
+MIN_CONFIDENCE       = float(_S("MIN_CONFIDENCE",       "MIN_CONFIDENCE",       0.60))
+SELL_CONFIDENCE      = float(_S("SELL_CONFIDENCE",      default=0.45))     # emit SELL when confidence <= this
+THESIS_DROP_SELL_PCT = float(_S("THESIS_DROP_SELL_PCT", default=0.30))     # sell held position if confidence drops 30%+
+TOP_N_SIGNALS        = int(  _S("TOP_N_SIGNALS",        "TOP_N_SIGNALS",    10))
 STRATEGY_QUALITY_MIN_RESOLVED = int(_S("STRATEGY_QUALITY_MIN_RESOLVED", default=3))
 STRATEGY_QUALITY_WEAK_SYMBOL_TP_PCT = float(_S("STRATEGY_QUALITY_WEAK_SYMBOL_TP_PCT", default=35.0))
 STRATEGY_QUALITY_STRONG_SYMBOL_TP_PCT = float(_S("STRATEGY_QUALITY_STRONG_SYMBOL_TP_PCT", default=60.0))
@@ -231,6 +233,12 @@ INTRADAY_MIN_VOL_SPIKE = float(_S("INTRADAY_MIN_VOL_SPIKE", default=1.5))   # cu
 INTRADAY_RSI_LO        = int(  _S("INTRADAY_RSI_LO",        default=40))
 INTRADAY_RSI_HI        = int(  _S("INTRADAY_RSI_HI",        default=65))
 INTRADAY_MIN_CRITERIA  = int(  _S("INTRADAY_MIN_CRITERIA",  default=3))     # must meet N of 5 criteria
+
+# -----------------------------------------------------------------------------
+# PIPELINE PENALTIES (Phase 3 — soften hard-blocks)
+# -----------------------------------------------------------------------------
+MTF_COUNTER_PENALTY    = float(_S("MTF_COUNTER_PENALTY",    default=0.08))  # penalty for counter-trend MTF
+SR_SELL_ZONE_PENALTY   = float(_S("SR_SELL_ZONE_PENALTY",   default=0.10))  # penalty for S/R sell zone
 
 # -----------------------------------------------------------------------------
 # ALERTS — Telegram

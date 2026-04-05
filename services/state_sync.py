@@ -42,13 +42,16 @@ def _nse_positions(portfolio: dict) -> list[dict]:
         current = float(pos.get("mark_price", pos.get("entry", 0)) or 0)
         pnl = round((current - entry) * qty, 2)
         pnl_pct = round(((current - entry) / entry) * 100, 2) if entry else 0.0
+        # Handle INTRA: prefixed symbols from intraday agent
+        display_sym = symbol.replace("INTRA:", "")
+        is_intraday = symbol.startswith("INTRA:") or pos.get("trade_type") == "intraday"
         rows.append({
             "position_key": f"nse:{symbol}",
             "market": "nse",
-            "symbol": symbol,
-            "instrument": symbol,
+            "symbol": display_sym,
+            "instrument": display_sym,
             "side": "LONG",
-            "strategy": "swing",
+            "strategy": "intraday" if is_intraday else "swing",
             "status": "open",
             "quantity": qty,
             "entry_price": entry,

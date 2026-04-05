@@ -118,6 +118,14 @@ DEFAULTS: dict = {
     "INTRADAY_RSI_HI":         65,
     "INTRADAY_MIN_CRITERIA":   3,
 
+    # ---- Intelligent exits ----
+    "SELL_CONFIDENCE":         0.45,
+    "THESIS_DROP_SELL_PCT":    0.30,
+
+    # ---- Pipeline penalties ----
+    "MTF_COUNTER_PENALTY":     0.08,
+    "SR_SELL_ZONE_PENALTY":    0.10,
+
     # ---- Dashboard ----
     "DASHBOARD_REFRESH_SEC": 30,
 }

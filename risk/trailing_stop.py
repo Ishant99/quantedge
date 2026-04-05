@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import yfinance as yf
 from datetime import datetime
-from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE, TRAIL_PCT
+from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE, TRAIL_PCT, SQLITE_DB_FILE
+from execution.portfolio_lock import load_portfolio_locked, save_portfolio_locked
 from utils import get_logger
 from utils.telegram import send
 
@@ -35,8 +36,9 @@ class TrailingStopMonitor:
             logger.info("No virtual portfolio found — nothing to monitor")
             return {}
 
-        with open(VIRTUAL_PORTFOLIO_FILE) as f:
-            portfolio = json.load(f)
+        portfolio = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
+        if not portfolio:
+            return {}
 
         positions = portfolio.get("positions", {})
         if not positions:
@@ -72,21 +74,23 @@ class TrailingStopMonitor:
                          f"Exit price: `Rs.{result['current_price']:,.0f}`\n"
                          f"P&L: `Rs.{result['pnl']:+,.0f}`")
 
-        # Remove exited positions
+        # Remove exited positions + close in SQLite
         for sym in exits:
-            pnl = (positions[sym].get("exit_price", positions[sym]["stop_loss"])
-                   - positions[sym]["entry"]) * positions[sym]["qty"]
-            portfolio["cash"] += positions[sym]["stop_loss"] * positions[sym]["qty"]
+            exit_price = updates[sym].get("current_price", positions[sym]["stop_loss"])
+            entry      = positions[sym]["entry"]
+            qty        = positions[sym]["qty"]
+            pnl        = (exit_price - entry) * qty
+            portfolio["cash"] += exit_price * qty
             portfolio["total_trades"] = portfolio.get("total_trades", 0) + 1
             if pnl > 0:
                 portfolio["wins"] = portfolio.get("wins", 0) + 1
             del positions[sym]
 
-        portfolio["positions"] = positions
+            # Close the matching trade in SQLite (fixes orphan bug)
+            self._close_trade_sqlite(sym, exit_price)
 
-        # Save updated portfolio
-        with open(VIRTUAL_PORTFOLIO_FILE, "w") as f:
-            json.dump(portfolio, f, indent=2)
+        portfolio["positions"] = positions
+        save_portfolio_locked(VIRTUAL_PORTFOLIO_FILE, portfolio)
 
         if updates:
             logger.info(f"Trailing stop update: {len(updates)} positions checked, "
@@ -94,10 +98,37 @@ class TrailingStopMonitor:
                         f"{sum(1 for u in updates.values() if u['action']=='MOVE_SL')} SLs moved")
         return updates
 
+    def _close_trade_sqlite(self, symbol: str, exit_price: float):
+        """Close the open trade record in SQLite so it doesn't become an orphan."""
+        try:
+            import sqlite3
+            if not os.path.exists(SQLITE_DB_FILE):
+                return
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                row = conn.execute(
+                    "SELECT id, entry_price, qty FROM trades "
+                    "WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1",
+                    (symbol,)
+                ).fetchone()
+                if row:
+                    trade_id, entry, qty = row
+                    pnl     = round((exit_price - entry) * qty, 2)
+                    pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0
+                    conn.execute("""
+                        UPDATE trades SET exit_price=?, exit_time=?,
+                        pnl=?, pnl_pct=?, status='closed' WHERE id=?
+                    """, (round(exit_price, 2), datetime.now().isoformat(),
+                          pnl, pnl_pct, trade_id))
+                    logger.debug(f"SQLite: closed trade #{trade_id} for {symbol} "
+                                 f"(trailing stop) P&L Rs.{pnl:+,.0f}")
+        except Exception as e:
+            logger.warning(f"SQLite trailing stop close failed for {symbol}: {e}")
+
     def _check_position(self, symbol: str, pos: dict) -> dict | None:
         """Check one position and return action if needed."""
         try:
-            ticker = yf.Ticker(f"{symbol}.NS")
+            bare = symbol.replace("INTRA:", "")
+            ticker = yf.Ticker(f"{bare}.NS")
             hist   = ticker.history(period="2d", interval="1d")
             if hist.empty:
                 return None

@@ -18,6 +18,7 @@ import numpy as np
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import yfinance as yf
+from config import MTF_COUNTER_PENALTY
 from utils import get_logger
 
 logger = get_logger("MultiTimeframe")
@@ -33,6 +34,7 @@ class MTFResult:
     weekly_rsi:     float
     weekly_ema_trend: str   # above | below EMA20 on weekly
     reason:         str
+    mtf_penalty:    float = 0.0   # confidence penalty for counter-trend signals
 
 
 class MultiTimeframeAnalyser:
@@ -102,6 +104,7 @@ class MultiTimeframeAnalyser:
             confirmed = False
             mtf_score = 5.0
 
+            penalty = 0.0
             if weekly_trend == "up" and daily_signal == "bullish":
                 confirmed = True
                 mtf_score = (weekly_score + 8.0) / 2
@@ -115,17 +118,20 @@ class MultiTimeframeAnalyser:
                 mtf_score = 6.0
                 reason    = f"Weekly uptrend, daily neutral — cautious buy ok"
             elif weekly_trend == "down" and daily_signal == "bullish":
-                confirmed = False
+                # Counter-trend: penalize instead of blocking
+                confirmed = True
+                penalty   = MTF_COUNTER_PENALTY
                 mtf_score = 3.0
-                reason    = f"Counter-trend — weekly down, daily up — BLOCKED"
+                reason    = f"Counter-trend — weekly down, daily up — penalty -{penalty:.0%}"
             elif weekly_trend == "sideways":
                 confirmed = daily_signal == "bullish"
                 mtf_score = 5.5 if confirmed else 4.5
                 reason    = f"Sideways market — only strong daily signals pass"
             else:
-                confirmed = False
+                confirmed = True
+                penalty   = MTF_COUNTER_PENALTY / 2
                 mtf_score = 4.0
-                reason    = f"Mixed timeframes — no confirmation"
+                reason    = f"Mixed timeframes — penalty -{penalty:.0%}"
 
             return MTFResult(
                 symbol         = symbol,
@@ -136,6 +142,7 @@ class MultiTimeframeAnalyser:
                 weekly_rsi     = round(rsi_w, 1),
                 weekly_ema_trend= ema_trend,
                 reason         = reason,
+                mtf_penalty    = penalty,
             )
 
         except Exception as e:

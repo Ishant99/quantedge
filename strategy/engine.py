@@ -14,7 +14,8 @@ from config import (
     TA_WEIGHT, SENTIMENT_WEIGHT, TREND_WEIGHT,
     MIN_CONFIDENCE, TOP_N_SIGNALS,
     RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, MAX_OPEN_POSITIONS,
-    VIRTUAL_CAPITAL, ATR_SL_MULTIPLIER
+    VIRTUAL_CAPITAL, ATR_SL_MULTIPLIER,
+    SELL_CONFIDENCE, THESIS_DROP_SELL_PCT,
 )
 from analysis.technical_agent import TAResult
 from analysis.sentiment_agent import SentimentResult
@@ -62,6 +63,8 @@ class StrategyEngine:
         portfolio_value: float = VIRTUAL_CAPITAL,
         open_positions:  int   = 0,
         position_size_multiplier: float = 1.0,
+        held_position:   bool  = False,
+        entry_confidence: float = 0.0,
     ) -> TradeSignal:
         """
         Generate a trade signal for one stock.
@@ -72,6 +75,8 @@ class StrategyEngine:
             df:               OHLCV DataFrame for this stock
             portfolio_value:  Current total portfolio value (₹)
             open_positions:   Number of currently open positions
+            held_position:    True if this symbol is already in portfolio
+            entry_confidence: Confidence at time of entry (for thesis check)
         """
         last_close = float(df["close"].iloc[-1])
         atr        = self._atr(df)
@@ -93,15 +98,25 @@ class StrategyEngine:
         # ------------------------------------------------------------------
         # Determine action
         # ------------------------------------------------------------------
-        if open_positions >= MAX_OPEN_POSITIONS:
+        if open_positions >= MAX_OPEN_POSITIONS and not held_position:
             action = "HOLD"
             reason = f"Max open positions ({MAX_OPEN_POSITIONS}) reached"
-        elif confidence >= MIN_CONFIDENCE and ta.signal == "bullish":
+        elif confidence >= MIN_CONFIDENCE and ta.signal == "bullish" and not held_position:
             action = "BUY"
             reason = self._build_reason(ta, sentiment, confidence)
-        elif confidence <= (1 - MIN_CONFIDENCE) and ta.signal == "bearish":
+        elif confidence <= SELL_CONFIDENCE and ta.signal == "bearish":
             action = "SELL"
             reason = self._build_reason(ta, sentiment, confidence)
+        elif held_position and entry_confidence > 0:
+            # Thesis re-evaluation: if confidence dropped significantly, exit
+            drop = (entry_confidence - confidence) / entry_confidence
+            if drop >= THESIS_DROP_SELL_PCT and ta.signal in ("bearish", "neutral"):
+                action = "SELL"
+                reason = (self._build_reason(ta, sentiment, confidence) +
+                          f" | thesis degraded {drop:.0%} from entry")
+            else:
+                action = "HOLD"
+                reason = f"Held position, confidence {confidence:.0%} — holding"
         else:
             action = "HOLD"
             reason = f"Confidence {confidence:.0%} below threshold — no trade"
