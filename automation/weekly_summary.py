@@ -482,13 +482,23 @@ def _build_report(start_date: str, end_date: str) -> str:
     if fno_trades:
         lines += [
             "## F&O Closed Trades", "",
-            "| Exit Date | Instrument | Type | Strike | Expiry | Lots | Entry | Exit | P&L | P&L % | Reason |",
-            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "| Exit Date | Instrument | Side | Type | Strike | Expiry | Lots | Open | Close | P&L | P&L % | Reason |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for t in fno_trades[:100]:
             exit_dt = (t.get("exit_time") or "")[:10]
+            opt = str(t.get("option_type", "") or "").upper()
+            if opt.startswith("SELL-"):
+                side = "SHORT"
+            elif opt == "FUT-SHORT":
+                side = "SHORT"
+            elif opt == "FUT-LONG":
+                side = "LONG"
+            else:
+                side = "LONG"
             lines.append(
                 f"| {exit_dt} | {t.get('instrument','')} | "
+                f"{side} | "
                 f"{t.get('option_type','') or '-'} | "
                 f"{t.get('strike','') or '-'} | "
                 f"{t.get('expiry','') or '-'} | "
@@ -501,6 +511,8 @@ def _build_report(start_date: str, end_date: str) -> str:
             )
         if len(fno_trades) > 100:
             lines.append(f"\n_…and {len(fno_trades)-100} more trades_")
+        lines.append("_Open = premium when position opened; Close = premium when closed. "
+                     "For SHORT trades, profit occurs when Close < Open._")
         lines.append("")
 
     if crypto_trades:

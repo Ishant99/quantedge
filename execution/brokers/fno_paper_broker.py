@@ -85,6 +85,36 @@ class FNOPaperBroker:
             return False, f"F&O position limit reached ({FNO_MAX_POSITIONS})"
         return True, ""
 
+    def _within_daily_loss_limit(self) -> tuple[bool, str]:
+        """
+        Circuit breaker: block new F&O entries if today's realized F&O P&L is
+        already below -FNO_DAILY_LOSS_LIMIT_PCT * VIRTUAL_CAPITAL.
+        Default 3% (Rs.30k on Rs.10L book). Disable by setting pct <= 0.
+        """
+        try:
+            from config import VIRTUAL_CAPITAL
+            limit_pct = float(self._cfg("FNO_DAILY_LOSS_LIMIT_PCT", 3.0) or 0)
+            if limit_pct <= 0:
+                return True, ""
+            limit_abs = VIRTUAL_CAPITAL * limit_pct / 100.0
+            today_iso = datetime.now().strftime("%Y-%m-%d")
+            with self._conn() as conn:
+                row = conn.execute("""
+                    SELECT COALESCE(SUM(pnl), 0)
+                    FROM fno_trades
+                    WHERE status='closed' AND exit_time >= ? AND exit_time < ?
+                """, (today_iso, today_iso + "T99")).fetchone()
+            day_pnl = float(row[0] or 0)
+            if day_pnl <= -limit_abs:
+                return False, (
+                    f"F&O daily loss circuit breaker tripped "
+                    f"(day P&L Rs.{day_pnl:+,.0f} <= -Rs.{limit_abs:,.0f}, "
+                    f"limit {limit_pct:.1f}% of capital)"
+                )
+        except Exception as e:
+            logger.warning(f"Daily loss check failed, allowing entry: {e}")
+        return True, ""
+
     def _is_expired(self, expiry: str, today: datetime | None = None) -> bool:
         """Robust expiry comparison for values like 03-Apr-2026."""
         try:
@@ -99,6 +129,68 @@ class FNOPaperBroker:
         self.db  = SQLITE_DB_FILE
         self.chain = NSEOptionsChain()
         self._init_table()
+        self._backfill_short_pnl_sign()
+
+    # ------------------------------------------------------------------
+    # One-shot migration: fix inverted P&L sign on historical short trades
+    # ------------------------------------------------------------------
+    def _backfill_short_pnl_sign(self) -> None:
+        """
+        Before the close_position() sign fix, every closed SELL-* and
+        FUT-SHORT trade had pnl written with the long-perspective formula,
+        producing losses labelled as wins and vice versa.
+
+        This migration re-derives pnl / pnl_pct from entry_premium and
+        exit_premium for every such row, then stamps a settings flag so
+        it never runs twice.
+        """
+        try:
+            if S.get("FNO_SHORT_PNL_SIGN_BACKFILLED", False):
+                return
+        except Exception:
+            pass
+
+        try:
+            with self._conn() as conn:
+                rows = conn.execute("""
+                    SELECT id, option_type, entry_premium, exit_premium, qty, pnl
+                    FROM fno_trades
+                    WHERE status='closed'
+                      AND (option_type LIKE 'SELL-%' OR option_type='FUT-SHORT')
+                      AND entry_premium IS NOT NULL
+                      AND exit_premium  IS NOT NULL
+                """).fetchall()
+
+                updated = 0
+                for trade_id, opt_type, entry, exit_p, qty, old_pnl in rows:
+                    if entry is None or exit_p is None or qty is None:
+                        continue
+                    try:
+                        new_pnl = round((float(entry) - float(exit_p)) * float(qty), 2)
+                        new_pct = round((float(entry) - float(exit_p)) / float(entry) * 100, 2) if entry else 0
+                    except Exception:
+                        continue
+                    # Only rewrite rows whose sign actually differs (idempotent)
+                    if old_pnl is None or round(float(old_pnl), 2) != new_pnl:
+                        conn.execute(
+                            "UPDATE fno_trades SET pnl=?, pnl_pct=? WHERE id=?",
+                            (new_pnl, new_pct, trade_id),
+                        )
+                        updated += 1
+                conn.commit()
+        except Exception as e:
+            logger.error(f"F&O P&L sign backfill failed: {e}")
+            return
+
+        try:
+            S.save({"FNO_SHORT_PNL_SIGN_BACKFILLED": True})
+        except Exception:
+            pass
+        if updated:
+            logger.warning(
+                f"F&O P&L sign backfill: corrected {updated} historical short "
+                f"trades (flipped sign on SELL-*/FUT-SHORT rows)"
+            )
 
     # ------------------------------------------------------------------
     # Open a new paper position
@@ -114,6 +206,10 @@ class FNOPaperBroker:
         """
         # Enforce position limit
         ok, reason = self._within_position_cap(1)
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {direction}")
+            return None
+        ok, reason = self._within_daily_loss_limit()
         if not ok:
             logger.warning(f"{reason} — skipping {index} {direction}")
             return None
@@ -178,8 +274,18 @@ class FNOPaperBroker:
         if exit_premium is None:
             exit_premium = self.chain.get_premium(index, strike, opt_type) or entry_prem * 0.5
 
-        pnl     = round((exit_premium - entry_prem) * qty, 2)
-        pnl_pct = round((exit_premium - entry_prem) / entry_prem * 100, 2)
+        # ── P&L sign by position direction ──────────────────────────────────
+        # BUY CE/PE, FUT-LONG  → long perspective : (exit - entry) * qty
+        # SELL-*   (short vol) → short perspective: (entry - exit) * qty
+        # FUT-SHORT            → short perspective: (entry - exit) * qty
+        opt_upper = str(opt_type or "").upper()
+        is_short  = opt_upper.startswith("SELL-") or opt_upper == "FUT-SHORT"
+        if is_short:
+            pnl     = round((entry_prem - exit_premium) * qty, 2)
+            pnl_pct = round((entry_prem - exit_premium) / entry_prem * 100, 2)
+        else:
+            pnl     = round((exit_premium - entry_prem) * qty, 2)
+            pnl_pct = round((exit_premium - entry_prem) / entry_prem * 100, 2)
 
         with self._conn() as conn:
             conn.execute("""
@@ -323,6 +429,10 @@ class FNOPaperBroker:
         if not ok:
             logger.warning(f"{reason} — skipping {index} {strategy}")
             return None, None
+        ok, reason = self._within_daily_loss_limit()
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {strategy}")
+            return None, None
         ok, reason, _ = can_allocate("fno", reserve_inr)
         if not ok:
             logger.warning(f"F&O treasury block for {index} {strategy}: {reason}")
@@ -404,9 +514,8 @@ class FNOPaperBroker:
             if reason:
                 result = self.close_position(trade_id, curr, reason)
                 if result:
-                    # Invert P&L for display (seller profits on decay)
-                    result["pnl"]     = round((entry_prem - curr) * qty, 2)
-                    result["pnl_pct"] = round((entry_prem - curr) / entry_prem * 100, 2)
+                    # close_position() now writes short-perspective P&L
+                    # directly (see is_short branch), so no inversion needed.
                     closed.append(result)
         return closed
 
@@ -430,6 +539,10 @@ class FNOPaperBroker:
         qty      = lots * lot_size
         margin   = get_margin_required(index, price, lots)
         ok, reason = self._within_position_cap(1)
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} FUT-{direction}")
+            return None
+        ok, reason = self._within_daily_loss_limit()
         if not ok:
             logger.warning(f"{reason} — skipping {index} FUT-{direction}")
             return None

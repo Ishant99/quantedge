@@ -416,6 +416,56 @@ def _live_price(symbol):
         return float(h["Close"].iloc[-1]) if not h.empty else None
     except Exception: return None
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _nse_portfolio_mtm():
+    """
+    Cached 60s — live NSE portfolio valuation.
+
+    Returns dict with:
+      cash            : liquid cash from virtual_portfolio.json
+      positions       : raw positions dict (entry/qty/sl/tp)
+      live_mtm        : sum(live_price * qty) over open positions
+      portfolio_value : cash + live_mtm
+      nse_pnl         : portfolio_value - VIRTUAL_CAPITAL  (TRUE NSE P&L)
+      unrealized      : sum((live_price - entry) * qty)
+      prices          : {symbol: live_price}
+
+    Replaces the old `pnl = cash - vc` formulation which treated open
+    position cost basis as if it were a pure loss.
+    """
+    f = "logs/virtual_portfolio.json"
+    vc = _cfg("VIRTUAL_CAPITAL", 1_000_000)
+    if os.path.exists(f):
+        with open(f) as fp:
+            pf = json.load(fp)
+    else:
+        pf = {"cash": vc, "positions": {}}
+    cash      = pf.get("cash", vc) or vc
+    positions = pf.get("positions", {}) or {}
+
+    prices, live_mtm, unrealized = {}, 0.0, 0.0
+    for sym, p in positions.items():
+        entry = float(p.get("entry", 0) or 0)
+        qty   = float(p.get("qty", 0) or 0)
+        curr  = _live_price(sym)
+        if curr is None:
+            curr = entry  # fallback to cost basis if yfinance hiccups
+        else:
+            prices[sym] = curr
+        live_mtm   += curr * qty
+        unrealized += (curr - entry) * qty
+
+    portfolio_value = cash + live_mtm
+    return {
+        "cash": cash,
+        "positions": positions,
+        "live_mtm": live_mtm,
+        "portfolio_value": portfolio_value,
+        "nse_pnl": portfolio_value - vc,
+        "unrealized": unrealized,
+        "prices": prices,
+    }
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _get_banknifty_return():
     """Cached 2 min — BankNifty daily return for ticker strip."""
@@ -803,11 +853,12 @@ with st.sidebar:
 
     st.markdown('<div style="border-top:1px solid #1e1e1e;margin:8px 0;"></div>', unsafe_allow_html=True)
 
-    # Mini portfolio card
-    pf   = _load_pf()
-    cash = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
+    # Mini portfolio card — live MTM, not just cash drawdown
+    _mtm = _nse_portfolio_mtm()
+    pf   = {"cash": _mtm["cash"], "positions": _mtm["positions"]}
+    cash = _mtm["portfolio_value"]   # show live portfolio value, not raw cash
     vc   = _cfg("VIRTUAL_CAPITAL", 1_000_000)
-    pnl  = cash - vc
+    pnl  = _mtm["nse_pnl"]           # TRUE P&L (cash + live_mtm - vc)
     pc   = "#00C805" if pnl >= 0 else "#FF3B3B"
     # Combined P&L across all markets (cached)
     _sb_inr  = _cfg("INR_PER_USD", 83.0)
@@ -856,11 +907,14 @@ with st.sidebar:
 # =============================================================================
 if page == "TODAY":
     stats = _get_memory_stats()
-    pf    = _load_pf()
-    cash  = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
+    _mtm  = _nse_portfolio_mtm()
+    pf    = {"cash": _mtm["cash"], "positions": _mtm["positions"]}
+    # "cash" var below is actually "portfolio value" for display purposes —
+    # matches the live MTM so the KPI shows true worth, not just liquid cash.
+    cash  = _mtm["portfolio_value"]
     vc    = _cfg("VIRTUAL_CAPITAL", 1_000_000)
-    pnl   = cash - vc
-    pos   = pf.get("positions", {})
+    pnl   = _mtm["nse_pnl"]          # TRUE NSE P&L (cash + live_mtm - vc)
+    pos   = _mtm["positions"]
 
     # ── Live market data for strips ───────────────────────────────────────────
     reg     = _load_json("logs/market_regime.json")
@@ -1603,12 +1657,13 @@ if page == "TODAY":
 # =============================================================================
 elif page == "PORTFOLIO":
     stats = _get_memory_stats()
-    pf    = _load_pf()
-    cash  = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
+    _mtm  = _nse_portfolio_mtm()
+    pf    = {"cash": _mtm["cash"], "positions": _mtm["positions"]}
+    cash  = _mtm["portfolio_value"]  # shown in header as portfolio value
     vc    = _cfg("VIRTUAL_CAPITAL", 1_000_000)
-    pnl   = cash - vc
+    pnl   = _mtm["nse_pnl"]          # TRUE NSE P&L (cash + live_mtm - vc)
     snaps = _get_equity_snapshots()
-    positions = pf.get("positions", {})
+    positions = _mtm["positions"]
 
     st.markdown('<div class="bb-header" style="font-size:12px;">PORTFOLIO</div>',
                 unsafe_allow_html=True)

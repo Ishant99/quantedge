@@ -96,6 +96,8 @@ DEFAULTS: dict = {
     "FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT": 0.15,
     "FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT": 0.15,
     "FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE": True,
+    "FNO_DAILY_LOSS_LIMIT_PCT": 3.0,        # daily circuit breaker; 0 disables
+    "FNO_SHORT_PNL_SIGN_BACKFILLED": False, # one-shot migration flag
     "INR_PER_USD":           83.0,
     "INR_PER_USDT":          83.0,
 
