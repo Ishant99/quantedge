@@ -16,6 +16,26 @@ from utils.telegram import send
 logger = get_logger("WeeklySummary")
 
 
+def _fetch_live_prices(symbols):
+    """Best-effort batch fetch of current NSE prices via yfinance.
+    Returns {symbol: last_price}. Silently skips failures."""
+    out = {}
+    if not symbols:
+        return out
+    try:
+        import yfinance as yf
+    except Exception:
+        return out
+    for sym in symbols:
+        try:
+            h = yf.Ticker(f"{sym}.NS").history(period="1d", interval="15m")
+            if not h.empty:
+                out[sym] = float(h["Close"].iloc[-1])
+        except Exception:
+            continue
+    return out
+
+
 def send_weekly_summary():
     try:
         _send()
@@ -253,22 +273,47 @@ def _build_report(start_date: str, end_date: str) -> str:
     end_inclusive = (datetime.strptime(end_date, "%Y-%m-%d") +
                      timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # ----- NSE portfolio snapshot (current state, not period) -----
+    # ----- NSE portfolio snapshot (live MTM, matches dashboard) -----
     initial_capital = VIRTUAL_CAPITAL
-    portfolio_value = initial_capital
     open_positions  = {}
+    cash            = initial_capital
     if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
         with open(VIRTUAL_PORTFOLIO_FILE) as f:
             pf = json.load(f)
-        cash = pf.get("cash", initial_capital)
+        cash           = pf.get("cash", initial_capital)
         open_positions = pf.get("positions", {})
-        mtm = sum(p.get("entry", 0) * p.get("qty", 0)
-                  for p in open_positions.values())
-        portfolio_value = cash + mtm
-    else:
-        cash = initial_capital
-    pnl_total     = portfolio_value - initial_capital
-    pnl_total_pct = pnl_total / initial_capital * 100
+
+    # Fetch live prices for all open NSE positions (best effort)
+    live_prices = _fetch_live_prices(list(open_positions.keys()))
+
+    invested_cost = 0.0   # entry * qty   (original cost basis)
+    live_mtm      = 0.0   # current price * qty
+    unrealized    = 0.0   # (current - entry) * qty
+    position_rows = []    # for "Top Open Positions" section
+    for sym, p in open_positions.items():
+        entry = p.get("entry", 0) or 0
+        qty   = p.get("qty", 0) or 0
+        curr  = live_prices.get(sym, entry)
+        cost  = entry * qty
+        mkt   = curr * qty
+        unr   = (curr - entry) * qty
+        invested_cost += cost
+        live_mtm      += mkt
+        unrealized    += unr
+        position_rows.append({
+            "symbol": sym, "qty": qty, "entry": entry,
+            "current": curr, "cost": cost, "mtm": mkt,
+            "unrealized": unr,
+            "pct": ((curr - entry) / entry * 100) if entry else 0,
+            "live": sym in live_prices,
+        })
+    # Sort biggest losers first so they surface at the top of the report
+    position_rows.sort(key=lambda r: r["unrealized"])
+
+    portfolio_value = cash + live_mtm
+    pnl_total       = portfolio_value - initial_capital
+    pnl_total_pct   = (pnl_total / initial_capital * 100) if initial_capital else 0
+    prices_ok       = bool(live_prices) or not open_positions
 
     # ----- NSE trades in period -----
     nse_trades, nse_signals = [], 0
@@ -325,25 +370,31 @@ def _build_report(start_date: str, end_date: str) -> str:
     worst = min(nse_trades, key=lambda t: t.get("pnl") or 0, default=None)
 
     INR_RATE = 83.0
-    combined_pnl = (nse_pnl + fno_pnl +
-                    crypto_pnl * INR_RATE + us_pnl * INR_RATE)
+    realized_combined = (nse_pnl + fno_pnl +
+                         crypto_pnl * INR_RATE + us_pnl * INR_RATE)
+    # True P&L includes live unrealized MTM on open NSE equity positions
+    true_combined = realized_combined + unrealized
 
     # ----- Build markdown -----
+    price_note = "" if prices_ok else " _(live price fetch failed — using entry as fallback)_"
     lines = [
         f"# Trading Report",
         f"_{start_date} → {end_date}_",
         "",
-        "## NSE Equity Portfolio (current snapshot)",
-        f"- Value: Rs.{portfolio_value:,.0f}",
+        "## NSE Equity Portfolio (live snapshot)" + price_note,
+        f"- Cash: Rs.{cash:,.0f}",
+        f"- Open MTM (live): Rs.{live_mtm:,.0f}",
+        f"- Portfolio value: Rs.{portfolio_value:,.0f}",
         f"- All-time P&L: Rs.{pnl_total:+,.0f} ({pnl_total_pct:+.2f}%)",
         f"- Open positions: {len(open_positions)}",
+        f"- Unrealized P&L on open positions: Rs.{unrealized:+,.0f}",
         "",
-        "## Period — NSE Equity",
+        "## Period — NSE Equity (realized)",
         f"- Signals generated: {nse_signals}",
         f"- Trades closed: {len(nse_trades)}",
         f"- Wins / Losses: {len(wins)} / {len(losses)}",
         f"- Win rate: {win_rate:.0f}%",
-        f"- Period P&L: Rs.{nse_pnl:+,.0f}",
+        f"- Realized P&L: Rs.{nse_pnl:+,.0f}",
     ]
     if best and best.get("pnl"):
         lines.append(f"- Best:  {best['symbol']} Rs.{best['pnl']:+,.0f} ({best.get('pnl_pct', 0):+.1f}%)")
@@ -364,9 +415,32 @@ def _build_report(start_date: str, end_date: str) -> str:
         f"- Trades: {us_count}",
         f"- P&L: ${us_pnl:+.2f} (≈ Rs.{us_pnl * INR_RATE:+,.0f})",
         "",
-        f"## Combined Period P&L: Rs.{combined_pnl:+,.0f}",
+        "## P&L Summary",
+        f"- Realized (period, all markets): Rs.{realized_combined:+,.0f}",
+        f"- NSE open unrealized (live MTM): Rs.{unrealized:+,.0f}",
+        f"- **True combined P&L: Rs.{true_combined:+,.0f}**",
         "",
     ]
+
+    # Open NSE positions (live MTM) — biggest losers first
+    if position_rows:
+        lines += [
+            "## Open NSE Positions (live MTM)",
+            "",
+            "| Symbol | Qty | Entry | Current | Cost | MTM | Unrealized | % |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for r in position_rows:
+            mark = "" if r["live"] else " *"
+            lines.append(
+                f"| {r['symbol']}{mark} | {r['qty']} | "
+                f"{r['entry']:.2f} | {r['current']:.2f} | "
+                f"Rs.{r['cost']:,.0f} | Rs.{r['mtm']:,.0f} | "
+                f"Rs.{r['unrealized']:+,.0f} | {r['pct']:+.2f}% |"
+            )
+        if any(not r["live"] for r in position_rows):
+            lines.append("\n_\\* = live price unavailable, using entry as fallback_")
+        lines.append("")
 
     if nse_trades:
         lines += ["## NSE Closed Trades", "", "| Date | Symbol | Entry | Exit | P&L | P&L % |", "|---|---|---|---|---|---|"]
