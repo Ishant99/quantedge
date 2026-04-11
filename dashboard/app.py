@@ -3136,6 +3136,44 @@ elif page == "CONFIG":
         with st.expander("VIEW REVIEW REPORT", expanded=False):
             st.markdown(review_md)
 
+        st.markdown('<div class="bb-header" style="margin-top:14px;">PERIOD TRADING REPORT</div>',
+                    unsafe_allow_html=True)
+        st.caption("Download a trading report for any custom date range — covers NSE, F&O, Crypto, and US trades.")
+
+        _today = datetime.now().date()
+        _default_start = _today - timedelta(days=7)
+        pr1, pr2 = st.columns(2)
+        with pr1:
+            period_start = st.date_input(
+                "START DATE", value=_default_start, max_value=_today, key="period_report_start"
+            )
+        with pr2:
+            period_end = st.date_input(
+                "END DATE", value=_today, max_value=_today, key="period_report_end"
+            )
+
+        if period_start > period_end:
+            st.error("Start date must be on or before end date.")
+        else:
+            try:
+                from automation.weekly_summary import build_period_report
+                period_md = build_period_report(
+                    period_start.strftime("%Y-%m-%d"),
+                    period_end.strftime("%Y-%m-%d"),
+                )
+                file_name = f"trading_report_{period_start.strftime('%Y%m%d')}_{period_end.strftime('%Y%m%d')}.md"
+                st.download_button(
+                    "DOWNLOAD PERIOD REPORT (.md)",
+                    data=period_md,
+                    file_name=file_name,
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
+                with st.expander("PREVIEW PERIOD REPORT", expanded=False):
+                    st.markdown(period_md)
+            except Exception as e:
+                st.error(f"Could not build period report: {e}")
+
         st.markdown('<div class="bb-header" style="margin-top:14px;">DASHBOARD REFRESH</div>',
                     unsafe_allow_html=True)
         refresh_sec = st.slider(

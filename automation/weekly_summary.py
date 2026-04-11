@@ -24,6 +24,22 @@ def send_weekly_summary():
         send(f"Weekly summary error: {e}")
 
 
+def build_period_report(start_date: str, end_date: str = None) -> str:
+    """
+    Build a downloadable trading report for an arbitrary date range.
+
+    Args:
+        start_date: ISO date 'YYYY-MM-DD' (inclusive)
+        end_date:   ISO date 'YYYY-MM-DD' (inclusive). Defaults to today.
+
+    Returns:
+        Markdown-formatted report as a string.
+    """
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+    return _build_report(start_date, end_date)
+
+
 def _send():
     week_label = datetime.now().strftime("%d %b %Y")
     week_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -229,6 +245,142 @@ def _send():
     logger.info(f"Weekly summary sent — {len(week_trades)} NSE + {fno_week_count} F&O + "
                 f"{crypto_week_count} crypto + {us_week_count} US trades, "
                 f"combined P&L Rs.{combined_pnl:+,.0f}")
+
+
+def _build_report(start_date: str, end_date: str) -> str:
+    """Build a trading report markdown string for an arbitrary date range."""
+    # End-date is inclusive — query needs exit_time < end_date+1
+    end_inclusive = (datetime.strptime(end_date, "%Y-%m-%d") +
+                     timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # ----- NSE portfolio snapshot (current state, not period) -----
+    initial_capital = VIRTUAL_CAPITAL
+    portfolio_value = initial_capital
+    open_positions  = {}
+    if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
+        with open(VIRTUAL_PORTFOLIO_FILE) as f:
+            pf = json.load(f)
+        cash = pf.get("cash", initial_capital)
+        open_positions = pf.get("positions", {})
+        mtm = sum(p.get("entry", 0) * p.get("qty", 0)
+                  for p in open_positions.values())
+        portfolio_value = cash + mtm
+    else:
+        cash = initial_capital
+    pnl_total     = portfolio_value - initial_capital
+    pnl_total_pct = pnl_total / initial_capital * 100
+
+    # ----- NSE trades in period -----
+    nse_trades, nse_signals = [], 0
+    fno_count, fno_pnl = 0, 0
+    crypto_count, crypto_pnl = 0, 0
+    us_count, us_pnl = 0, 0
+
+    if os.path.exists(SQLITE_DB_FILE):
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute("""
+                    SELECT symbol, action, entry_price, exit_price,
+                           pnl, pnl_pct, exit_time
+                    FROM trades
+                    WHERE status='closed' AND exit_time >= ? AND exit_time < ?
+                    ORDER BY exit_time DESC
+                """, (start_date, end_inclusive)).fetchall()
+                nse_trades = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+            try:
+                nse_signals = conn.execute(
+                    "SELECT COUNT(*) FROM signals WHERE timestamp >= ? AND timestamp < ?",
+                    (start_date, end_inclusive)
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
+            for tbl, pnl_col, key in [
+                ("fno_trades",    "pnl",      "fno"),
+                ("crypto_trades", "pnl_usdt", "crypto"),
+                ("us_trades",     "pnl_usd",  "us"),
+            ]:
+                try:
+                    row = conn.execute(
+                        f"SELECT COUNT(*), COALESCE(SUM({pnl_col}),0) "
+                        f"FROM {tbl} WHERE status='closed' AND exit_time >= ? AND exit_time < ?",
+                        (start_date, end_inclusive)
+                    ).fetchone()
+                    if key == "fno":
+                        fno_count, fno_pnl = row[0], row[1]
+                    elif key == "crypto":
+                        crypto_count, crypto_pnl = row[0], row[1]
+                    elif key == "us":
+                        us_count, us_pnl = row[0], row[1]
+                except sqlite3.OperationalError:
+                    pass
+
+    wins   = [t for t in nse_trades if (t.get("pnl") or 0) > 0]
+    losses = [t for t in nse_trades if (t.get("pnl") or 0) <= 0]
+    nse_pnl = sum(t.get("pnl") or 0 for t in nse_trades)
+    win_rate = (len(wins) / len(nse_trades) * 100) if nse_trades else 0
+    best  = max(nse_trades, key=lambda t: t.get("pnl") or 0, default=None)
+    worst = min(nse_trades, key=lambda t: t.get("pnl") or 0, default=None)
+
+    INR_RATE = 83.0
+    combined_pnl = (nse_pnl + fno_pnl +
+                    crypto_pnl * INR_RATE + us_pnl * INR_RATE)
+
+    # ----- Build markdown -----
+    lines = [
+        f"# Trading Report",
+        f"_{start_date} → {end_date}_",
+        "",
+        "## NSE Equity Portfolio (current snapshot)",
+        f"- Value: Rs.{portfolio_value:,.0f}",
+        f"- All-time P&L: Rs.{pnl_total:+,.0f} ({pnl_total_pct:+.2f}%)",
+        f"- Open positions: {len(open_positions)}",
+        "",
+        "## Period — NSE Equity",
+        f"- Signals generated: {nse_signals}",
+        f"- Trades closed: {len(nse_trades)}",
+        f"- Wins / Losses: {len(wins)} / {len(losses)}",
+        f"- Win rate: {win_rate:.0f}%",
+        f"- Period P&L: Rs.{nse_pnl:+,.0f}",
+    ]
+    if best and best.get("pnl"):
+        lines.append(f"- Best:  {best['symbol']} Rs.{best['pnl']:+,.0f} ({best.get('pnl_pct', 0):+.1f}%)")
+    if worst and worst.get("pnl"):
+        lines.append(f"- Worst: {worst['symbol']} Rs.{worst['pnl']:+,.0f} ({worst.get('pnl_pct', 0):+.1f}%)")
+
+    lines += [
+        "",
+        "## Period — F&O",
+        f"- Trades: {fno_count}",
+        f"- P&L: Rs.{fno_pnl:+,.0f}",
+        "",
+        "## Period — Crypto",
+        f"- Trades: {crypto_count}",
+        f"- P&L: {crypto_pnl:+.2f} USDT (≈ Rs.{crypto_pnl * INR_RATE:+,.0f})",
+        "",
+        "## Period — US Stocks",
+        f"- Trades: {us_count}",
+        f"- P&L: ${us_pnl:+.2f} (≈ Rs.{us_pnl * INR_RATE:+,.0f})",
+        "",
+        f"## Combined Period P&L: Rs.{combined_pnl:+,.0f}",
+        "",
+    ]
+
+    if nse_trades:
+        lines += ["## NSE Closed Trades", "", "| Date | Symbol | Entry | Exit | P&L | P&L % |", "|---|---|---|---|---|---|"]
+        for t in nse_trades[:50]:
+            exit_dt = (t.get("exit_time") or "")[:10]
+            lines.append(
+                f"| {exit_dt} | {t.get('symbol','')} | "
+                f"{t.get('entry_price', 0):.2f} | {t.get('exit_price', 0):.2f} | "
+                f"Rs.{(t.get('pnl') or 0):+,.0f} | {(t.get('pnl_pct') or 0):+.2f}% |"
+            )
+        if len(nse_trades) > 50:
+            lines.append(f"\n_…and {len(nse_trades)-50} more trades_")
+
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":
