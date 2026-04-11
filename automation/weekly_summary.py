@@ -315,19 +315,17 @@ def _build_report(start_date: str, end_date: str) -> str:
     pnl_total_pct   = (pnl_total / initial_capital * 100) if initial_capital else 0
     prices_ok       = bool(live_prices) or not open_positions
 
-    # ----- NSE trades in period -----
+    # ----- Trades in period (all markets, full rows) -----
     nse_trades, nse_signals = [], 0
-    fno_count, fno_pnl = 0, 0
-    crypto_count, crypto_pnl = 0, 0
-    us_count, us_pnl = 0, 0
+    fno_trades, crypto_trades, us_trades = [], [], []
 
     if os.path.exists(SQLITE_DB_FILE):
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
             conn.row_factory = sqlite3.Row
             try:
                 rows = conn.execute("""
-                    SELECT symbol, action, entry_price, exit_price,
-                           pnl, pnl_pct, exit_time
+                    SELECT symbol, action, qty, entry_price, exit_price,
+                           pnl, pnl_pct, entry_time, exit_time
                     FROM trades
                     WHERE status='closed' AND exit_time >= ? AND exit_time < ?
                     ORDER BY exit_time DESC
@@ -342,25 +340,40 @@ def _build_report(start_date: str, end_date: str) -> str:
                 ).fetchone()[0]
             except sqlite3.OperationalError:
                 pass
-            for tbl, pnl_col, key in [
-                ("fno_trades",    "pnl",      "fno"),
-                ("crypto_trades", "pnl_usdt", "crypto"),
-                ("us_trades",     "pnl_usd",  "us"),
-            ]:
-                try:
-                    row = conn.execute(
-                        f"SELECT COUNT(*), COALESCE(SUM({pnl_col}),0) "
-                        f"FROM {tbl} WHERE status='closed' AND exit_time >= ? AND exit_time < ?",
-                        (start_date, end_inclusive)
-                    ).fetchone()
-                    if key == "fno":
-                        fno_count, fno_pnl = row[0], row[1]
-                    elif key == "crypto":
-                        crypto_count, crypto_pnl = row[0], row[1]
-                    elif key == "us":
-                        us_count, us_pnl = row[0], row[1]
-                except sqlite3.OperationalError:
-                    pass
+            try:
+                rows = conn.execute("""
+                    SELECT instrument, option_type, strike, expiry, lots, lot_size,
+                           entry_premium, exit_premium, pnl, pnl_pct,
+                           entry_time, exit_time, exit_reason
+                    FROM fno_trades
+                    WHERE status='closed' AND exit_time >= ? AND exit_time < ?
+                    ORDER BY exit_time DESC
+                """, (start_date, end_inclusive)).fetchall()
+                fno_trades = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+            try:
+                rows = conn.execute("""
+                    SELECT symbol, direction, qty, entry_price, exit_price,
+                           pnl_usdt, pnl_pct, entry_time, exit_time, exit_reason
+                    FROM crypto_trades
+                    WHERE status='closed' AND exit_time >= ? AND exit_time < ?
+                    ORDER BY exit_time DESC
+                """, (start_date, end_inclusive)).fetchall()
+                crypto_trades = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+            try:
+                rows = conn.execute("""
+                    SELECT symbol, direction, qty, entry_price, exit_price,
+                           pnl_usd, pnl_pct, entry_time, exit_time, exit_reason
+                    FROM us_trades
+                    WHERE status='closed' AND exit_time >= ? AND exit_time < ?
+                    ORDER BY exit_time DESC
+                """, (start_date, end_inclusive)).fetchall()
+                us_trades = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
 
     wins   = [t for t in nse_trades if (t.get("pnl") or 0) > 0]
     losses = [t for t in nse_trades if (t.get("pnl") or 0) <= 0]
@@ -368,6 +381,13 @@ def _build_report(start_date: str, end_date: str) -> str:
     win_rate = (len(wins) / len(nse_trades) * 100) if nse_trades else 0
     best  = max(nse_trades, key=lambda t: t.get("pnl") or 0, default=None)
     worst = min(nse_trades, key=lambda t: t.get("pnl") or 0, default=None)
+
+    fno_count    = len(fno_trades)
+    fno_pnl      = sum(t.get("pnl") or 0 for t in fno_trades)
+    crypto_count = len(crypto_trades)
+    crypto_pnl   = sum(t.get("pnl_usdt") or 0 for t in crypto_trades)
+    us_count     = len(us_trades)
+    us_pnl       = sum(t.get("pnl_usd") or 0 for t in us_trades)
 
     INR_RATE = 83.0
     realized_combined = (nse_pnl + fno_pnl +
@@ -443,16 +463,89 @@ def _build_report(start_date: str, end_date: str) -> str:
         lines.append("")
 
     if nse_trades:
-        lines += ["## NSE Closed Trades", "", "| Date | Symbol | Entry | Exit | P&L | P&L % |", "|---|---|---|---|---|---|"]
+        lines += [
+            "## NSE Closed Trades", "",
+            "| Exit Date | Symbol | Qty | Entry | Exit | P&L | P&L % |",
+            "|---|---|---|---|---|---|---|",
+        ]
         for t in nse_trades[:50]:
             exit_dt = (t.get("exit_time") or "")[:10]
             lines.append(
-                f"| {exit_dt} | {t.get('symbol','')} | "
+                f"| {exit_dt} | {t.get('symbol','')} | {t.get('qty', 0)} | "
                 f"{t.get('entry_price', 0):.2f} | {t.get('exit_price', 0):.2f} | "
                 f"Rs.{(t.get('pnl') or 0):+,.0f} | {(t.get('pnl_pct') or 0):+.2f}% |"
             )
         if len(nse_trades) > 50:
             lines.append(f"\n_…and {len(nse_trades)-50} more trades_")
+        lines.append("")
+
+    if fno_trades:
+        lines += [
+            "## F&O Closed Trades", "",
+            "| Exit Date | Instrument | Type | Strike | Expiry | Lots | Entry | Exit | P&L | P&L % | Reason |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
+        for t in fno_trades[:100]:
+            exit_dt = (t.get("exit_time") or "")[:10]
+            lines.append(
+                f"| {exit_dt} | {t.get('instrument','')} | "
+                f"{t.get('option_type','') or '-'} | "
+                f"{t.get('strike','') or '-'} | "
+                f"{t.get('expiry','') or '-'} | "
+                f"{t.get('lots', 0)} | "
+                f"{(t.get('entry_premium') or 0):.2f} | "
+                f"{(t.get('exit_premium') or 0):.2f} | "
+                f"Rs.{(t.get('pnl') or 0):+,.0f} | "
+                f"{(t.get('pnl_pct') or 0):+.2f}% | "
+                f"{(t.get('exit_reason') or '-')} |"
+            )
+        if len(fno_trades) > 100:
+            lines.append(f"\n_…and {len(fno_trades)-100} more trades_")
+        lines.append("")
+
+    if crypto_trades:
+        lines += [
+            "## Crypto Closed Trades", "",
+            "| Exit Date | Symbol | Dir | Qty | Entry | Exit | P&L (USDT) | P&L % | Reason |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        for t in crypto_trades[:100]:
+            exit_dt = (t.get("exit_time") or "")[:10]
+            lines.append(
+                f"| {exit_dt} | {t.get('symbol','')} | "
+                f"{t.get('direction','')} | "
+                f"{(t.get('qty') or 0):.4f} | "
+                f"{(t.get('entry_price') or 0):.4f} | "
+                f"{(t.get('exit_price') or 0):.4f} | "
+                f"{(t.get('pnl_usdt') or 0):+.2f} | "
+                f"{(t.get('pnl_pct') or 0):+.2f}% | "
+                f"{(t.get('exit_reason') or '-')} |"
+            )
+        if len(crypto_trades) > 100:
+            lines.append(f"\n_…and {len(crypto_trades)-100} more trades_")
+        lines.append("")
+
+    if us_trades:
+        lines += [
+            "## US Closed Trades", "",
+            "| Exit Date | Symbol | Dir | Qty | Entry | Exit | P&L ($) | P&L % | Reason |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        for t in us_trades[:100]:
+            exit_dt = (t.get("exit_time") or "")[:10]
+            lines.append(
+                f"| {exit_dt} | {t.get('symbol','')} | "
+                f"{t.get('direction','')} | "
+                f"{(t.get('qty') or 0):.2f} | "
+                f"{(t.get('entry_price') or 0):.2f} | "
+                f"{(t.get('exit_price') or 0):.2f} | "
+                f"${(t.get('pnl_usd') or 0):+.2f} | "
+                f"{(t.get('pnl_pct') or 0):+.2f}% | "
+                f"{(t.get('exit_reason') or '-')} |"
+            )
+        if len(us_trades) > 100:
+            lines.append(f"\n_…and {len(us_trades)-100} more trades_")
+        lines.append("")
 
     return "\n".join(lines) + "\n"
 
