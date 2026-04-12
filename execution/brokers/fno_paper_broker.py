@@ -3,7 +3,9 @@
 #
 # Simulates buying/selling Nifty & BankNifty options (CE/PE).
 # Positions stored in SQLite fno_trades table.
-# Exit triggers: premium 2x (TP) | premium -50% (SL) | expiry date
+# Exit triggers (long): premium 2x (TP) | premium -30% (SL) | expiry
+# Exit triggers (sell): premium decay 80% (TP) | premium +50% (SL) | expiry
+# Guards: position cap, daily loss circuit breaker, same-day index dup, min DTE
 # =============================================================================
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -83,6 +85,70 @@ class FNOPaperBroker:
         open_count = self.get_stats()["open_positions"]
         if open_count + additional_positions > FNO_MAX_POSITIONS:
             return False, f"F&O position limit reached ({FNO_MAX_POSITIONS})"
+        return True, ""
+
+    def _check_same_day_index_duplicate(self, index: str, direction_type: str) -> tuple[bool, str]:
+        """
+        Block opening a second directional position on the same index on the
+        same day.  direction_type is one of: "LONG_OPT" (buy CE/PE),
+        "SELL_VOL" (straddle/strangle), "FUT" (futures).
+
+        Same-day is based on entry_time date.  Only same direction_type is
+        blocked (e.g. two LONG_OPT entries on NIFTY in one day → blocked,
+        but LONG_OPT + SELL_VOL → allowed).
+
+        Controlled by FNO_BLOCK_SAME_DAY_INDEX (default True).
+        """
+        if not bool(self._cfg("FNO_BLOCK_SAME_DAY_INDEX", True)):
+            return True, ""
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with self._conn() as conn:
+                rows = conn.execute("""
+                    SELECT option_type FROM fno_trades
+                    WHERE instrument=? AND entry_time >= ? AND entry_time < ?
+                      AND status IN ('open','closed')
+                """, (index.upper(), today_iso, today_iso + "T99")).fetchall()
+        except Exception:
+            return True, ""
+
+        for (opt,) in rows:
+            opt_up = str(opt or "").upper()
+            existing_type = None
+            if opt_up.startswith("SELL-"):
+                existing_type = "SELL_VOL"
+            elif opt_up.startswith("FUT-"):
+                existing_type = "FUT"
+            else:
+                existing_type = "LONG_OPT"
+            if existing_type == direction_type:
+                return False, (
+                    f"Same-day duplicate block: already have a {direction_type} "
+                    f"entry on {index} today"
+                )
+        return True, ""
+
+    def _check_min_dte(self, expiry: str, min_dte: int = None) -> tuple[bool, str]:
+        """
+        Block long option entries where days-to-expiry < FNO_MIN_LONG_DTE
+        (default 2).  0/1 DTE long positions are pure gamma gambles with
+        a negative EV for an automated agent.
+        """
+        if min_dte is None:
+            min_dte = int(self._cfg("FNO_MIN_LONG_DTE", 2) or 0)
+        if min_dte <= 0:
+            return True, ""
+        try:
+            expiry_dt = datetime.strptime(expiry, "%d-%b-%Y").date()
+            today_dt  = datetime.now().date()
+            dte = (expiry_dt - today_dt).days
+            if dte < min_dte:
+                return False, (
+                    f"DTE too low for long options ({dte}d < min {min_dte}d) — "
+                    f"expiry {expiry}"
+                )
+        except Exception:
+            pass
         return True, ""
 
     def _within_daily_loss_limit(self) -> tuple[bool, str]:
@@ -210,6 +276,14 @@ class FNOPaperBroker:
             logger.warning(f"{reason} — skipping {index} {direction}")
             return None
         ok, reason = self._within_daily_loss_limit()
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {direction}")
+            return None
+        ok, reason = self._check_same_day_index_duplicate(index, "LONG_OPT")
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {direction}")
+            return None
+        ok, reason = self._check_min_dte(expiry)
         if not ok:
             logger.warning(f"{reason} — skipping {index} {direction}")
             return None
@@ -433,6 +507,10 @@ class FNOPaperBroker:
         if not ok:
             logger.warning(f"{reason} — skipping {index} {strategy}")
             return None, None
+        ok, reason = self._check_same_day_index_duplicate(index, "SELL_VOL")
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} {strategy}")
+            return None, None
         ok, reason, _ = can_allocate("fno", reserve_inr)
         if not ok:
             logger.warning(f"F&O treasury block for {index} {strategy}: {reason}")
@@ -503,9 +581,10 @@ class FNOPaperBroker:
                     (curr, pnl, trade_id)
                 )
 
+            sell_sl = float(self._cfg("FNO_SELL_SL_MULT", 1.5) or 1.5)
             reason = None
-            if curr >= entry_prem * 2.0:
-                reason = "SL_HIT"     # premium doubled — buy back, take loss
+            if curr >= entry_prem * sell_sl:
+                reason = "SL_HIT"     # premium rose past SL multiplier — buy back, take loss
             elif curr <= entry_prem * 0.20:
                 reason = "TP_HIT"     # 80% premium decay — buy back, take profit
             elif self._is_expired(expiry):
@@ -543,6 +622,10 @@ class FNOPaperBroker:
             logger.warning(f"{reason} — skipping {index} FUT-{direction}")
             return None
         ok, reason = self._within_daily_loss_limit()
+        if not ok:
+            logger.warning(f"{reason} — skipping {index} FUT-{direction}")
+            return None
+        ok, reason = self._check_same_day_index_duplicate(index, "FUT")
         if not ok:
             logger.warning(f"{reason} — skipping {index} FUT-{direction}")
             return None

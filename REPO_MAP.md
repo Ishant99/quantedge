@@ -1,7 +1,7 @@
 # QuantEdge — Repository Map
 
 > **Purpose:** Single reference file for any agent or developer. Read this first — you don't need to scan the whole repo.
-> **Last verified:** April 2026 | **Branch:** `codex-v2-phase-rollout` (deploy target: `main`)
+> **Last verified:** April 2026 | **Branch:** `codex-v2-phase-rollout` (deploy target: auto-deploys on push)
 
 ---
 
@@ -39,7 +39,7 @@ execution/executor.py  PaperExecutor.execute()
         ├── logs/trades.db (SQLite)       (signals, trades, snapshots tables)
         └── logs/unified_state.json       (aggregated all-market state)
                 │
-                ├── utils/telegram.py     → Telegram + Discord alerts
+                ├── utils/telegram.py     → Telegram + Discord alerts (synced)
                 ├── dashboard/app.py      → Streamlit on port 8501
                 └── api/server.py         → REST API on port 8000
 ```
@@ -55,7 +55,7 @@ execution/executor.py  PaperExecutor.execute()
 | Market | Scanner | Symbols | Scan Schedule | TP / SL |
 |--------|---------|---------|---------------|---------|
 | NSE Equities | `data/market_scanner.py` | **491** (486 nse500 + 5 extras) | 09:15 + 15:00 IST Mon-Fri | ATR-based (1.5×ATR SL, 2:1 RR) |
-| F&O | `analysis/options_selling.py`, `futures_signals.py` | NIFTY + BANKNIFTY | 09:15 IST + every 15 min | 2× premium TP / 50% SL |
+| F&O | `analysis/options_selling.py`, `futures_signals.py` | NIFTY + BANKNIFTY | 09:15 IST + every 15 min | Long: 2× TP / -30% SL; Sell: 80% decay TP / +50% SL |
 | Crypto | `data/crypto_scanner.py` | **30** USDT pairs | Every 4h, 24/7 (00,04,08,12,16,20 IST) | +8% TP / -4% SL |
 | US Stocks | `data/us_scanner.py` | **80** (S&P500 + NASDAQ) | 19:00 IST Mon-Fri | +6% TP / -3% SL |
 
@@ -80,7 +80,7 @@ execution/executor.py  PaperExecutor.execute()
 | `eod_digest` | 18:00 IST Mon-Fri | `run_eod_digest()` | Daily summary Telegram alert |
 | `us_scan` | 19:00 IST Mon-Fri | `run_us_scan()` | US stocks full TA scan |
 | `crypto_scan` | 00,04,08,12,16,20 IST | `run_crypto_scan()` | Crypto full TA scan |
-| `weekly_summary` | Sunday 20:00 | `run_weekly_summary()` | Weekly performance digest |
+| `weekly_summary` | Sunday 20:00 | `run_weekly_summary()` | Weekly performance digest (Telegram + Discord) |
 | `housekeeping` | 06:05 IST daily | `run_housekeeping()` | Trim old logs + cache files |
 
 ---
@@ -168,6 +168,36 @@ All in `analysis/technical_agent.py`. Score: 0–10 pts (must reach `MIN_TA_SCOR
 
 `get_executor()` in `executor.py` auto-selects Paper vs Live based on `config.TRADING_MODE`.
 
+### F&O Risk Guards (fno_paper_broker.py)
+
+All guards run before opening any F&O position:
+
+| Guard | Config key | Default | What it does |
+|-------|-----------|---------|-------------|
+| Position cap | `FNO_MAX_POSITIONS` | 6 | Max concurrent F&O open positions |
+| Daily loss circuit breaker | `FNO_DAILY_LOSS_LIMIT_PCT` | 3.0% | Block new entries when day's realized F&O P&L < -3% of capital (Rs.30k) |
+| Same-day index duplicate | `FNO_BLOCK_SAME_DAY_INDEX` | True | Prevent opening same direction type (LONG_OPT / SELL_VOL / FUT) on same index twice in one day |
+| Min DTE for long options | `FNO_MIN_LONG_DTE` | 2 | Block buying CE/PE with <2 days to expiry (0-1 DTE gamma trap) |
+| Underlying exposure cap | `FNO_MAX_UNDERLYING_EXPOSURE_*_PCT` | 15% | Max % of capital per underlying (NIFTY / BANKNIFTY) |
+| Structure cap | `FNO_MAX_STRUCTURES_PER_UNDERLYING` | 2 | Max distinct option structures per underlying |
+| Short vol duplicate block | `FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE` | True | Block FUT-SHORT if same index has open short-vol structure |
+| Treasury allocation | via `paper_treasury.py` | 30% | F&O market gets max 30% of total capital |
+
+### F&O Exit Rules
+
+| Position type | TP trigger | SL trigger | Also exits on |
+|---------------|-----------|-----------|---------------|
+| Long CE/PE | Premium reaches `FNO_TP_MULT` × entry (2.0×) | Premium falls to `FNO_SL_MULT` × entry (0.70×, lose max 30%) | Expiry date |
+| SELL straddle/strangle | Premium decays to 20% of entry (80% profit) | Premium rises to `FNO_SELL_SL_MULT` × entry (1.5×, lose 50%) | Expiry date |
+| FUT-LONG | +3% favourable move | -2% adverse move | Expiry date |
+| FUT-SHORT | +3% favourable move | -2% adverse move | Expiry date |
+
+### F&O P&L Sign Convention
+
+- **Long positions** (BUY CE/PE, FUT-LONG): `pnl = (exit - entry) × qty`
+- **Short positions** (SELL-*, FUT-SHORT): `pnl = (entry - exit) × qty`
+- One-shot migration `_backfill_short_pnl_sign()` runs on first init after deploy to correct any historical rows written with the old (buggy) long-perspective formula.
+
 ---
 
 ## Services Layer (`services/`)
@@ -184,12 +214,34 @@ All in `analysis/technical_agent.py`. Score: 0–10 pts (must reach `MIN_TA_SCOR
 
 ---
 
+## Automation (`automation/`)
+
+| File | Key function | Purpose |
+|------|-------------|---------|
+| `weekly_summary.py` | `send_weekly_summary()` | Sends rich weekly report to Telegram + Discord every Sunday 8 PM |
+| `weekly_summary.py` | `build_period_report(start, end)` | Returns markdown report for any custom date range (used by dashboard download) |
+
+**Weekly/period report contents:**
+- NSE portfolio with live yfinance MTM (cash + open MTM + portfolio value + unrealized)
+- Per-market realized P&L (NSE / F&O / Crypto / US) with trade counts
+- True combined P&L = realized + unrealized
+- Open NSE positions table (sorted biggest-loser-first, with live price)
+- Full per-trade tables for all markets (NSE, F&O with Side column, Crypto, US)
+- F&O table includes: instrument, side (LONG/SHORT), type, strike, expiry, lots, open/close premium, P&L, reason
+
+**Dashboard downloadable report:**
+- Settings/Ops tab → "PERIOD TRADING REPORT" section
+- Date range picker (start + end, defaults to last 7 days)
+- Download as `.md` + preview expander
+
+---
+
 ## Memory & Persistence
 
 | File/Path | Format | Contents |
 |-----------|--------|---------|
 | `logs/virtual_portfolio.json` | JSON | Cash, open NSE positions, total trades, wins |
-| `logs/trades.db` | SQLite | Tables: `signals`, `trades`, `snapshots` |
+| `logs/trades.db` | SQLite | Tables: `signals`, `trades`, `snapshots`, `fno_trades`, `crypto_trades`, `us_trades`, `unified_*`, `treasury_snapshots` |
 | `logs/unified_state.json` | JSON | All-market aggregated state (synced after each job) |
 | `logs/paper_treasury.json` | JSON | Capital allocation snapshot per market |
 | `logs/scheduler_status.json` | JSON | Per-job status, timestamps, heartbeat |
@@ -206,6 +258,9 @@ All in `analysis/technical_agent.py`. Score: 0–10 pts (must reach `MIN_TA_SCOR
 - `signals` — every generated signal with TA score, sentiment, quality metadata, setup type
 - `trades` — executed trades with entry/exit price, P&L, status (open/closed/intraday)
 - `snapshots` — daily portfolio value snapshots for equity curve
+- `fno_trades` — F&O paper trades (CE/PE/SELL-*/FUT-*) with entry/exit premium, P&L, exit reason
+- `crypto_trades` — crypto paper trades with pnl_usdt
+- `us_trades` — US stock paper trades with pnl_usd
 
 ---
 
@@ -228,7 +283,7 @@ All in `analysis/technical_agent.py`. Score: 0–10 pts (must reach `MIN_TA_SCOR
 | `/help` / `!help` | Command list |
 
 Both bots start as daemon threads from `scheduler/scheduler.py` on launch.
-Alert fan-out: `utils/telegram.py` sends to Telegram AND Discord on every scheduler alert.
+Alert fan-out: `utils/telegram.py` sends to Telegram AND Discord on every scheduler alert (single `send()` call mirrors to both).
 
 ---
 
@@ -236,14 +291,20 @@ Alert fan-out: `utils/telegram.py` sends to Telegram AND Discord on every schedu
 
 | Tab | Key content |
 |-----|------------|
-| Overview | Portfolio value, all-market P&L strip, open positions, market regime card |
+| Overview | Portfolio value (live MTM), all-market P&L strip, open positions, market regime card |
 | Signals | Recent signals table, outcome analytics (TP/SL/Expired rates), quality scores |
 | Positions | NSE / F&O / Crypto / US open positions with live P&L |
 | History | Closed trades log, equity curve chart |
 | Analytics | Win rate, Sharpe, profit factor, drawdown, signal quality by setup type |
 | Watchlist | Live NSE quotes with TA score badges |
-| Settings | All config keys editable (saves to `logs/user_settings.json`) |
+| Settings | All config keys editable incl. F&O guards (saves to `logs/user_settings.json`) |
 | Health | Scheduler PID status, DB health, file freshness, storage usage |
+
+**Dashboard NSE P&L:** Uses `_nse_portfolio_mtm()` — cached 60s helper that fetches live yfinance prices for all open positions, returns `cash + live_mtm - vc` (true P&L, not just cash drawdown).
+
+**Settings → F&O controls:** TP/SL multipliers, sell SL multiplier, max positions, min DTE, daily loss limit %, same-day block toggle, HV thresholds, selling days, cache TTL.
+
+**Settings → Period Trading Report:** Date range picker + download button for custom-period markdown report.
 
 ---
 
@@ -281,7 +342,9 @@ Change at runtime via the dashboard Settings tab (persists across restarts).
 | Risk | `RISK_PER_TRADE_PCT`, `MAX_OPEN_POSITIONS`, `MAX_DAILY_LOSS_PCT` | 2%, 5, 3% |
 | Strategy quality | `STRATEGY_QUALITY_MIN_RESOLVED`, `STRATEGY_QUALITY_BLOCK_WEAK_SYMBOLS` | 3, True |
 | Intraday | `INTRADAY_MAX_POSITIONS`, `INTRADAY_MIN_CRITERIA`, `INTRADAY_RR` | 4, 3, 1.5 |
-| F&O | `FNO_TP_MULT`, `FNO_SL_MULT`, `FNO_MAX_POSITIONS` | 2.0, 0.5, 6 |
+| F&O (long) | `FNO_TP_MULT`, `FNO_SL_MULT`, `FNO_MAX_POSITIONS`, `FNO_MIN_LONG_DTE` | 2.0, 0.70, 6, 2 |
+| F&O (sell) | `FNO_SELL_SL_MULT`, `FNO_SELL_DAYS`, `FNO_HV_STRADDLE`, `FNO_HV_STRANGLE` | 1.5, tue/wed/thu, 18.0, 12.0 |
+| F&O (risk) | `FNO_DAILY_LOSS_LIMIT_PCT`, `FNO_BLOCK_SAME_DAY_INDEX` | 3.0%, True |
 | Crypto | `CRYPTO_USDT_PER_TRADE`, `CRYPTO_TP_PCT`, `CRYPTO_SL_PCT` | 100 USDT, 8%, 4% |
 | US | `US_USD_PER_TRADE`, `US_TP_PCT`, `US_SL_PCT` | $500, 6%, 3% |
 | Sentiment | `SENTIMENT_FRESHNESS_HOURS`, `SENTIMENT_DECAY_FACTOR` | 6h, 0.5 |
@@ -295,7 +358,8 @@ Change at runtime via the dashboard Settings tab (persists across restarts).
 Server:      Oracle Cloud — 144.24.143.86
 Project dir: /home/ubuntu/quantedge/
 Python:      /usr/bin/python3 (system, no venv)
-Branch:      main (auto-deployed via GitHub Actions on push or workflow_dispatch)
+Branch:      codex-v2-phase-rollout (auto-deployed via GitHub Actions on push)
+CI/CD:       .github/workflows/deploy.yml — lint → SSH → git pull → docker compose rebuild → smoke test → Telegram notify
 ```
 
 **Systemd services:**
@@ -304,10 +368,22 @@ trading-agent.service     — runs scheduler/scheduler.py (ExecStart=/usr/bin/py
 trading-dashboard.service — runs streamlit dashboard on port 8501
 ```
 
-**Deploy manually:**
-GitHub → Actions → `deploy.yml` → Run workflow → pick branch → confirm
+**Auto-deploy triggers:**
+- Push to `main` or `codex-v2-phase-rollout` → auto-deploys
+- Manual: GitHub → Actions → `Deploy to Oracle VM` → Run workflow → pick branch
 
 **After deploy, services restart automatically** (Restart=always in systemd).
+
+---
+
+## Recent Fixes (April 2026)
+
+| Commit | Fix | Impact |
+|--------|-----|--------|
+| `edc63b4` | Trading logic overhaul — file locking, intelligent exits, pipeline softening | Data integrity + smarter exit decisions |
+| `b9280ac` | F&O P&L sign bug fix + DB backfill + dashboard live MTM + daily circuit breaker | P&L accuracy; was hiding Rs.1.88L of losses |
+| `9f5e33c` | Telegram/Discord weekly report synced with live MTM + correct F&O P&L | Both channels now show true numbers |
+| Latest | F&O entry guards: tightened SL (0.50→0.70), sell SL (2.0→1.5), min DTE, same-day dup block | Reduces bleed from gamma gambles + whipsaw days |
 
 ---
 

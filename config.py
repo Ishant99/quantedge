@@ -184,7 +184,7 @@ FNO_LOT_SIZES      = {"NIFTY": NIFTY_LOT_SIZE, "BANKNIFTY": BANKNIFTY_LOT_SIZE}
 
 # F&O exit rules
 FNO_TP_MULT        = float(_S("FNO_TP_MULT", default=2.0))   # exit when premium 2x
-FNO_SL_MULT        = float(_S("FNO_SL_MULT", default=0.50))  # exit when premium -50%
+FNO_SL_MULT        = float(_S("FNO_SL_MULT", default=0.70))  # exit when premium -30% (was 0.50 → -50%, too wide)
 FNO_MAX_POSITIONS  = int(  _S("FNO_MAX_POSITIONS", default=6))  # max concurrent F&O positions
 
 # Options selling thresholds

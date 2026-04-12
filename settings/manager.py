@@ -80,7 +80,10 @@ DEFAULTS: dict = {
 
     # ---- F&O settings ----
     "FNO_TP_MULT":           2.0,
-    "FNO_SL_MULT":           0.50,
+    "FNO_SL_MULT":           0.70,
+    "FNO_SELL_SL_MULT":      1.5,     # sell-premium SL: buy back when premium rises 50% (was 2.0 = 100%)
+    "FNO_MIN_LONG_DTE":      2,       # block long option entries with <2 DTE
+    "FNO_BLOCK_SAME_DAY_INDEX": True, # block same direction_type on same index same day
     "FNO_MAX_POSITIONS":     6,
     "FNO_HV_STRADDLE":       18.0,
     "FNO_HV_STRANGLE":       12.0,

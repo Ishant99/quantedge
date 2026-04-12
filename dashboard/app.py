@@ -2960,10 +2960,13 @@ elif page == "CONFIG":
                                        float(cfg.get("FNO_TP_MULT", 2.0)), 0.25,
                                        help="Exit when premium reaches this × entry. Default 2x.")
             new_fno_sl    = st.slider("SL MULTIPLIER (options buy)",  0.10, 0.90,
-                                       float(cfg.get("FNO_SL_MULT", 0.50)), 0.05,
-                                       help="Exit when premium falls to this × entry. Default 0.5.")
+                                       float(cfg.get("FNO_SL_MULT", 0.70)), 0.05,
+                                       help="Exit when premium falls to this × entry. Default 0.70 (lose max 30%).")
             new_fno_max   = st.slider("MAX F&O POSITIONS",  1, 20,
                                        int(cfg.get("FNO_MAX_POSITIONS", 6)), 1)
+            new_sell_sl   = st.slider("SELL SL MULTIPLIER",  1.1, 3.0,
+                                       float(cfg.get("FNO_SELL_SL_MULT", 1.5)), 0.1,
+                                       help="For sold options: buy back when premium rises to this × entry. Default 1.5x.")
         with m2:
             new_hv_strad  = st.slider("HV% STRADDLE THRESHOLD",  10.0, 40.0,
                                        float(cfg.get("FNO_HV_STRADDLE", 18.0)), 1.0,
@@ -2973,20 +2976,36 @@ elif page == "CONFIG":
                                        help="Use strangle when HV > this % (below straddle)")
             new_cache_min = st.slider("OPTIONS CHAIN CACHE (min)", 1, 30,
                                        int(cfg.get("FNO_CHAIN_CACHE_MIN", 5)), 1)
+            new_min_dte   = st.slider("MIN DTE (long options)",  0, 10,
+                                       int(cfg.get("FNO_MIN_LONG_DTE", 2)), 1,
+                                       help="Block long option entries with fewer than this many DTE. 0 disables.")
 
-        new_sell_days = st.text_input("SELLING DAYS (comma-sep)",
-                                       value=cfg.get("FNO_SELL_DAYS", "tue,wed,thu"),
-                                       help="Days to run options selling. e.g. tue,wed,thu")
+        fno_g1, fno_g2 = st.columns(2)
+        with fno_g1:
+            new_sell_days = st.text_input("SELLING DAYS (comma-sep)",
+                                           value=cfg.get("FNO_SELL_DAYS", "tue,wed,thu"),
+                                           help="Days to run options selling. e.g. tue,wed,thu")
+            new_daily_loss = st.slider("DAILY LOSS LIMIT (% of capital)", 0.0, 10.0,
+                                        float(cfg.get("FNO_DAILY_LOSS_LIMIT_PCT", 3.0)), 0.5,
+                                        help="Block new F&O entries if day's realized loss exceeds this %. 0 disables.")
+        with fno_g2:
+            new_block_same = st.checkbox("BLOCK SAME-DAY INDEX DUPLICATES",
+                                          value=bool(cfg.get("FNO_BLOCK_SAME_DAY_INDEX", True)),
+                                          help="Prevent opening same direction type on same index twice in one day.")
 
         if st.button("SAVE F&O SETTINGS", type="primary", use_container_width=True):
             S.save({
-                "FNO_TP_MULT":         new_fno_tp,
-                "FNO_SL_MULT":         new_fno_sl,
-                "FNO_MAX_POSITIONS":   new_fno_max,
-                "FNO_HV_STRADDLE":     new_hv_strad,
-                "FNO_HV_STRANGLE":     new_hv_stran,
-                "FNO_CHAIN_CACHE_MIN": new_cache_min,
-                "FNO_SELL_DAYS":       new_sell_days,
+                "FNO_TP_MULT":              new_fno_tp,
+                "FNO_SL_MULT":              new_fno_sl,
+                "FNO_SELL_SL_MULT":         new_sell_sl,
+                "FNO_MAX_POSITIONS":        new_fno_max,
+                "FNO_HV_STRADDLE":          new_hv_strad,
+                "FNO_HV_STRANGLE":          new_hv_stran,
+                "FNO_CHAIN_CACHE_MIN":      new_cache_min,
+                "FNO_SELL_DAYS":            new_sell_days,
+                "FNO_MIN_LONG_DTE":         new_min_dte,
+                "FNO_DAILY_LOSS_LIMIT_PCT": new_daily_loss,
+                "FNO_BLOCK_SAME_DAY_INDEX": new_block_same,
             })
             st.success("F&O settings saved.")
             st.rerun()
