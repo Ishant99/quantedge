@@ -60,42 +60,61 @@ def build_period_report(start_date: str, end_date: str = None) -> str:
     return _build_report(start_date, end_date)
 
 
+def _ensure_fno_backfill():
+    """Trigger the one-shot F&O P&L sign backfill (safe to call repeatedly)."""
+    try:
+        from execution.brokers.fno_paper_broker import FNOPaperBroker
+        FNOPaperBroker()  # __init__ runs _backfill_short_pnl_sign()
+    except Exception as e:
+        logger.warning(f"F&O backfill trigger skipped: {e}")
+
+
 def _send():
+    """Weekly Telegram summary — now driven by the same data path as the
+    downloadable period report, so numbers always match."""
+    _ensure_fno_backfill()
+
     week_label = datetime.now().strftime("%d %b %Y")
     week_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    week_end   = datetime.now().strftime("%Y-%m-%d")
 
-    # ------------------------------------------------------------------
-    # NSE equity portfolio
-    # ------------------------------------------------------------------
+    # ── NSE portfolio (live MTM) ─────────────────────────────────────────
     initial_capital = VIRTUAL_CAPITAL
-    portfolio_value = initial_capital
     open_positions  = {}
-
+    cash            = initial_capital
     if os.path.exists(VIRTUAL_PORTFOLIO_FILE):
         with open(VIRTUAL_PORTFOLIO_FILE) as f:
             pf = json.load(f)
         cash           = pf.get("cash", initial_capital)
         open_positions = pf.get("positions", {})
-        mtm            = sum(p.get("entry", 0) * p.get("qty", 0)
-                             for p in open_positions.values())
-        portfolio_value = cash + mtm
-    else:
-        cash = initial_capital
 
+    live_prices = _fetch_live_prices(list(open_positions.keys()))
+    live_mtm, unrealized = 0.0, 0.0
+    pos_rows = []
+    for sym, p in open_positions.items():
+        entry = p.get("entry", 0) or 0
+        qty   = p.get("qty", 0) or 0
+        curr  = live_prices.get(sym, entry)
+        live_mtm   += curr * qty
+        unrealized += (curr - entry) * qty
+        pct = ((curr - entry) / entry * 100) if entry else 0
+        pos_rows.append((sym, entry, curr, qty, (curr - entry) * qty, pct, sym in live_prices))
+    pos_rows.sort(key=lambda r: r[4])
+
+    portfolio_value = cash + live_mtm
     pnl     = portfolio_value - initial_capital
-    pnl_pct = pnl / initial_capital * 100
+    pnl_pct = (pnl / initial_capital * 100) if initial_capital else 0
 
-    # ------------------------------------------------------------------
-    # NSE equity trades this week
-    # ------------------------------------------------------------------
+    # ── Trades this week ─────────────────────────────────────────────────
     week_trades   = []
     total_signals = 0
+    fno_week_pnl = fno_week_count = fno_open_count = 0
+    crypto_week_pnl = crypto_week_count = crypto_open_count = 0
+    us_week_pnl = us_week_count = us_open_count = 0
 
     if os.path.exists(SQLITE_DB_FILE):
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
             conn.row_factory = sqlite3.Row
-
-            # NSE equity trades
             try:
                 rows = conn.execute("""
                     SELECT symbol, action, entry_price, exit_price,
@@ -107,7 +126,6 @@ def _send():
                 week_trades = [dict(r) for r in rows]
             except sqlite3.OperationalError:
                 pass
-
             try:
                 total_signals = conn.execute(
                     "SELECT COUNT(*) FROM signals WHERE timestamp >= ?",
@@ -115,24 +133,6 @@ def _send():
                 ).fetchone()[0]
             except sqlite3.OperationalError:
                 pass
-
-    wins   = [t for t in week_trades if (t.get("pnl") or 0) > 0]
-    losses = [t for t in week_trades if (t.get("pnl") or 0) <= 0]
-    total_pnl_week = sum(t.get("pnl") or 0 for t in week_trades)
-    win_rate = (len(wins) / len(week_trades) * 100) if week_trades else 0
-
-    best  = max(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
-    worst = min(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
-
-    # ------------------------------------------------------------------
-    # F&O trades this week
-    # ------------------------------------------------------------------
-    fno_week_pnl = 0
-    fno_week_count = 0
-    fno_open_count = 0
-
-    if os.path.exists(SQLITE_DB_FILE):
-        with sqlite3.connect(SQLITE_DB_FILE) as conn:
             try:
                 row = conn.execute("""
                     SELECT COUNT(*), COALESCE(SUM(pnl),0)
@@ -144,16 +144,6 @@ def _send():
                 ).fetchone()[0]
             except sqlite3.OperationalError:
                 pass
-
-    # ------------------------------------------------------------------
-    # Crypto trades this week
-    # ------------------------------------------------------------------
-    crypto_week_pnl   = 0
-    crypto_week_count = 0
-    crypto_open_count = 0
-
-    if os.path.exists(SQLITE_DB_FILE):
-        with sqlite3.connect(SQLITE_DB_FILE) as conn:
             try:
                 row = conn.execute("""
                     SELECT COUNT(*), COALESCE(SUM(pnl_usdt),0)
@@ -165,16 +155,6 @@ def _send():
                 ).fetchone()[0]
             except sqlite3.OperationalError:
                 pass
-
-    # ------------------------------------------------------------------
-    # US trades this week
-    # ------------------------------------------------------------------
-    us_week_pnl   = 0
-    us_week_count = 0
-    us_open_count = 0
-
-    if os.path.exists(SQLITE_DB_FILE):
-        with sqlite3.connect(SQLITE_DB_FILE) as conn:
             try:
                 row = conn.execute("""
                     SELECT COUNT(*), COALESCE(SUM(pnl_usd),0)
@@ -187,13 +167,19 @@ def _send():
             except sqlite3.OperationalError:
                 pass
 
-    INR_RATE = 83.0
-    combined_pnl = (total_pnl_week + fno_week_pnl +
-                    crypto_week_pnl * INR_RATE + us_week_pnl * INR_RATE)
+    wins   = [t for t in week_trades if (t.get("pnl") or 0) > 0]
+    losses = [t for t in week_trades if (t.get("pnl") or 0) <= 0]
+    total_pnl_week = sum(t.get("pnl") or 0 for t in week_trades)
+    win_rate = (len(wins) / len(week_trades) * 100) if week_trades else 0
+    best  = max(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
+    worst = min(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
 
-    # ------------------------------------------------------------------
-    # Readiness gates
-    # ------------------------------------------------------------------
+    INR_RATE = 83.0
+    realized_combined = (total_pnl_week + fno_week_pnl +
+                         crypto_week_pnl * INR_RATE + us_week_pnl * INR_RATE)
+    true_combined = realized_combined + unrealized
+
+    # ── Readiness gates ──────────────────────────────────────────────────
     gates_passed = gates_total = 0
     readiness_file = "logs/readiness_report.json"
     if os.path.exists(readiness_file):
@@ -202,24 +188,26 @@ def _send():
         gates_passed = r.get("passed", 0)
         gates_total  = r.get("total", 8)
 
-    # ------------------------------------------------------------------
-    # Build message
-    # ------------------------------------------------------------------
+    # ── Build Telegram message ───────────────────────────────────────────
+    price_tag = "" if live_prices else " (entry basis)"
     lines = [
         "*Weekly Trading Report*",
         f"_Week ending {week_label}_",
         "",
-        "*NSE Equity Portfolio*",
-        f"Value:  `Rs.{portfolio_value:>12,.0f}`",
-        f"P&L:    `Rs.{pnl:>+12,.0f}` ({pnl_pct:+.2f}%)",
-        f"Open positions: `{len(open_positions)}`",
+        f"*NSE Equity Portfolio{price_tag}*",
+        f"Cash:     `Rs.{cash:>12,.0f}`",
+        f"Open MTM: `Rs.{live_mtm:>12,.0f}`",
+        f"Value:    `Rs.{portfolio_value:>12,.0f}`",
+        f"P&L:      `Rs.{pnl:>+12,.0f}` ({pnl_pct:+.2f}%)",
+        f"Open:     `{len(open_positions)}` positions",
+        f"Unrealized: `Rs.{unrealized:+,.0f}`",
         "",
         "*This Week — NSE Equity*",
         f"Signals generated: `{total_signals}`",
-        f"Trades executed:   `{len(week_trades)}`",
+        f"Trades closed:     `{len(week_trades)}`",
         f"Wins / Losses:     `{len(wins)} / {len(losses)}`",
         f"Win rate:          `{win_rate:.0f}%`",
-        f"Week P&L:          `Rs.{total_pnl_week:+,.0f}`",
+        f"Realized P&L:      `Rs.{total_pnl_week:+,.0f}`",
     ]
 
     if best and best.get("pnl"):
@@ -241,15 +229,22 @@ def _send():
         f"Trades: `{us_week_count}` | Open: `{us_open_count}`",
         f"P&L:    `${us_week_pnl:+.2f}` (Rs.{us_week_pnl * INR_RATE:+,.0f})",
         "",
-        f"*Combined Week P&L: `Rs.{combined_pnl:+,.0f}`*",
+        "*P&L Summary*",
+        f"Realized (all):  `Rs.{realized_combined:+,.0f}`",
+        f"NSE unrealized:  `Rs.{unrealized:+,.0f}`",
+        f"*True combined:  `Rs.{true_combined:+,.0f}`*",
     ]
 
-    if open_positions:
-        lines += ["", "*Top NSE Open Positions*"]
-        for sym, pos in list(open_positions.items())[:5]:
-            lines.append(f"  {sym} | entry Rs.{pos.get('entry', 0):,.0f}")
-        if len(open_positions) > 5:
-            lines.append(f"  ...and {len(open_positions) - 5} more")
+    if pos_rows:
+        lines += ["", "*Open NSE Positions*"]
+        for sym, entry, curr, qty, unr, pct, is_live in pos_rows[:5]:
+            mark = "" if is_live else "*"
+            lines.append(
+                f"  {sym}{mark} | entry `Rs.{entry:,.0f}` | "
+                f"now `Rs.{curr:,.0f}` | `Rs.{unr:+,.0f}` ({pct:+.1f}%)"
+            )
+        if len(pos_rows) > 5:
+            lines.append(f"  ...and {len(pos_rows) - 5} more")
 
     if gates_total > 0:
         lines += [
@@ -259,12 +254,12 @@ def _send():
             else f"~{max(0,(gates_total-gates_passed)*5)} more trading days needed",
         ]
 
-    lines += ["", "_Keep the agent running daily!_"]
+    lines += ["", "_Download full report from dashboard Settings > Period Report_"]
 
     send("\n".join(lines))
     logger.info(f"Weekly summary sent — {len(week_trades)} NSE + {fno_week_count} F&O + "
                 f"{crypto_week_count} crypto + {us_week_count} US trades, "
-                f"combined P&L Rs.{combined_pnl:+,.0f}")
+                f"true combined P&L Rs.{true_combined:+,.0f}")
 
 
 def _build_report(start_date: str, end_date: str) -> str:
