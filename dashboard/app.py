@@ -65,277 +65,412 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
-/* ── Reset & base ── */
+/* ═══════════════════════════════════════════════════════════════
+   QUANTEDGE PRO — REDESIGNED BLOOMBERG TERMINAL UI v2
+   Dark-first, depth-layered, high-contrast trading terminal
+═══════════════════════════════════════════════════════════════ */
+
+/* ── Reset & Base ──────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 html, body, [class*="css"] {
     font-family: 'JetBrains Mono', monospace !important;
     font-size: 13px;
 }
-.stApp { background: #0a0a0a; color: #cccccc; }
-.block-container { padding: 0.75rem 1.25rem !important; max-width: 1600px; }
 
-/* ── Sidebar ── */
+/* Layer 0 = #050505  /  Layer 1 = #0d0d0d  /  Layer 2 = #111111  /  Layer 3 = #161616 */
+.stApp { background: #050505; color: #c8c8c8; }
+.block-container { padding: 0 1.25rem 1.25rem !important; max-width: 1600px; }
+
+/* ── Sidebar — glass panel ─────────────────────────────────── */
 section[data-testid="stSidebar"] {
-    background: #0d0d0d !important;
-    border-right: 1px solid #222222 !important;
-    min-width: 190px !important; max-width: 190px !important;
+    background: linear-gradient(180deg, #0a0a0a 0%, #080808 100%) !important;
+    border-right: 1px solid #1a1a1a !important;
+    min-width: 200px !important; max-width: 200px !important;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.6) !important;
 }
-section[data-testid="stSidebar"] > div { padding: 12px 10px !important; }
+section[data-testid="stSidebar"] > div { padding: 14px 10px !important; }
+
+/* Sidebar radio nav */
 section[data-testid="stSidebar"] .stRadio > label { display: none; }
-section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] { gap: 2px !important; }
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] { gap: 1px !important; }
 section[data-testid="stSidebar"] .stRadio label {
-    color: #888888 !important; font-size: 12px !important;
+    color: #5a5a5a !important; font-size: 11px !important;
     font-family: 'JetBrains Mono', monospace !important;
-    padding: 6px 10px !important; border-radius: 0 !important;
-    border-left: 2px solid transparent !important;
+    padding: 8px 12px !important; border-radius: 0 !important;
+    border-left: 3px solid transparent !important;
     display: block !important; cursor: pointer;
-    letter-spacing: 0.5px; text-transform: uppercase;
+    letter-spacing: 1px; text-transform: uppercase;
+    transition: all 0.12s ease !important;
+    background: transparent !important;
+    margin: 1px 0 !important;
 }
-section[data-testid="stSidebar"] .stRadio label:hover { color: #FF6B00 !important; }
-section[data-testid="stSidebar"] .stRadio label[data-baseweb="radio"] { display: flex !important; }
+section[data-testid="stSidebar"] .stRadio label:hover {
+    color: #FF6B00 !important;
+    background: rgba(255,107,0,0.06) !important;
+    border-left-color: rgba(255,107,0,0.4) !important;
+}
 div[data-testid="stRadio"] label[aria-checked="true"] p {
     color: #FF6B00 !important; font-weight: 700 !important;
 }
+div[data-testid="stRadio"] label[aria-checked="true"] {
+    background: rgba(255,107,0,0.08) !important;
+    border-left-color: #FF6B00 !important;
+    color: #FF6B00 !important;
+}
 
-/* ── Tabs ── */
+/* ── Tabs ──────────────────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"] {
-    background: #0d0d0d !important; border-bottom: 1px solid #222222 !important;
+    background: #080808 !important;
+    border-bottom: 1px solid #1e1e1e !important;
     gap: 0; border-radius: 0 !important;
+    padding: 0 2px !important;
 }
 .stTabs [data-baseweb="tab"] {
-    background: transparent !important; color: #666666 !important;
-    font-family: 'JetBrains Mono', monospace !important; font-size: 11px !important;
-    border-radius: 0 !important; padding: 7px 14px !important;
-    text-transform: uppercase; letter-spacing: 0.8px; border: none !important;
+    background: transparent !important; color: #4a4a4a !important;
+    font-family: 'JetBrains Mono', monospace !important; font-size: 10px !important;
+    border-radius: 0 !important; padding: 8px 16px !important;
+    text-transform: uppercase; letter-spacing: 1px; border: none !important;
+    transition: color 0.12s !important;
 }
+.stTabs [data-baseweb="tab"]:hover { color: #888888 !important; }
 .stTabs [aria-selected="true"] {
-    background: #111111 !important; color: #FF6B00 !important;
-    border-bottom: 2px solid #FF6B00 !important;
+    background: rgba(255,107,0,0.05) !important; color: #FF6B00 !important;
+    border-bottom: 2px solid #FF6B00 !important; font-weight: 600 !important;
 }
-.stTabs [data-baseweb="tab-panel"] { padding: 14px 0 0 !important; }
+.stTabs [data-baseweb="tab-panel"] { padding: 16px 0 0 !important; }
 
-/* ── Metrics ── */
+/* ── KPI Metric Cards ──────────────────────────────────────── */
 div[data-testid="metric-container"] {
-    background: #111111 !important; border: 1px solid #1e1e1e !important;
-    border-radius: 0 !important; padding: 10px 14px !important;
-    border-left: 2px solid #FF6B00 !important;
+    background: linear-gradient(135deg, #111111 0%, #0e0e0e 100%) !important;
+    border: 1px solid #1e1e1e !important; border-radius: 0 !important;
+    padding: 12px 16px !important; border-top: 2px solid #FF6B00 !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,107,0,0.05) !important;
+    transition: box-shadow 0.15s !important;
+}
+div[data-testid="metric-container"]:hover {
+    box-shadow: 0 6px 24px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,107,0,0.15) !important;
 }
 div[data-testid="stMetricLabel"] p {
-    color: #666666 !important; font-size: 10px !important;
-    text-transform: uppercase; letter-spacing: 1px;
-    font-family: 'JetBrains Mono', monospace !important;
+    color: #4a4a4a !important; font-size: 9px !important;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    font-family: 'JetBrains Mono', monospace !important; font-weight: 500 !important;
 }
 div[data-testid="stMetricValue"] {
-    color: #eeeeee !important;
+    color: #f0f0f0 !important;
     font-family: 'JetBrains Mono', monospace !important;
-    font-size: 1.2rem !important; font-weight: 600 !important;
+    font-size: 1.3rem !important; font-weight: 700 !important;
+    line-height: 1.2 !important;
 }
 div[data-testid="stMetricDelta"] {
-    font-family: 'JetBrains Mono', monospace !important; font-size: 11px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 10px !important; opacity: 0.85 !important;
 }
 
-/* ── Buttons ── */
+/* ── Buttons ───────────────────────────────────────────────── */
 .stButton > button {
-    background: #111111 !important; color: #FF6B00 !important;
-    border: 1px solid #FF6B00 !important; border-radius: 0 !important;
-    font-family: 'JetBrains Mono', monospace !important; font-size: 11px !important;
-    font-weight: 500 !important; letter-spacing: 0.8px; text-transform: uppercase;
-    padding: 6px 14px !important; transition: all 0.15s !important;
+    background: #0e0e0e !important; color: #FF6B00 !important;
+    border: 1px solid rgba(255,107,0,0.35) !important; border-radius: 0 !important;
+    font-family: 'JetBrains Mono', monospace !important; font-size: 10px !important;
+    font-weight: 600 !important; letter-spacing: 1px; text-transform: uppercase;
+    padding: 7px 16px !important;
+    transition: all 0.12s ease !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
 }
 .stButton > button:hover {
-    background: #FF6B00 !important; color: #000000 !important;
+    background: rgba(255,107,0,0.12) !important; color: #FF8C2A !important;
+    border-color: #FF6B00 !important;
+    box-shadow: 0 4px 16px rgba(255,107,0,0.15) !important;
 }
 .stButton > button[kind="primary"] {
     background: #FF6B00 !important; color: #000000 !important;
-    font-weight: 700 !important;
+    border-color: #FF6B00 !important; font-weight: 700 !important;
+    box-shadow: 0 4px 16px rgba(255,107,0,0.3) !important;
 }
 .stButton > button[kind="primary"]:hover {
-    background: #ff8c00 !important;
+    background: #ff8c00 !important; box-shadow: 0 6px 24px rgba(255,107,0,0.45) !important;
 }
 
-/* ── Inputs ── */
+/* ── Inputs ────────────────────────────────────────────────── */
 .stTextInput input, .stPasswordInput input, .stSelectbox select,
 .stNumberInput input, .stTimeInput input {
-    background: #111111 !important; border: 1px solid #2a2a2a !important;
+    background: #0e0e0e !important; border: 1px solid #252525 !important;
     color: #cccccc !important; border-radius: 0 !important;
     font-family: 'JetBrains Mono', monospace !important; font-size: 12px !important;
+    transition: border-color 0.12s !important;
 }
 .stTextInput input:focus, .stPasswordInput input:focus, .stNumberInput input:focus {
-    border-color: #FF6B00 !important; box-shadow: none !important;
+    border-color: #FF6B00 !important; box-shadow: 0 0 0 1px rgba(255,107,0,0.2) !important;
 }
 .stSlider [data-baseweb="slider"] { border-radius: 0 !important; }
-.stSlider [role="slider"] { background: #FF6B00 !important; border-radius: 0 !important; }
+.stSlider [role="slider"] {
+    background: #FF6B00 !important; border-radius: 0 !important;
+    box-shadow: 0 0 8px rgba(255,107,0,0.5) !important;
+}
 
-/* ── Selectbox ── */
+/* ── Selectbox ─────────────────────────────────────────────── */
 .stSelectbox [data-baseweb="select"] > div {
-    background: #111111 !important; border: 1px solid #2a2a2a !important;
+    background: #0e0e0e !important; border: 1px solid #252525 !important;
     border-radius: 0 !important; color: #cccccc !important;
     font-family: 'JetBrains Mono', monospace !important;
 }
 
-/* ── Toggle ── */
+/* ── Toggle / Checkbox ─────────────────────────────────────── */
 .stCheckbox label, .stToggle label {
-    color: #888888 !important; font-family: 'JetBrains Mono', monospace !important;
-    font-size: 11px !important; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #666666 !important; font-family: 'JetBrains Mono', monospace !important;
+    font-size: 10px !important; text-transform: uppercase; letter-spacing: 0.8px;
 }
 
-/* ── Dividers & misc ── */
-hr { border-color: #1e1e1e !important; margin: 8px 0 !important; }
+/* ── Alerts ────────────────────────────────────────────────── */
+hr { border-color: #1a1a1a !important; margin: 8px 0 !important; }
 .stInfo, .stSuccess, .stWarning, .stError {
     border-radius: 0 !important; font-family: 'JetBrains Mono', monospace !important;
-    font-size: 11px !important;
+    font-size: 11px !important; border-left-width: 3px !important;
 }
-.stInfo    { background: rgba(255,107,0,0.07) !important; border: 1px solid rgba(255,107,0,0.25) !important; }
-.stSuccess { background: rgba(0,200,5,0.07) !important;   border: 1px solid rgba(0,200,5,0.25) !important; }
-.stWarning { background: rgba(255,180,0,0.07) !important; border: 1px solid rgba(255,180,0,0.25) !important; }
-.stError   { background: rgba(255,59,59,0.07) !important; border: 1px solid rgba(255,59,59,0.25) !important; }
+.stInfo    { background: rgba(255,107,0,0.05) !important; border: 1px solid rgba(255,107,0,0.2) !important; border-left: 3px solid #FF6B00 !important; }
+.stSuccess { background: rgba(0,200,5,0.05) !important;   border: 1px solid rgba(0,200,5,0.2) !important;   border-left: 3px solid #00C805 !important; }
+.stWarning { background: rgba(255,180,0,0.05) !important; border: 1px solid rgba(255,180,0,0.2) !important; border-left: 3px solid #FFB400 !important; }
+.stError   { background: rgba(255,59,59,0.05) !important; border: 1px solid rgba(255,59,59,0.2) !important;  border-left: 3px solid #FF3B3B !important; }
 
-/* ── Dataframe / tables ── */
-.stDataFrame { border: 1px solid #1e1e1e !important; border-radius: 0 !important; }
+/* ── DataFrames ────────────────────────────────────────────── */
+.stDataFrame { border: 1px solid #1a1a1a !important; border-radius: 0 !important; }
 .stDataFrame [data-testid="stDataFrameResizable"] { border-radius: 0 !important; }
+.stDataFrame thead th {
+    background: #0d0d0d !important; color: #4a4a4a !important;
+    font-size: 9px !important; text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 1px solid #222 !important;
+}
+.stDataFrame tbody tr:hover td { background: rgba(255,107,0,0.03) !important; }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: #0a0a0a; }
-::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 0; }
+/* ── Scrollbars ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #080808; }
+::-webkit-scrollbar-thumb { background: #282828; }
+::-webkit-scrollbar-thumb:hover { background: #FF6B00; }
 
-/* ── Custom classes ── */
-.bb-header {
-    font-size: 10px; color: #FF6B00; text-transform: uppercase;
-    letter-spacing: 2px; font-weight: 600; margin-bottom: 6px;
-    border-bottom: 1px solid #1e1e1e; padding-bottom: 4px;
+/* ═══════════════════════════════════════════════════════════
+   CUSTOM COMPONENT CLASSES
+═══════════════════════════════════════════════════════════ */
+
+/* ── Page header ────────────────────────────────────────────── */
+.page-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0 12px; margin-bottom: 2px;
+    border-bottom: 1px solid #1a1a1a;
+}
+.page-header-title {
+    font-size: 11px; font-weight: 700; color: #FF6B00;
+    text-transform: uppercase; letter-spacing: 2px;
+}
+.page-header-sub {
+    font-size: 9px; color: #3a3a3a; text-transform: uppercase; letter-spacing: 1.5px;
 }
 
-/* ── Multi-market P&L strip ── */
+/* ── Section header ─────────────────────────────────────────── */
+.bb-header {
+    font-size: 9px; color: #FF6B00; text-transform: uppercase;
+    letter-spacing: 2.5px; font-weight: 700; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+}
+.bb-header::after {
+    content: ''; flex: 1; height: 1px; background: #1a1a1a;
+}
+
+/* ── Ticker strip ───────────────────────────────────────────── */
+.ticker-strip {
+    background: #080808; border-bottom: 1px solid #1a1a1a;
+    border-top: 1px solid #1a1a1a;
+    padding: 6px 0 5px; font-size: 11px; color: #555; overflow: hidden;
+    white-space: nowrap; margin-bottom: 12px;
+    display: flex; gap: 28px; align-items: center;
+}
+.ticker-sep { color: #222; }
+
+/* ── Multi-market P&L strip ─────────────────────────────────── */
 .mkt-strip {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
-    margin-bottom: 8px;
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;
+    margin-bottom: 12px;
 }
 .mkt-cell {
-    background: #111111; border: 1px solid #1e1e1e;
-    border-top: 2px solid #2a2a2a;
-    padding: 8px 10px; text-align: center;
+    background: linear-gradient(180deg, #111111 0%, #0e0e0e 100%);
+    border: 1px solid #1a1a1a; border-top: 2px solid #2a2a2a;
+    padding: 10px 12px; text-align: center; position: relative; overflow: hidden;
+    transition: background 0.12s;
 }
+.mkt-cell::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 100%; opacity: 0.03;
+}
+.mkt-cell:hover { background: linear-gradient(180deg, #141414 0%, #111111 100%); }
 .mkt-cell.nse  { border-top-color: #FF6B00; }
+.mkt-cell.nse::before { background: #FF6B00; }
 .mkt-cell.fno  { border-top-color: #00BFFF; }
+.mkt-cell.fno::before { background: #00BFFF; }
 .mkt-cell.cr   { border-top-color: #F7931A; }
+.mkt-cell.cr::before { background: #F7931A; }
 .mkt-cell.us   { border-top-color: #4169E1; }
-.mkt-cell.tot  { border-top-color: #00C805; background: #0d1a0d; }
-.mkt-lbl { font-size: 9px; color: #555; text-transform: uppercase;
-           letter-spacing: 1px; margin-bottom: 4px; }
-.mkt-val { font-size: 13px; font-weight: 600; font-family: 'JetBrains Mono'; }
+.mkt-cell.us::before { background: #4169E1; }
+.mkt-cell.tot  { border-top-color: #00C805; background: linear-gradient(180deg, #0d130d 0%, #0a100a 100%); }
+.mkt-cell.tot::before { background: #00C805; }
+.mkt-lbl {
+    font-size: 8px; color: #444; text-transform: uppercase;
+    letter-spacing: 1.5px; margin-bottom: 6px; font-weight: 500;
+}
+.mkt-val { font-size: 14px; font-weight: 700; font-family: 'JetBrains Mono'; line-height: 1.1; }
+.mkt-sub { font-size: 9px; color: #333; margin-top: 4px; }
 
-/* ── Market Intel card ── */
+/* ── Market Intel card ──────────────────────────────────────── */
 .intel-card {
-    background: #0d0d0d; border: 1px solid #1e1e1e;
-    padding: 10px 12px; margin-bottom: 8px;
+    background: #0a0a0a; border: 1px solid #1a1a1a;
+    padding: 12px 14px; margin-bottom: 8px;
 }
 .intel-row {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 4px 0; border-bottom: 1px solid #151515; font-size: 11px;
+    padding: 5px 0; border-bottom: 1px solid #111; font-size: 11px;
 }
 .intel-row:last-child { border-bottom: none; }
-.intel-key { color: #555; font-size: 10px; text-transform: uppercase;
-             letter-spacing: 0.8px; }
-.badge {
-    font-size: 9px; font-weight: 700; padding: 2px 7px;
-    letter-spacing: 0.8px; text-transform: uppercase;
+.intel-key {
+    color: #444; font-size: 9px; text-transform: uppercase;
+    letter-spacing: 1px; font-weight: 500;
 }
-.badge-bull { color: #00C805; border: 1px solid #00C805; }
-.badge-bear { color: #FF3B3B; border: 1px solid #FF3B3B; }
-.badge-side { color: #FFB347; border: 1px solid #FFB347; }
-.badge-buy  { color: #00BFFF; border: 1px solid #00BFFF; }
-.badge-sell { color: #FF6B00; border: 1px solid #FF6B00; }
-.badge-neu  { color: #888888; border: 1px solid #444444; }
+
+/* ── Badges ─────────────────────────────────────────────────── */
+.badge {
+    font-size: 8px; font-weight: 700; padding: 2px 8px;
+    letter-spacing: 1px; text-transform: uppercase; display: inline-block;
+}
+.badge-bull { color: #00C805; border: 1px solid rgba(0,200,5,0.4); background: rgba(0,200,5,0.06); }
+.badge-bear { color: #FF3B3B; border: 1px solid rgba(255,59,59,0.4); background: rgba(255,59,59,0.06); }
+.badge-side { color: #FFB347; border: 1px solid rgba(255,179,71,0.4); background: rgba(255,179,71,0.06); }
+.badge-buy  { color: #00BFFF; border: 1px solid rgba(0,191,255,0.4); background: rgba(0,191,255,0.06); }
+.badge-sell { color: #FF6B00; border: 1px solid rgba(255,107,0,0.4); background: rgba(255,107,0,0.06); }
+.badge-neu  { color: #666666; border: 1px solid #333; background: rgba(255,255,255,0.02); }
+
+/* ── bb-row stat rows ───────────────────────────────────────── */
 .bb-row {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 5px 0; border-bottom: 1px solid #151515; font-size: 12px;
+    padding: 6px 0; border-bottom: 1px solid #111; font-size: 11px;
 }
-.bb-label  { color: #666666; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; }
-.bb-val    { color: #cccccc; font-weight: 500; }
-.bb-pos    { color: #00C805; font-weight: 600; }
-.bb-neg    { color: #FF3B3B; font-weight: 600; }
-.bb-orange { color: #FF6B00; font-weight: 600; }
+.bb-row:last-child { border-bottom: none; }
+.bb-label { color: #444; text-transform: uppercase; letter-spacing: 0.8px; font-size: 9px; }
+.bb-val   { color: #cccccc; font-weight: 500; }
+.bb-pos   { color: #00C805; font-weight: 600; }
+.bb-neg   { color: #FF3B3B; font-weight: 600; }
+.bb-orange{ color: #FF6B00; font-weight: 600; }
 
+/* ── Signal cards ───────────────────────────────────────────── */
 .sig-card {
-    background: #111111; border: 1px solid #1e1e1e; border-left: 3px solid #FF6B00;
-    padding: 12px 14px; margin-bottom: 8px;
+    background: linear-gradient(135deg, #111111 0%, #0f0f0f 100%);
+    border: 1px solid #1e1e1e; border-left: 3px solid #FF6B00;
+    padding: 14px 16px; margin-bottom: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+    transition: all 0.15s ease;
 }
-.sig-card:hover { border-left-color: #ff8c00; background: #141414; }
-.sig-sym { font-size: 16px; font-weight: 700; color: #eeeeee; }
-.sig-buy  { color: #00C805; font-size: 10px; font-weight: 700; letter-spacing: 1px;
-            border: 1px solid #00C805; padding: 1px 6px; }
-.sig-sell { color: #FF3B3B; font-size: 10px; font-weight: 700; letter-spacing: 1px;
-            border: 1px solid #FF3B3B; padding: 1px 6px; }
-.sig-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin: 8px 0; }
-.sig-cell-lbl { font-size: 9px; color: #555555; text-transform: uppercase; letter-spacing: 0.8px; }
+.sig-card:hover {
+    border-color: #282828; border-left-color: #FF8C2A;
+    background: linear-gradient(135deg, #141414 0%, #121212 100%);
+    box-shadow: 0 6px 28px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,107,0,0.08);
+    transform: translateY(-1px);
+}
+.sig-sym { font-size: 17px; font-weight: 700; color: #f0f0f0; letter-spacing: 0.5px; }
+.sig-buy  {
+    color: #00C805; font-size: 9px; font-weight: 700; letter-spacing: 1.2px;
+    border: 1px solid rgba(0,200,5,0.4); padding: 2px 8px;
+    background: rgba(0,200,5,0.06);
+}
+.sig-sell {
+    color: #FF3B3B; font-size: 9px; font-weight: 700; letter-spacing: 1.2px;
+    border: 1px solid rgba(255,59,59,0.4); padding: 2px 8px;
+    background: rgba(255,59,59,0.06);
+}
+.sig-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin: 10px 0; }
+.sig-cell-lbl { font-size: 8px; color: #444; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
 .sig-cell-val { font-size: 13px; color: #cccccc; font-weight: 500; }
-.sig-bar-wrap { background: #1e1e1e; height: 3px; margin: 2px 0 8px; }
-.sig-bar-fill { height: 3px; background: #FF6B00; }
-.sig-story { font-size: 11px; color: #888888; line-height: 1.6;
-             border-top: 1px solid #1e1e1e; padding-top: 8px; margin-top: 4px; }
+.sig-bar-wrap { background: #181818; height: 3px; margin: 3px 0 10px; border-radius: 2px; }
+.sig-bar-fill { height: 3px; background: #FF6B00; border-radius: 2px;
+               transition: width 0.4s ease; }
+.sig-story {
+    font-size: 11px; color: #666; line-height: 1.65;
+    border-top: 1px solid #1a1a1a; padding-top: 10px; margin-top: 6px;
+}
 
+/* ── Position rows ──────────────────────────────────────────── */
 .pos-row {
     display: grid; grid-template-columns: 100px 1fr 1fr 1fr 1fr 80px;
-    gap: 8px; padding: 8px 12px; border-bottom: 1px solid #151515;
-    align-items: center; font-size: 12px;
+    gap: 8px; padding: 8px 12px; border-bottom: 1px solid #111;
+    align-items: center; font-size: 12px; transition: background 0.1s;
 }
-.pos-row:hover { background: #111111; }
+.pos-row:hover { background: rgba(255,107,0,0.03); }
 
+/* ── Regime labels ──────────────────────────────────────────── */
 .regime-bull { color: #00C805; }
 .regime-bear { color: #FF3B3B; }
 .regime-side { color: #FFB347; }
 
-.ticker-strip {
-    background: #0d0d0d; border-bottom: 1px solid #1e1e1e;
-    padding: 5px 0; font-size: 11px; color: #666666; overflow: hidden;
-    white-space: nowrap; margin-bottom: 10px;
-    display: flex; gap: 24px; align-items: center;
+/* ── Live pulse dot ─────────────────────────────────────────── */
+@keyframes pulse {
+    0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,200,5,0.5); }
+    50%      { opacity: 0.6; box-shadow: 0 0 0 4px rgba(0,200,5,0); }
+}
+.live-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #00C805; animation: pulse 2s ease-in-out infinite;
+    vertical-align: middle; margin-right: 4px;
+}
+.closed-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #333; vertical-align: middle; margin-right: 4px;
 }
 
-/* ── MOBILE RESPONSIVE ── */
+/* ── Section divider card ────────────────────────────────────── */
+.section-card {
+    background: #0d0d0d; border: 1px solid #1a1a1a;
+    padding: 14px 16px; margin-bottom: 10px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+/* ── Stat number blocks ──────────────────────────────────────── */
+.stat-block {
+    text-align: center; padding: 12px 8px;
+    background: #0e0e0e; border: 1px solid #1a1a1a;
+}
+.stat-block-val { font-size: 18px; font-weight: 700; color: #f0f0f0; }
+.stat-block-lbl { font-size: 8px; color: #444; text-transform: uppercase;
+                  letter-spacing: 1.5px; margin-top: 2px; }
+
+/* ── MOBILE RESPONSIVE ──────────────────────────────────────── */
 @media (max-width: 768px) {
-    /* Collapse sidebar on mobile */
     section[data-testid="stSidebar"] {
         min-width: 100% !important; max-width: 100% !important;
     }
-    /* Looser padding on small screens */
-    .block-container { padding: 0.5rem 0.6rem !important; }
-    /* Bigger tap targets for buttons */
-    .stButton > button { padding: 10px 16px !important; font-size: 12px !important; }
-    /* Signal cards full-width, easier to read */
+    .block-container { padding: 0 0.6rem 0.6rem !important; }
+    .stButton > button { padding: 10px 16px !important; font-size: 11px !important; }
     .sig-grid { grid-template-columns: repeat(2, 1fr) !important; }
     .sig-card { padding: 10px !important; }
-    /* Position rows stack vertically */
+    .mkt-strip { grid-template-columns: repeat(2, 1fr) !important; }
+    .mkt-cell.tot { grid-column: span 2; }
     .pos-row {
         grid-template-columns: 1fr 1fr !important;
         gap: 4px !important; font-size: 11px !important;
     }
-    /* Ticker strip scrolls horizontally */
     .ticker-strip { overflow-x: auto !important; }
-    /* Metrics: 2 per row instead of 4 */
     div[data-testid="column"] { min-width: 45% !important; }
-    /* Sidebar nav labels bigger for thumb tap */
     section[data-testid="stSidebar"] .stRadio label {
-        font-size: 14px !important; padding: 10px 12px !important;
+        font-size: 13px !important; padding: 10px 14px !important;
     }
-    /* Hide heavy desktop text */
     .desktop-only { display: none !important; }
-    /* Tabs scroll horizontally */
     .stTabs [data-baseweb="tab-list"] { overflow-x: auto !important; flex-wrap: nowrap !important; }
     .stTabs [data-baseweb="tab"] { min-width: max-content !important; }
-    /* Charts shorter on mobile */
     div[data-testid="stPlotlyChart"] { max-height: 260px !important; }
-    /* Tables smaller font */
     .stDataFrame { font-size: 10px !important; }
-    /* Inputs full-width */
     .stTextInput, .stNumberInput, .stSelectbox { width: 100% !important; }
 }
 
 @media (max-width: 480px) {
     html, body, [class*="css"] { font-size: 12px !important; }
-    .sig-sym { font-size: 14px !important; }
+    .sig-sym { font-size: 15px !important; }
     .sig-grid { grid-template-columns: 1fr 1fr !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.0rem !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+    .mkt-val { font-size: 12px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -797,10 +932,21 @@ memory = PortfolioMemory()
 # =============================================================================
 with st.sidebar:
     st.markdown("""
-    <div style="padding:10px 0 14px;border-bottom:1px solid #222;margin-bottom:12px;">
-        <div style="font-size:16px;font-weight:700;color:#FF6B00;letter-spacing:1px;">QE PRO</div>
-        <div style="font-size:9px;color:#444;text-transform:uppercase;letter-spacing:2px;margin-top:2px;">
-            QuantEdge Terminal</div>
+    <div style="padding:12px 0 16px;border-bottom:1px solid #1a1a1a;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:28px;height:28px;background:#FF6B00;display:flex;
+                        align-items:center;justify-content:center;
+                        box-shadow:0 0 12px rgba(255,107,0,0.4);">
+                <span style="font-size:14px;font-weight:900;color:#000;
+                             font-family:JetBrains Mono,monospace;">Q</span>
+            </div>
+            <div>
+                <div style="font-size:14px;font-weight:700;color:#f0f0f0;
+                             letter-spacing:1px;line-height:1.1;">QuantEdge</div>
+                <div style="font-size:8px;color:#3a3a3a;text-transform:uppercase;
+                             letter-spacing:2px;margin-top:1px;">Pro Terminal</div>
+            </div>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -821,22 +967,27 @@ with st.sidebar:
     _sb_sched_lbl = "RUNNING" if _sb_health["scheduler_running"] else "STOPPED"
 
     st.markdown(f"""
-    <div style="font-size:10px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-            <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Mode</span>
-            <span style="color:{mc};font-weight:600;">{mode.upper()}</span>
+    <div style="background:#0a0a0a;border:1px solid #1a1a1a;
+                padding:8px 10px;margin-bottom:10px;font-size:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:3px 0;border-bottom:1px solid #111;">
+            <span style="color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;font-size:8px;">MODE</span>
+            <span style="color:{mc};font-weight:700;font-size:10px;">{mode.upper()}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-            <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Agent</span>
-            <span style="color:#FF6B00;font-weight:600;">{agent_mode.upper()}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:3px 0;border-bottom:1px solid #111;">
+            <span style="color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;font-size:8px;">AGENT</span>
+            <span style="color:#FF6B00;font-weight:700;font-size:10px;">{agent_mode.upper()}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;">
-            <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Market</span>
-            <span style="color:{regime_col};font-weight:600;">{regime_str}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:3px 0;border-bottom:1px solid #111;">
+            <span style="color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;font-size:8px;">MARKET</span>
+            <span style="color:{regime_col};font-weight:700;font-size:10px;">{regime_str}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:4px;">
-            <span style="color:#444;text-transform:uppercase;letter-spacing:0.5px;">Scheduler</span>
-            <span style="color:{_sb_sched_col};font-weight:600;">{_sb_sched_lbl}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-top:3px;">
+            <span style="color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;font-size:8px;">SCHED</span>
+            <span style="color:{_sb_sched_col};font-weight:700;font-size:10px;">
+                {'●' if _sb_health['scheduler_running'] else '○'} {_sb_sched_lbl}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -872,15 +1023,27 @@ with st.sidebar:
     _sb_extra = True
     _cpc = "#00C805" if _sb_comb >= 0 else "#FF3B3B"
     st.markdown(f"""
-    <div style="background:#111111;border:1px solid #1e1e1e;padding:10px;
-                border-left:2px solid #FF6B00;">
-        <div style="font-size:9px;color:#444;text-transform:uppercase;
-                    letter-spacing:1px;margin-bottom:6px;">Portfolio</div>
-        <div style="font-size:17px;font-weight:700;color:#eeeeee;">
+    <div style="background:linear-gradient(135deg,#111111 0%,#0e0e0e 100%);
+                border:1px solid #1e1e1e; border-top:2px solid #FF6B00;
+                padding:12px 12px 10px;
+                box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+        <div style="font-size:8px;color:#3a3a3a;text-transform:uppercase;
+                    letter-spacing:1.5px;margin-bottom:8px;font-weight:600;">
+            PORTFOLIO VALUE</div>
+        <div style="font-size:19px;font-weight:700;color:#f0f0f0;letter-spacing:0.5px;">
             Rs.{cash:,.0f}</div>
-        <div style="font-size:10px;color:{pc};margin-top:3px;">
-            NSE {'+' if pnl>=0 else ''}Rs.{pnl:,.0f}</div>
-        {'<div style="font-size:10px;color:'+_cpc+';margin-top:2px;border-top:1px solid #1e1e1e;padding-top:3px;">ALL '+('+' if _sb_comb>=0 else '')+'Rs.'+f"{_sb_comb:,.0f}"+'</div>' if _sb_extra else ''}
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    margin-top:6px;padding-top:6px;border-top:1px solid #151515;">
+            <span style="font-size:8px;color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;">NSE</span>
+            <span style="font-size:11px;color:{pc};font-weight:600;">
+                {'+' if pnl>=0 else ''}Rs.{pnl:,.0f}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    margin-top:3px;">
+            <span style="font-size:8px;color:#3a3a3a;text-transform:uppercase;letter-spacing:0.8px;">ALL</span>
+            <span style="font-size:11px;color:{_cpc};font-weight:700;">
+                {'+' if _sb_comb>=0 else ''}Rs.{_sb_comb:,.0f}</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -897,8 +1060,13 @@ with st.sidebar:
     st.caption(f"Interval: {refresh_sec}s")
 
     st.markdown(f"""
-    <div style="font-size:9px;color:#333;margin-top:4px;text-align:right;">
-        {datetime.now().strftime('%d %b %Y  %H:%M')}</div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid #141414;
+                display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:8px;color:#2a2a2a;text-transform:uppercase;
+                     letter-spacing:1px;">LOCAL</span>
+        <span style="font-size:9px;color:#3a3a3a;font-family:JetBrains Mono,monospace;">
+            {datetime.now().strftime('%d %b  %H:%M')}</span>
+    </div>
     """, unsafe_allow_html=True)
 
 
@@ -915,6 +1083,14 @@ if page == "TODAY":
     vc    = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     pnl   = _mtm["nse_pnl"]          # TRUE NSE P&L (cash + live_mtm - vc)
     pos   = _mtm["positions"]
+    st.markdown("""
+    <div class="page-header">
+        <div>
+            <div class="page-header-title">Today</div>
+            <div class="page-header-sub">Live market overview, signals &amp; positions</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── Live market data for strips ───────────────────────────────────────────
     reg     = _load_json("logs/market_regime.json")
@@ -960,22 +1136,29 @@ if page == "TODAY":
     _treasury = _treasury_snapshot(auto_sync=False)
 
     # ── Ticker strip ──────────────────────────────────────────────────────────
+    _live_cls = "live-dot" if _mkt_open else "closed-dot"
     st.markdown(f"""
     <div class="ticker-strip">
-        <span style="color:{_mkt_color};font-weight:700;letter-spacing:1px;">
-            ● {_mkt_label}</span>
-        <span>NIFTY &nbsp;<span style="color:{'#00C805' if ret_1m>=0 else '#FF3B3B'}">
-            {ret_1m:+.2f}%</span></span>
-        <span>BANKNIFTY &nbsp;<span style="color:{'#00C805' if bn_ret>=0 else '#FF3B3B'}">
-            {bn_ret:+.2f}%</span></span>
-        <span>RSI <span style="color:#FF6B00">{rsi_val:.1f}</span></span>
-        <span>PCR <span style="color:#FF6B00">{pcr_val:.2f}</span></span>
-        <span>REGIME <span style="color:{rg_col}">{rg_str}</span></span>
-        <span>FII <span style="color:{'#00C805' if fii_net>=0 else '#FF3B3B'}">
-            {'▲' if fii_net>=0 else '▼'}{abs(fii_net):,.0f}Cr</span></span>
-        <span>POS <span style="color:#FF6B00">{_total_open}</span></span>
-        <span>WIN <span style="color:#FF6B00">{stats['win_rate_pct']:.1f}%</span></span>
-        <span style="color:#444;">{_now.strftime('%H:%M IST')}</span>
+        <span style="font-weight:700;letter-spacing:1px;color:{_mkt_color};">
+            <span class="{_live_cls}"></span>{_mkt_label}</span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">NIFTY&nbsp;<span style="color:{'#00C805' if ret_1m>=0 else '#FF3B3B'};font-weight:600;">{ret_1m:+.2f}%</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">BNIFTY&nbsp;<span style="color:{'#00C805' if bn_ret>=0 else '#FF3B3B'};font-weight:600;">{bn_ret:+.2f}%</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">RSI&nbsp;<span style="color:#FF6B00;font-weight:600;">{rsi_val:.1f}</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">PCR&nbsp;<span style="color:#FF6B00;font-weight:600;">{pcr_val:.2f}</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">REGIME&nbsp;<span style="color:{rg_col};font-weight:700;">{rg_str}</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">FII&nbsp;<span style="color:{'#00C805' if fii_net>=0 else '#FF3B3B'};font-weight:600;">{'▲' if fii_net>=0 else '▼'}{abs(fii_net):,.0f}Cr</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">POS&nbsp;<span style="color:#FF6B00;font-weight:600;">{_total_open}</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#555;">WIN&nbsp;<span style="color:#FF6B00;font-weight:600;">{stats['win_rate_pct']:.1f}%</span></span>
+        <span class="ticker-sep">│</span>
+        <span style="color:#2a2a2a;">{_now.strftime('%H:%M IST')}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -988,27 +1171,27 @@ if page == "TODAY":
       <div class="mkt-cell nse">
         <div class="mkt-lbl">NSE Equity</div>
         <div class="mkt-val" style="color:{_pnl_color(pnl)};">{_pnl_fmt(pnl)}</div>
-        <div style="font-size:9px;color:#444;margin-top:2px;">{len(pos)} positions</div>
+        <div class="mkt-sub">{len(pos)} pos open</div>
       </div>
       <div class="mkt-cell fno">
         <div class="mkt-lbl">F&amp;O Paper</div>
         <div class="mkt-val" style="color:{_pnl_color(_fno_pnl)};">{_pnl_fmt(_fno_pnl)}</div>
-        <div style="font-size:9px;color:#444;margin-top:2px;">{_fno_open} positions</div>
+        <div class="mkt-sub">{_fno_open} pos open</div>
       </div>
       <div class="mkt-cell cr">
         <div class="mkt-lbl">Crypto</div>
         <div class="mkt-val" style="color:{_pnl_color(_cry_pnl)};">{_pnl_fmt(_cry_pnl)}</div>
-        <div style="font-size:9px;color:#444;margin-top:2px;">{_cry_open} positions</div>
+        <div class="mkt-sub">{_cry_open} pos open</div>
       </div>
       <div class="mkt-cell us">
         <div class="mkt-lbl">US Stocks</div>
         <div class="mkt-val" style="color:{_pnl_color(_us_pnl)};">{_pnl_fmt(_us_pnl)}</div>
-        <div style="font-size:9px;color:#444;margin-top:2px;">{_us_open} positions</div>
+        <div class="mkt-sub">{_us_open} pos open</div>
       </div>
       <div class="mkt-cell tot">
         <div class="mkt-lbl">Combined P&amp;L</div>
-        <div class="mkt-val" style="color:{_pnl_color(_comb)};font-size:15px;">{_pnl_fmt(_comb)}</div>
-        <div style="font-size:9px;color:#444;margin-top:2px;">{_total_open} total open</div>
+        <div class="mkt-val" style="color:{_pnl_color(_comb)};font-size:16px;">{_pnl_fmt(_comb)}</div>
+        <div class="mkt-sub">{_total_open} total open</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1043,18 +1226,26 @@ if page == "TODAY":
             # Regime banner
             if reg:
                 rg = reg.get("regime","unknown")
-                css = {"bull":"regime-bull","bear":"regime-bear"}.get(rg,"regime-side")
-                icon= {"bull":"[BULL]","bear":"[BEAR]","sideways":"[SIDE]"}.get(rg,"[?]")
-                allow = rg != "bear"
+                rg_accent = {'bull':'#00C805','bear':'#FF3B3B'}.get(rg,'#FFB347')
+                rg_bg     = {'bull':'rgba(0,200,5,0.04)','bear':'rgba(255,59,59,0.04)'}.get(rg,'rgba(255,179,71,0.04)')
+                icon      = {'bull':'▲ BULL','bear':'▼ BEAR','sideways':'◆ SIDE'}.get(rg,'● UNKNOWN')
+                allow     = rg != "bear"
+                trade_lbl = 'TRADING ACTIVE' if allow else 'TRADING BLOCKED'
+                trade_col = '#00C805' if allow else '#FF3B3B'
                 st.markdown(f"""
-                <div style="background:#111111;border:1px solid #1e1e1e;border-left:3px solid
-                            {'#00C805' if rg=='bull' else '#FF3B3B' if rg=='bear' else '#FFB347'};
-                            padding:8px 12px;font-size:11px;margin-bottom:8px;">
-                    <span class="{css}" style="font-weight:700;margin-right:12px;">{icon}</span>
-                    RSI {reg.get("rsi",0):.1f} &nbsp;|&nbsp;
-                    1M {reg.get("ret_1m",0):+.1f}% &nbsp;|&nbsp;
-                    <span style="color:{'#00C805' if allow else '#FF3B3B'}">
-                        {'TRADING ACTIVE' if allow else 'TRADING BLOCKED'}</span>
+                <div style="background:{rg_bg};border:1px solid #1e1e1e;
+                            border-left:3px solid {rg_accent};
+                            padding:10px 14px;font-size:11px;margin-bottom:10px;
+                            display:flex;justify-content:space-between;align-items:center;">
+                    <div style="display:flex;align-items:center;gap:16px;">
+                        <span style="color:{rg_accent};font-weight:800;font-size:12px;letter-spacing:1px;">{icon}</span>
+                        <span style="color:#555;">RSI&nbsp;<span style="color:#FF6B00;font-weight:600;">{reg.get("rsi",0):.1f}</span></span>
+                        <span style="color:#555;">1M&nbsp;<span style="color:{'#00C805' if reg.get('ret_1m',0)>=0 else '#FF3B3B'};font-weight:600;">{reg.get('ret_1m',0):+.1f}%</span></span>
+                    </div>
+                    <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:{trade_col};
+                                 border:1px solid {trade_col};padding:2px 8px;
+                                 background:{'rgba(0,200,5,0.05)' if allow else 'rgba(255,59,59,0.05)'};">
+                        {trade_lbl}</span>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1143,8 +1334,8 @@ if page == "TODAY":
             """, unsafe_allow_html=True)
 
             # Performance block
-            st.markdown('<div class="bb-header">PERFORMANCE</div>', unsafe_allow_html=True)
-            rows_html = ""
+            st.markdown('<div class="bb-header" style="margin-top:10px;">PERFORMANCE</div>', unsafe_allow_html=True)
+            perf_html = '<div style="background:#0a0a0a;border:1px solid #1a1a1a;padding:8px 12px;">'
             for label, val, good in [
                 ("Win Rate",     f"{stats['win_rate_pct']:.1f}%",     stats['win_rate_pct'] >= 52),
                 ("Profit Factor",f"{stats['profit_factor']:.2f}",     stats['profit_factor'] >= 1.2),
@@ -1154,8 +1345,9 @@ if page == "TODAY":
                 ("Total Trades", str(stats['total_trades']),           True),
             ]:
                 c = "#00C805" if good else "#FF3B3B"
-                rows_html += _bb_row(label, val, c)
-            st.markdown(rows_html, unsafe_allow_html=True)
+                perf_html += _bb_row(label, val, c)
+            perf_html += '</div>'
+            st.markdown(perf_html, unsafe_allow_html=True)
 
             st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
 
@@ -1665,8 +1857,14 @@ elif page == "PORTFOLIO":
     snaps = _get_equity_snapshots()
     positions = _mtm["positions"]
 
-    st.markdown('<div class="bb-header" style="font-size:12px;">PORTFOLIO</div>',
-                unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header">
+        <div>
+            <div class="page-header-title">Portfolio</div>
+            <div class="page-header-sub">Multi-market positions &amp; equity curve</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Combined P&L across all markets (all cached 60s)
     _pf_inr = _cfg("INR_PER_USD", 83.0)
@@ -1861,8 +2059,14 @@ elif page == "PORTFOLIO":
 # PAGE: RESEARCH
 # =============================================================================
 elif page == "RESEARCH":
-    st.markdown('<div class="bb-header" style="font-size:12px;">RESEARCH</div>',
-                unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header">
+        <div>
+            <div class="page-header-title">Research</div>
+            <div class="page-header-sub">Market intel, backtest, screener &amp; options</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     tab_intel, tab_heat, tab_bt, tab_screen, tab_attrib, tab_opts = st.tabs([
         "MARKET INTEL", "SECTOR MAP", "BACKTEST", "SCREENER", "ATTRIBUTION", "OPTIONS"
@@ -2246,8 +2450,14 @@ elif page == "RESEARCH":
 # PAGE: HISTORY
 # =============================================================================
 elif page == "HISTORY":
-    st.markdown('<div class="bb-header" style="font-size:12px;">HISTORY</div>',
-                unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header">
+        <div>
+            <div class="page-header-title">History</div>
+            <div class="page-header-sub">Trade log, signal outcomes &amp; readiness</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     tab_tr, tab_sig, tab_qual, tab_rd = st.tabs(["TRADE LOG", "SIGNAL OUTCOMES", "SIGNAL QUALITY", "READINESS"])
 
     with tab_tr:
@@ -2581,8 +2791,14 @@ elif page == "HISTORY":
 # PAGE: CONFIG
 # =============================================================================
 elif page == "CONFIG":
-    st.markdown('<div class="bb-header" style="font-size:12px;">CONFIGURATION</div>',
-                unsafe_allow_html=True)
+    st.markdown("""
+    <div class="page-header">
+        <div>
+            <div class="page-header-title">Configuration</div>
+            <div class="page-header-sub">API keys, strategy params &amp; scheduler</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Reload from disk on every page visit
     S.reload()
