@@ -123,11 +123,7 @@ def run_daily_scan():
 
         # dry_run=False: paper mode simulates trades virtually (correct behavior)
         # dry_run=True is only for: python main.py --dry-run (manual override)
-        signals = run_agent(dry_run=False)  # main.py saves signals internally
-
-        memory  = PortfolioMemory()
-        summary = memory.get_stats()
-        send_telegram_alert(signals, summary)
+        signals = run_agent(dry_run=False)  # main.py saves signals + sends Telegram internally
 
         # Options signals — Nifty/BankNifty weekly CE/PE ideas
         _run_options_signals()
@@ -141,7 +137,22 @@ def run_daily_scan():
     except Exception as e:
         _write_scheduler_status("daily_scan", "error", str(e))
         logger.error(f"Scheduled scan failed: {e}")
-        send_telegram_message(f"*Agent ERROR (scan)*\n`{e}`")
+        # Retry once after 60s for transient errors (e.g. empty API response)
+        import time as _time
+        _time.sleep(60)
+        try:
+            from main import run_agent
+            signals = run_agent(dry_run=False)
+            _run_options_signals()
+            _run_futures_signals()
+            _run_selling_signals()
+            _sync_state("daily_scan_retry")
+            _write_scheduler_status("daily_scan", "ok", f"Recovered on retry: {len(signals)} signals")
+            logger.info("Scheduled scan recovered on retry")
+        except Exception as e2:
+            _write_scheduler_status("daily_scan", "error", f"Retry also failed: {e2}")
+            logger.error(f"Scheduled scan retry also failed: {e2}")
+            send_telegram_message(f"*Agent ERROR (scan)*\n`{e2}`")
 
 
 def _run_options_signals():
@@ -171,7 +182,7 @@ def _run_options_signals():
             )
 
             arrow = "▲" if s.direction == "CALL" else "▼"
-            status = f"Paper #{trade_id}" if trade_id else "Could not fetch premium"
+            status = f"Paper #{trade_id}" if trade_id else "Skipped (cap/DTE/dup — see logs)"
             lines += [
                 f"*{s.index} {arrow} {s.direction} {s.strike}*  |  Expiry {s.expiry}",
                 f"Spot {s.index_spot:,.0f}  |  Entry {s.entry_zone}",
@@ -251,20 +262,26 @@ def _run_futures_signals():
         if not signals:
             return
         broker = FNOPaperBroker()
-        lines  = ["*Nifty/BankNifty Futures — Paper Trade*", ""]
+        opened_lines = []
         for s in signals:
             tid = broker.open_futures(
                 index=s.index, direction=s.direction,
                 expiry=s.expiry, lots=1, reasoning=s.reasoning,
             )
-            arrow = "▲ LONG" if s.direction == "LONG" else "▼ SHORT"
-            lines += [
-                f"*{s.index} FUT {arrow}* | Expiry {s.expiry}",
-                f"Entry {s.entry_price:,.0f} | SL {s.sl_price:,.0f} | Target {s.target_price:,.0f}",
-                f"Conf {s.confidence:.0%} | {'Paper #'+str(tid) if tid else 'Skip'}",
-                "",
-            ]
-        send_telegram_message("\n".join(lines))
+            if tid:
+                arrow = "▲ LONG" if s.direction == "LONG" else "▼ SHORT"
+                opened_lines += [
+                    f"*{s.index} FUT {arrow}* | Expiry {s.expiry}",
+                    f"Entry {s.entry_price:,.0f} | SL {s.sl_price:,.0f} | Target {s.target_price:,.0f}",
+                    f"Conf {s.confidence:.0%} | Paper #{tid}",
+                    "",
+                ]
+            else:
+                logger.info(f"Futures signal {s.index} {s.direction} skipped (cap/dup/treasury)")
+        # Only notify if at least one position was actually opened
+        if opened_lines:
+            lines = ["*Nifty/BankNifty Futures — Paper Trade Opened*", ""] + opened_lines
+            send_telegram_message("\n".join(lines))
     except Exception as e:
         logger.warning(f"Futures signals failed: {e}")
 
@@ -801,17 +818,18 @@ if __name__ == "__main__":
         name=f"Afternoon Scan ({SCAN_TIME_2} IST)",
     )
 
-    # --- Job 3: Price monitor every 15 min, 9:15 AM – 3:25 PM ---
+    # --- Job 3: Price monitor every 15 min, 9:20 AM – 3:20 PM ---
+    # Offset by 5 min from :15/:00 scan jobs to avoid portfolio lock contention.
     scheduler.add_job(
         run_price_monitor,
         CronTrigger(
             day_of_week="mon-fri",
             hour="9-15",
-            minute="15,30,45,0",
+            minute="20,35,50,5",
             timezone=IST,
         ),
         id="price_monitor",
-        name="Price Monitor (every 15 min)",
+        name="Price Monitor (every 15 min, offset)",
     )
 
     # --- Job 3b: F&O paper position monitor every 15 min ---
@@ -820,11 +838,11 @@ if __name__ == "__main__":
         CronTrigger(
             day_of_week="mon-fri",
             hour="9-15",
-            minute="15,30,45,0",
+            minute="20,35,50,5",
             timezone=IST,
         ),
         id="fno_monitor",
-        name="F&O Paper Monitor (every 15 min)",
+        name="F&O Paper Monitor (every 15 min, offset)",
     )
 
     # --- Job 4: EOD close at 3:25 PM ---

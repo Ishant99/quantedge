@@ -173,7 +173,7 @@ class OptionsSignalGenerator:
             if hv_20 < 12:
                 iv_note = f"HV {hv_20:.0f}% — low vol, options cheap (good to BUY)"
             elif hv_20 > 20:
-                iv_note = f"HV {hv_20:.0f}% — high vol, consider SELLING premium instead"
+                iv_note = f"HV {hv_20:.0f}% — elevated vol; premium selling also active"
             else:
                 iv_note = f"HV {hv_20:.0f}% — normal vol environment"
 

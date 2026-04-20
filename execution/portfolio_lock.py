@@ -20,16 +20,19 @@ import contextlib
 if sys.platform == "win32":
     import msvcrt
 
+    _LOCK_BYTES = 65536  # 64 KB — covers any realistic portfolio JSON
+
     @contextlib.contextmanager
     def _file_lock(f):
-        """Windows file lock using msvcrt."""
-        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        """Windows file lock using msvcrt — locks enough bytes to cover the full file."""
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, _LOCK_BYTES)
         try:
             yield
         finally:
             try:
                 f.seek(0)
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, _LOCK_BYTES)
             except Exception:
                 pass
 else:

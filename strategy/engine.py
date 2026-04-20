@@ -109,7 +109,7 @@ class StrategyEngine:
             reason = self._build_reason(ta, sentiment, confidence)
         elif held_position and entry_confidence > 0:
             # Thesis re-evaluation: if confidence dropped significantly, exit
-            drop = (entry_confidence - confidence) / entry_confidence
+            drop = (entry_confidence - confidence) / entry_confidence if entry_confidence else 0
             if drop >= THESIS_DROP_SELL_PCT and ta.signal in ("bearish", "neutral"):
                 action = "SELL"
                 reason = (self._build_reason(ta, sentiment, confidence) +

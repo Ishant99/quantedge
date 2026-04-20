@@ -225,7 +225,7 @@ class PortfolioMemory:
                     return
                 entry, qty = row
                 pnl     = (exit_price - entry) * qty
-                pnl_pct = ((exit_price - entry) / entry) * 100
+                pnl_pct = ((exit_price - entry) / entry) * 100 if entry else 0
                 conn.execute("""
                     UPDATE trades
                     SET exit_price=?, exit_time=?, pnl=?, pnl_pct=?, status='closed'

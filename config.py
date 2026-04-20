@@ -209,6 +209,9 @@ FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE = bool(_S("FNO_BLOCK_DUPLICATE_FUT_S
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))
 INR_PER_USDT = float(_S("INR_PER_USDT", default=83.0))
 
+# Outcome tracker
+OUTCOME_MAX_HOLD_DAYS = int(_S("OUTCOME_MAX_HOLD_DAYS", default=30))
+
 # -----------------------------------------------------------------------------
 # CRYPTO PAPER TRADING
 # -----------------------------------------------------------------------------

@@ -270,7 +270,6 @@ class PriceMonitor:
             db = SQLITE_DB_FILE
             if os.path.exists(db):
                 with sqlite3.connect(db) as conn:
-                    # Find the most recent open trade for this symbol
                     row = conn.execute(
                         "SELECT id, entry_price, qty FROM trades "
                         "WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1",
@@ -287,6 +286,23 @@ class PriceMonitor:
                         """, (round(exit_price, 2), datetime.now().isoformat(),
                               pnl, pnl_pct, trade_id))
                         logger.debug(f"SQLite: closed trade #{trade_id} for {result.symbol} "
+                                     f"P&L Rs.{pnl:+,.0f}")
+                    else:
+                        # No open row in SQLite — insert a synthetic closed record so
+                        # reports (daily digest, weekly summary) capture this exit.
+                        pnl     = round(result.pnl, 2)
+                        pnl_pct = round(result.pnl_pct, 2)
+                        conn.execute("""
+                            INSERT INTO trades
+                            (symbol, action, qty, entry_price, exit_price,
+                             entry_time, exit_time, pnl, pnl_pct, status)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)
+                        """, (result.symbol, result.action, result.qty,
+                              round(result.entry_price, 2), round(exit_price, 2),
+                              datetime.now().strftime("%Y-%m-%d"),
+                              datetime.now().isoformat(),
+                              pnl, pnl_pct, "closed"))
+                        logger.debug(f"SQLite: inserted synthetic closed trade for {result.symbol} "
                                      f"P&L Rs.{pnl:+,.0f}")
         except Exception as e:
             logger.warning(f"SQLite trade close failed for {result.symbol}: {e}")

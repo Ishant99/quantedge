@@ -44,6 +44,12 @@ class PaperExecutor:
         if signal.position_size <= 0:
             return {"status": "skipped", "reason": "position size is 0"}
 
+        # Reload portfolio from disk to pick up changes from other scheduler jobs
+        # (price_monitor, trailing_stop, EOD close) that may have run concurrently.
+        fresh = self._load_portfolio()
+        if fresh:
+            self.portfolio = fresh
+
         result = {}
 
         if signal.action == "BUY":
@@ -212,19 +218,24 @@ class PaperExecutor:
                           result.get("qty", 0), "open", "swing",
                           datetime.now().isoformat(), signal.reasoning))
                 elif signal.action == "SELL":
-                    pnl     = result.get("pnl", 0) or 0
-                    qty     = result.get("qty", 0)
-                    pnl_pct = round(pnl / (signal.entry_price * qty) * 100, 2) if qty else 0
+                    pnl        = result.get("pnl", 0) or 0
+                    qty        = result.get("qty", 0)
+                    actual_price = result.get("price", signal.entry_price) or signal.entry_price
+                    cost_basis   = actual_price * qty if qty else 1
+                    pnl_pct    = round(pnl / cost_basis * 100, 2) if cost_basis else 0
                     row = conn.execute(
-                        "SELECT id FROM trades WHERE symbol=? AND status='open' "
+                        "SELECT id, entry_price FROM trades WHERE symbol=? AND status='open' "
                         "ORDER BY id DESC LIMIT 1", (signal.symbol,)
                     ).fetchone()
                     if row:
+                        trade_id, entry_p = row
+                        entry_cost = (entry_p or actual_price) * qty
+                        real_pnl_pct = round(pnl / entry_cost * 100, 2) if entry_cost else 0
                         conn.execute("""
                             UPDATE trades SET exit_price=?, exit_time=?,
                             pnl=?, pnl_pct=?, status='closed' WHERE id=?
-                        """, (signal.entry_price, datetime.now().isoformat(),
-                              round(pnl, 2), pnl_pct, row[0]))
+                        """, (round(actual_price, 2), datetime.now().isoformat(),
+                              round(pnl, 2), real_pnl_pct, trade_id))
                     else:
                         # No open BUY found — insert as standalone closed record
                         conn.execute("""
@@ -232,8 +243,8 @@ class PaperExecutor:
                             (symbol, action, entry_price, exit_price, qty,
                              pnl, pnl_pct, status, trade_type, exit_time, reasoning)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                        """, (signal.symbol, "SELL", signal.entry_price,
-                              signal.entry_price, qty,
+                        """, (signal.symbol, "SELL", round(actual_price, 2),
+                              round(actual_price, 2), qty,
                               round(pnl, 2), pnl_pct, "closed", "swing",
                               datetime.now().isoformat(), signal.reasoning))
         except Exception as e:

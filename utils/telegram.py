@@ -39,6 +39,9 @@ def send(text: str) -> bool:
     if send_discord(text):
         sent_any = True
 
+    if not sent_any:
+        logger.error("Alert dropped — both Telegram and Discord unavailable")
+
     return sent_any
 
 

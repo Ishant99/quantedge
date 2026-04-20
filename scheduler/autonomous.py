@@ -51,11 +51,20 @@ def job_premarket():
         fii    = FIIDIIAnalyser().get_signal()
 
         # Save regime for dashboard
-        import json
+        import json, tempfile, shutil
         os.makedirs("logs", exist_ok=True)
-        with open("logs/market_regime.json", "w") as f:
-            json.dump({"regime": regime.regime, "rsi": regime.nifty_rsi,
-                       "ret_1m": regime.nifty_1m_return}, f)
+        regime_data = {
+            "regime":      regime.regime,
+            "rsi":         regime.nifty_rsi,
+            "ret_1m":      regime.nifty_1m_return,
+            "allow_buys":  regime.allow_buys,
+            "updated":     datetime.now(IST).isoformat(),
+        }
+        # Write atomically to avoid partial reads
+        tmp = "logs/market_regime.json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(regime_data, f)
+        shutil.move(tmp, "logs/market_regime.json")
 
         lines = [
             f"*Pre-Market Check — {datetime.now(IST).strftime('%d %b')}*",
@@ -88,8 +97,12 @@ def job_intraday_scan():
     try:
         # Check if market is in bull regime before intraday
         import json
-        with open("logs/market_regime.json") as f:
-            reg = json.load(f)
+        reg = {}
+        try:
+            with open("logs/market_regime.json") as f:
+                reg = json.load(f)
+        except Exception:
+            pass
         if reg.get("regime") == "bear":
             logger.info("Bear market — skipping intraday trades")
             return
@@ -136,9 +149,9 @@ def job_midday_scan():
     """12:30 PM — Midday scan if fewer than 3 positions open."""
     logger.info("=== MIDDAY SCAN ===")
     try:
-        import json
-        with open(os.path.join("logs","virtual_portfolio.json")) as f:
-            pf = json.load(f)
+        from execution.portfolio_lock import load_portfolio_locked
+        from config import VIRTUAL_PORTFOLIO_FILE
+        pf = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE) or {}
         open_count = len(pf.get("positions", {}))
 
         if open_count >= 3:

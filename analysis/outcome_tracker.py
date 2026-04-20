@@ -20,11 +20,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils import get_logger
 from utils.telegram import send
-from config import SQLITE_DB_FILE
+from config import SQLITE_DB_FILE, OUTCOME_MAX_HOLD_DAYS
 
 logger = get_logger("OutcomeTracker")
 
-MAX_HOLD_DAYS = 30   # signals older than this with no trigger → EXPIRED
+MAX_HOLD_DAYS = OUTCOME_MAX_HOLD_DAYS
 
 
 class OutcomeTracker:

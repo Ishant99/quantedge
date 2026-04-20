@@ -58,12 +58,17 @@ class TrailingStopMonitor:
                     logger.info(f"{symbol}: SL moved UP "
                                 f"Rs.{result['old_sl']:,.0f} -> Rs.{result['new_sl']:,.0f} "
                                 f"(price: Rs.{result['current_price']:,.0f})")
+                    locked = result['locked_profit']
+                    if locked >= 0:
+                        profit_line = f"Locked profit: `Rs.{locked:+,.0f}`"
+                    else:
+                        profit_line = f"Min P&L if SL hit: `Rs.{locked:+,.0f}` (below breakeven)"
                     send(f"*Trailing SL Update*\n"
                          f"{symbol}: Stop loss moved UP\n"
                          f"Price: `Rs.{result['current_price']:,.0f}`\n"
                          f"New SL: `Rs.{result['new_sl']:,.0f}` "
                          f"(was Rs.{result['old_sl']:,.0f})\n"
-                         f"Locked profit: `Rs.{result['locked_profit']:,.0f}`")
+                         f"{profit_line}")
 
                 elif result["action"] == "EXIT":
                     exits.append(symbol)
@@ -87,7 +92,7 @@ class TrailingStopMonitor:
             del positions[sym]
 
             # Close the matching trade in SQLite (fixes orphan bug)
-            self._close_trade_sqlite(sym, exit_price)
+            self._close_trade_sqlite(sym, exit_price, entry_price=entry, qty=qty)
 
         portfolio["positions"] = positions
         save_portfolio_locked(VIRTUAL_PORTFOLIO_FILE, portfolio)
@@ -98,8 +103,10 @@ class TrailingStopMonitor:
                         f"{sum(1 for u in updates.values() if u['action']=='MOVE_SL')} SLs moved")
         return updates
 
-    def _close_trade_sqlite(self, symbol: str, exit_price: float):
-        """Close the open trade record in SQLite so it doesn't become an orphan."""
+    def _close_trade_sqlite(self, symbol: str, exit_price: float,
+                            entry_price: float = 0, qty: int = 0):
+        """Close the open trade record in SQLite so it doesn't become an orphan.
+        Falls back to inserting a synthetic closed record if no open row exists."""
         try:
             import sqlite3
             if not os.path.exists(SQLITE_DB_FILE):
@@ -111,8 +118,8 @@ class TrailingStopMonitor:
                     (symbol,)
                 ).fetchone()
                 if row:
-                    trade_id, entry, qty = row
-                    pnl     = round((exit_price - entry) * qty, 2)
+                    trade_id, entry, db_qty = row
+                    pnl     = round((exit_price - entry) * db_qty, 2)
                     pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0
                     conn.execute("""
                         UPDATE trades SET exit_price=?, exit_time=?,
@@ -121,6 +128,22 @@ class TrailingStopMonitor:
                           pnl, pnl_pct, trade_id))
                     logger.debug(f"SQLite: closed trade #{trade_id} for {symbol} "
                                  f"(trailing stop) P&L Rs.{pnl:+,.0f}")
+                elif entry_price and qty:
+                    # Position existed in portfolio JSON but not SQLite — insert synthetic record
+                    pnl     = round((exit_price - entry_price) * qty, 2)
+                    pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2) if entry_price else 0
+                    conn.execute("""
+                        INSERT INTO trades
+                        (symbol, action, qty, entry_price, exit_price,
+                         entry_time, exit_time, pnl, pnl_pct, status)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (symbol, "SL_HIT", qty,
+                          round(entry_price, 2), round(exit_price, 2),
+                          datetime.now().strftime("%Y-%m-%d"),
+                          datetime.now().isoformat(),
+                          pnl, pnl_pct, "closed"))
+                    logger.debug(f"SQLite: inserted synthetic trailing-stop exit for {symbol} "
+                                 f"P&L Rs.{pnl:+,.0f}")
         except Exception as e:
             logger.warning(f"SQLite trailing stop close failed for {symbol}: {e}")
 

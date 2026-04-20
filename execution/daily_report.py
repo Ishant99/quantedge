@@ -34,7 +34,13 @@ class DailyReporter:
         pf         = self._load_portfolio()
         cash       = pf.get("cash", VIRTUAL_CAPITAL)
         positions  = pf.get("positions", {})
+        # Include live MTM of open positions in portfolio value
         total_val  = cash
+        try:
+            from execution.executor import get_executor
+            total_val = get_executor().get_portfolio_value()
+        except Exception:
+            pass
         pnl_total  = total_val - VIRTUAL_CAPITAL
         pnl_pct    = pnl_total / VIRTUAL_CAPITAL * 100
 

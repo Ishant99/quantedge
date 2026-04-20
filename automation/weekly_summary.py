@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from config import VIRTUAL_CAPITAL, SQLITE_DB_FILE, VIRTUAL_PORTFOLIO_FILE
+from config import VIRTUAL_CAPITAL, SQLITE_DB_FILE, VIRTUAL_PORTFOLIO_FILE, INR_PER_USD, INR_PER_USDT
 from utils import get_logger
 from utils.telegram import send
 
@@ -174,9 +174,8 @@ def _send():
     best  = max(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
     worst = min(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
 
-    INR_RATE = 83.0
     realized_combined = (total_pnl_week + fno_week_pnl +
-                         crypto_week_pnl * INR_RATE + us_week_pnl * INR_RATE)
+                         crypto_week_pnl * INR_PER_USDT + us_week_pnl * INR_PER_USD)
     true_combined = realized_combined + unrealized
 
     # ── Readiness gates ──────────────────────────────────────────────────
@@ -189,10 +188,11 @@ def _send():
         gates_total  = r.get("total", 8)
 
     # ── Build Telegram message ───────────────────────────────────────────
+    report_time = datetime.now().strftime("%d %b %Y %H:%M IST")
     price_tag = "" if live_prices else " (entry basis)"
     lines = [
         "*Weekly Trading Report*",
-        f"_Week ending {week_label}_",
+        f"_Week ending {week_label} | Snapshot: {report_time}_",
         "",
         f"*NSE Equity Portfolio{price_tag}*",
         f"Cash:     `Rs.{cash:>12,.0f}`",
@@ -223,11 +223,11 @@ def _send():
         "",
         "*This Week — Crypto*",
         f"Trades: `{crypto_week_count}` | Open: `{crypto_open_count}`",
-        f"P&L:    `{crypto_week_pnl:+.2f} USDT` (Rs.{crypto_week_pnl * INR_RATE:+,.0f})",
+        f"P&L:    `{crypto_week_pnl:+.2f} USDT` (Rs.{crypto_week_pnl * INR_PER_USDT:+,.0f})",
         "",
         "*This Week — US Stocks*",
         f"Trades: `{us_week_count}` | Open: `{us_open_count}`",
-        f"P&L:    `${us_week_pnl:+.2f}` (Rs.{us_week_pnl * INR_RATE:+,.0f})",
+        f"P&L:    `${us_week_pnl:+.2f}` (Rs.{us_week_pnl * INR_PER_USD:+,.0f})",
         "",
         "*P&L Summary*",
         f"Realized (all):  `Rs.{realized_combined:+,.0f}`",
@@ -384,9 +384,8 @@ def _build_report(start_date: str, end_date: str) -> str:
     us_count     = len(us_trades)
     us_pnl       = sum(t.get("pnl_usd") or 0 for t in us_trades)
 
-    INR_RATE = 83.0
     realized_combined = (nse_pnl + fno_pnl +
-                         crypto_pnl * INR_RATE + us_pnl * INR_RATE)
+                         crypto_pnl * INR_PER_USDT + us_pnl * INR_PER_USD)
     # True P&L includes live unrealized MTM on open NSE equity positions
     true_combined = realized_combined + unrealized
 

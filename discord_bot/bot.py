@@ -58,15 +58,18 @@ def _build_status() -> str:
     try:
         from execution.brokers.fno_paper_broker import FNOPaperBroker
         fno_pnl = FNOPaperBroker().get_stats().get("total_pnl", 0) or 0
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"F&O broker stats unavailable: {e}")
     try:
         from execution.brokers.crypto_paper_broker import CryptoPaperBroker
         cry_pnl = (CryptoPaperBroker().get_stats().get("total_pnl_usdt", 0) or 0) * inr
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"Crypto broker stats unavailable: {e}")
     try:
         from execution.brokers.us_paper_broker import USPaperBroker
         us_pnl = (USPaperBroker().get_stats().get("total_pnl_usd", 0) or 0) * inr
-    except Exception: pass
+    except Exception as e:
+        logger.warning(f"US broker stats unavailable: {e}")
 
     combined = nse_pnl + fno_pnl + cry_pnl + us_pnl
     s = lambda v: "+" if v >= 0 else ""
