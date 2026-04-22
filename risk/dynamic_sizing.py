@@ -182,7 +182,10 @@ class DynamicPositionSizer:
         adjusted_risk = base_risk * combined
 
         # Calculate stop loss and position size
-        sl_distance = max(1.5 * atr, entry_price * 0.02)
+        # Widen SL in high-volatility markets (VIX > 15 → 2x ATR, else 1.5x)
+        vix         = _get_india_vix()
+        atr_mult    = 2.0 if vix > 15 else 1.5
+        sl_distance = max(atr_mult * atr, entry_price * 0.02)
         stop_loss   = round(entry_price - sl_distance, 2)
         take_profit = round(entry_price + (REWARD_RISK_RATIO * sl_distance), 2)
 

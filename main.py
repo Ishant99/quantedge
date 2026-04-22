@@ -290,6 +290,20 @@ def run_agent(dry_run: bool = False) -> list:
         if fii_result.signal in ("buy", "strong_buy"):
             extra += 0.02
 
+        # EMA200 soft penalty: recovery trades (below EMA200) get -0.05 confidence
+        # They can still pass MIN_CONFIDENCE but need stronger TA/pattern confirmation
+        mom = mom_results.get(sig.symbol)
+        if mom and mom.price > 0:
+            try:
+                _df_tmp = market_data.get(sig.symbol)
+                if _df_tmp is not None and len(_df_tmp) >= 200:
+                    _ema200 = float(_df_tmp["close"].ewm(span=200).mean().iloc[-1])
+                    if mom.price < _ema200:
+                        extra -= 0.05
+                        sig.reasoning += ". Below EMA200 (recovery trade, -5%)"
+            except Exception:
+                pass
+
         # A2: 52-week high proximity (+0.04 if within 5% of 52w high)
         df = market_data.get(sig.symbol)
         if df is not None and len(df) >= 252:
@@ -400,13 +414,24 @@ def run_agent(dry_run: bool = False) -> list:
     logger.info("[CORR] Correlation filter...")
     buy_signals = CorrelationFilter().filter(buy_signals, market_data, symbol_sectors)
 
+    # Regime-aware minimum confidence threshold:
+    # Recovery/sideways = lower bar (more signals needed), bull = standard
+    from config import MIN_CONFIDENCE
+    if regime.regime in ("recovery", "sideways"):
+        effective_min_conf = MIN_CONFIDENCE * 0.85   # 15% lower bar
+    else:
+        effective_min_conf = MIN_CONFIDENCE
+    buy_signals = [s for s in buy_signals if s.confidence >= effective_min_conf]
+    if regime.regime in ("recovery", "sideways"):
+        logger.info(f"[REGIME] {regime.regime} — min confidence lowered to {effective_min_conf:.0%}")
+
     # Final sort
     buy_signals = sorted(
         buy_signals,
         key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
         reverse=True,
     )
-    logger.info(f"Final: {len(buy_signals)} BUY signals after all 13 filters")
+    logger.info(f"Final: {len(buy_signals)} BUY signals after all filters")
 
     remaining_slots = max(0, MAX_OPEN_POSITIONS - open_positions)
     actionable_limit = min(TOP_N_SIGNALS, remaining_slots)

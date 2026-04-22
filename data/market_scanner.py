@@ -288,7 +288,13 @@ class MarketScanner:
         df = df.copy()
         df.index = pd.to_datetime(df.index)
         df.index.name = "date"
-        df.columns = [c.lower() for c in df.columns]
+
+        # Flatten MultiIndex columns (new yfinance returns (Price, Ticker) tuples)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] for c in df.columns]
+
+        df.columns = [c.lower() if isinstance(c, str) else str(c).lower()
+                      for c in df.columns]
 
         keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
         df = df[keep]

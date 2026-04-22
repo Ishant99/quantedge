@@ -24,7 +24,7 @@ logger = get_logger("MarketRegime")
 
 @dataclass
 class RegimeResult:
-    regime:         str     # bull | bear | sideways
+    regime:         str     # bull | bear | sideways | recovery
     nifty_trend:    str     # up | down | flat
     nifty_rsi:      float
     nifty_above_200ema: bool
@@ -77,22 +77,36 @@ class MarketRegimeFilter:
             # ----------------------------------------------------------
             # Regime classification
             # ----------------------------------------------------------
+            # Recovery: market bouncing off lows (1M up, 3M still negative)
+            recovering = ret_1m > 2.0 and ret_3m < 0
+
             if (last > ema200 and last > ema50 and ema20 > ema50
-                    and ret_1m > -3 and rsi > 40):
+                    and ret_1m > -3 and rsi > 40 and ret_3m > 0):
                 regime       = "bull"
                 trend        = "up"
                 allow        = True
                 allow_shorts = False
                 ps_mult      = 1.0
-                message      = "Bull market — Nifty above all EMAs. Normal trading."
+                message      = "Bull market — Nifty above all EMAs, positive trend. Normal trading."
 
-            elif (last < ema200 and ret_1m < -5) or rsi < 35:
+            elif recovering and rsi > 45:
+                # Recovery phase: short-term bounce in medium-term downtrend
+                # Allow selective buys at reduced size — these are high-quality setups only
+                regime       = "recovery"
+                trend        = "up"
+                allow        = True
+                allow_shorts = False
+                ps_mult      = 0.7
+                message      = (f"Recovery phase — Nifty bouncing {ret_1m:+.1f}% this month "
+                                f"(3M still {ret_3m:+.1f}%). Selective buys only, 70% sizes.")
+
+            elif (last < ema200 and ret_1m < -5 and ret_3m < -8) or rsi < 35:
                 regime       = "bear"
                 trend        = "down"
                 allow        = False
                 allow_shorts = True
                 ps_mult      = 0.0
-                message      = (f"Bear market — Nifty below EMA200, RSI {rsi:.0f}. "
+                message      = (f"Bear market — Nifty down {ret_1m:.1f}% this month, RSI {rsi:.0f}. "
                                 f"BUY signals BLOCKED. Scanning for SELL/SHORT setups.")
 
             elif last < ema200 or (ret_1m < -2 and ret_3m < -5):

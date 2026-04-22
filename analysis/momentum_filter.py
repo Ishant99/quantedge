@@ -51,8 +51,14 @@ class MomentumFilter:
         df must have columns: open, high, low, close, volume (lowercase).
         """
         try:
-            close  = df["close"]
-            volume = df["volume"]
+            close  = df["close"].dropna()
+            volume = df["volume"].dropna()
+            if close.empty:
+                return MomentumResult(
+                    symbol=symbol, passes=True, passes_short=False,
+                    price=0, ema50=0, ema200=0, ret_3m=0, rsi=50,
+                    volume_trend="flat", reason="No price data"
+                )
             last   = float(close.iloc[-1])
 
             ema50  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1])
@@ -83,19 +89,40 @@ class MomentumFilter:
                 volume_trend = "flat"
 
             # ----------------------------------------------------------
-            # BUY gates — ALL must pass
+            # BUY gates
+            # Hard gates (all must pass): EMA50 OR recovering toward it, RSI > 30
+            # Soft gate (EMA200): converts to confidence penalty if below, not a block
             # ----------------------------------------------------------
+
+            # ------------------------------------------------------------------
+            # EMA50 gate: above EMA50, OR within 8% below AND short-term recovering
+            # Short-term recovery = last 20-day return > -2% (price stabilising)
+            # ------------------------------------------------------------------
+            ema50_gap    = (last - ema50) / ema50 * 100
+            ret_20d      = float((last / close.iloc[-20] - 1) * 100) if len(close) >= 20 else 0.0
+            recovering   = ret_20d > -2.0   # not still in freefall over last month
+            ema50_ok     = last > ema50 or (ema50_gap > -8.0 and recovering)
+
+            # 3M return: not in a catastrophic collapse (worse than -25%)
+            ret3m_ok     = ret_3m > -25.0
+
+            # RSI: not totally broken (> 30 — very relaxed, only blocks full panic)
+            rsi_ok       = rsi > 30
+
             buy_gates = {
-                "above_ema50":  last > ema50,
-                "above_ema200": last > ema200,
-                "ret3m_ok":     ret_3m > -5.0,
-                "rsi_ok":       rsi > 35,
+                "ema50_ok": ema50_ok,
+                "ret3m_ok": ret3m_ok,
+                "rsi_ok":   rsi_ok,
             }
             passes_buy = all(buy_gates.values())
 
+            # Track EMA200 position for reasoning (soft gate — scored, not blocked)
+            below_ema200 = last < ema200
+            ema200_note  = " (below EMA200 — recovery trade)" if below_ema200 else ""
+
             failed = [k for k, v in buy_gates.items() if not v]
             reason = (
-                "All gates passed — trend healthy"
+                f"All gates passed{ema200_note}"
                 if passes_buy
                 else "Failed: " + ", ".join(failed)
             )
