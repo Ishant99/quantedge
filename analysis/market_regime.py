@@ -111,6 +111,17 @@ class MarketRegimeFilter:
                 ps_mult      = 0.8
                 message      = "Mild bull — slightly cautious, 80% position sizes."
 
+            # B1: Apply market breadth adjustment to position_size_multiplier
+            try:
+                from analysis.market_breadth import MarketBreadthAnalyser
+                breadth = MarketBreadthAnalyser().get_breadth()
+                ps_mult = round(ps_mult * breadth.position_size_mult, 2)
+                ps_mult = max(0.0, min(1.5, ps_mult))
+                message += f" Breadth: {breadth.breadth_signal} (A/D {breadth.ad_ratio})."
+                logger.info(f"[BREADTH] {breadth.message} — ps_mult adjusted to {ps_mult:.2f}")
+            except Exception as _be:
+                logger.debug(f"Breadth adjustment skipped: {_be}")
+
             result = RegimeResult(
                 regime                   = regime,
                 nifty_trend              = trend,

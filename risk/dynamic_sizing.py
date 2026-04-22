@@ -13,13 +13,45 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sqlite3
+import yfinance as yf
 from dataclasses import dataclass
-from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO
+from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD
 from utils import get_logger
 
 logger = get_logger("DynamicSizing")
 
 _TRADES_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "trades.db")
+
+_vix_cache: dict = {}
+
+
+def _get_india_vix() -> float:
+    """Fetch India VIX. Cached for 1 hour — only 1 yfinance call per session."""
+    import time
+    if _vix_cache.get("ts", 0) and time.time() - _vix_cache["ts"] < 3600:
+        return _vix_cache["value"]
+    try:
+        hist = yf.Ticker("^INDIAVIX").history(period="2d", interval="1d")
+        vix  = float(hist["Close"].iloc[-1]) if not hist.empty else 15.0
+        _vix_cache["value"] = vix
+        _vix_cache["ts"]    = time.time()
+        logger.debug(f"India VIX: {vix:.1f}")
+        return vix
+    except Exception:
+        return 15.0  # neutral default
+
+
+def _vix_multiplier() -> float:
+    """B3: Scale position sizes down when volatility is high."""
+    vix = _get_india_vix()
+    if vix >= VIX_EXTREME_THRESHOLD:
+        mult = 0.5
+    elif vix >= VIX_HIGH_THRESHOLD:
+        mult = 0.75
+    else:
+        mult = 1.0
+    logger.debug(f"VIX multiplier: {mult:.2f} (VIX={vix:.1f})")
+    return mult
 
 
 def _kelly_multiplier(setup_type: str) -> float:
@@ -135,6 +167,9 @@ class DynamicPositionSizer:
         # Kelly Criterion multiplier from historical win rate per setup type
         if setup_type:
             multipliers["kelly"] = _kelly_multiplier(setup_type)
+
+        # B3: India VIX multiplier — reduce size in high-volatility markets
+        multipliers["vix"] = _vix_multiplier()
 
         # Combined multiplier
         combined = 1.0

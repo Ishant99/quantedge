@@ -20,6 +20,8 @@ from analysis.pcr_signal import PCRAnalyser
 from analysis.earnings_guard import EarningsGuard
 from analysis.momentum_filter import MomentumFilter
 from analysis.strategy_quality import StrategyQualityEngine
+from analysis.fno_ban import FnOBanFilter
+from analysis.block_deals import BlockDealsAnalyser
 from strategy.engine import StrategyEngine
 from execution.executor import get_executor
 from memory.portfolio_memory import PortfolioMemory
@@ -79,11 +81,17 @@ def run_agent(dry_run: bool = False) -> list:
         bear_mode = True
 
     # ------------------------------------------------------------------
-    # 4. MARKET SCANNER
+    # 4. F&O BAN LIST — block stocks on NSE ban list before any scan
+    # ------------------------------------------------------------------
+    logger.info("[BAN] Loading F&O ban list...")
+    fno_ban = FnOBanFilter()
+
+    # ------------------------------------------------------------------
+    # 5. MARKET SCANNER
     # ------------------------------------------------------------------
     logger.info("[M1] Scanning NSE stocks...")
     scanner     = MarketScanner(lookback_days=400)
-    market_data = scanner.run(max_workers=10)
+    market_data = scanner.run(max_workers=10, regime=regime.regime)
     logger.info(f"[M1] {len(market_data)} stocks loaded")
 
     symbol_sectors = {r["symbol"]: r["sector"] for _, r in scanner.symbols_df.iterrows()}
@@ -98,6 +106,13 @@ def run_agent(dry_run: bool = False) -> list:
     market_data = {sym: df for sym, df in market_data.items() if sym in mom_results}
     total_scanned = len(scanner.symbols_df)
     logger.info(f"[MOMENTUM] {len(market_data)}/{total_scanned} pass momentum gates")
+
+    # Remove banned stocks from scan universe
+    banned_in_scan = [s for s in list(market_data.keys()) if fno_ban.is_banned(s)]
+    for s in banned_in_scan:
+        del market_data[s]
+    if banned_in_scan:
+        logger.info(f"[BAN] Removed {len(banned_in_scan)} banned stocks: {banned_in_scan[:5]}")
 
     # ------------------------------------------------------------------
     # 6. TECHNICAL ANALYSIS
@@ -230,8 +245,20 @@ def run_agent(dry_run: bool = False) -> list:
     # ------------------------------------------------------------------
     # 13. DYNAMIC POSITION SIZING + SIGNAL ENRICHMENT
     # ------------------------------------------------------------------
-    sizer = DynamicPositionSizer()
-    enriched = []
+    sizer       = DynamicPositionSizer()
+    block_deals = BlockDealsAnalyser()
+
+    # A3: Fetch Nifty 1-month return once (used for relative strength comparison)
+    _nifty_ret_1m = 0.0
+    try:
+        import yfinance as _yf
+        _ni = _yf.Ticker("^NSEI").history(period="1mo", interval="1d")
+        if not _ni.empty and len(_ni) >= 2:
+            _nifty_ret_1m = float((_ni["Close"].iloc[-1] / _ni["Close"].iloc[0] - 1) * 100)
+    except Exception:
+        pass
+
+    enriched    = []
     blocked_quality = []
     for sig in buy_signals:
         pat  = pattern_results.get(sig.symbol)
@@ -262,6 +289,33 @@ def run_agent(dry_run: bool = False) -> list:
                 sig.reasoning += f" (MTF penalty -{mtf.mtf_penalty:.0%})"
         if fii_result.signal in ("buy", "strong_buy"):
             extra += 0.02
+
+        # A2: 52-week high proximity (+0.04 if within 5% of 52w high)
+        df = market_data.get(sig.symbol)
+        if df is not None and len(df) >= 252:
+            try:
+                high_52w = float(df["close"].rolling(252).max().iloc[-1])
+                last_px  = float(df["close"].iloc[-1])
+                if high_52w > 0 and (last_px / high_52w) >= 0.95:
+                    extra += 0.04
+                    sig.reasoning += f". Near 52w high ({last_px/high_52w:.1%})"
+            except Exception:
+                pass
+
+        # A3: Relative strength vs Nifty (+0.03 if stock outperforming Nifty 1M by >2%)
+        mom = mom_results.get(sig.symbol)
+        if mom and hasattr(mom, "ret_3m") and _nifty_ret_1m != 0.0:
+            stock_ret_1m = mom.ret_3m / 3   # approximate 1M from 3M
+            if stock_ret_1m > _nifty_ret_1m + 2:
+                extra += 0.03
+                sig.reasoning += f". RS: +{stock_ret_1m - _nifty_ret_1m:.1f}% vs Nifty"
+
+        # D1: Block deals confirmation
+        bd_boost, bd_note = block_deals.get_boost(sig.symbol)
+        if bd_boost > 0:
+            extra += bd_boost
+            sig.reasoning += f". {bd_note}"
+
         # S/R sell zone penalty (instead of hard-blocking)
         if sr and sr.recommendation == "sell_zone":
             from config import SR_SELL_ZONE_PENALTY
@@ -336,6 +390,11 @@ def run_agent(dry_run: bool = False) -> list:
         logger.info(f"[EARNINGS] Blocked {len(blocked_earnings)} signals near earnings")
 
     # ------------------------------------------------------------------
+    # D2: DUPLICATE SIGNAL GUARD — block same symbol signalled in last 24h
+    # ------------------------------------------------------------------
+    buy_signals = _deduplicate_signals(buy_signals)
+
+    # ------------------------------------------------------------------
     # 15. CORRELATION FILTER
     # ------------------------------------------------------------------
     logger.info("[CORR] Correlation filter...")
@@ -400,6 +459,33 @@ def run_agent(dry_run: bool = False) -> list:
                 f"Win rate: {stats['win_rate_pct']:.1f}%")
     logger.info("=" * 60)
     return actionable_signals
+
+
+def _deduplicate_signals(signals: list) -> list:
+    """Block signals for symbols already signalled in the last 24 hours (D2)."""
+    try:
+        import sqlite3
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            return signals
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT symbol FROM signals "
+                "WHERE timestamp >= datetime('now', '-24 hours')"
+            ).fetchall()
+        recent = {r[0] for r in rows}
+    except Exception:
+        return signals
+
+    allowed, dupes = [], []
+    for sig in signals:
+        if sig.symbol in recent:
+            dupes.append(sig.symbol)
+        else:
+            allowed.append(sig)
+    if dupes:
+        logger.info(f"[DUP] Blocked {len(dupes)} duplicate signals (24h window): {dupes}")
+    return allowed
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:

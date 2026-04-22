@@ -153,6 +153,34 @@ def _sync_state(label: str):
 
 
 # =============================================================================
+# JOB 0 — GIFT Nifty pre-market check (8:30 AM IST)
+# =============================================================================
+
+def run_gift_nifty_check():
+    """Check GIFT Nifty gap before market open — sets expectation for the day."""
+    if _is_nse_holiday():
+        return
+    _write_scheduler_status("gift_nifty", "running")
+    try:
+        from analysis.gift_nifty import GiftNiftyAnalyser
+        result = GiftNiftyAnalyser().get_signal()
+        logger.info(f"[GIFT] {result.message}")
+
+        # Only alert if gap is meaningful (not flat)
+        if result.signal != "flat":
+            icon = "📈" if "up" in result.signal else "📉"
+            send_telegram_message(
+                f"{icon} *Pre-Market Gap Alert*\n"
+                f"{result.message}\n"
+                f"_Market opens in ~45 min_"
+            )
+        _write_scheduler_status("gift_nifty", "ok", f"Gap: {result.gap_pct:+.2f}%")
+    except Exception as e:
+        _write_scheduler_status("gift_nifty", "error", str(e))
+        logger.warning(f"GIFT Nifty check failed: {e}")
+
+
+# =============================================================================
 # JOB 1 & 2 — Full daily scan (9:15 AM and 3:00 PM)
 # =============================================================================
 
@@ -866,6 +894,15 @@ if __name__ == "__main__":
     _GRACE = 120   # seconds
 
     scheduler = BlockingScheduler(timezone=IST)
+
+    # --- Job 0: GIFT Nifty pre-market check at 8:30 AM ---
+    scheduler.add_job(
+        run_gift_nifty_check,
+        CronTrigger(hour=8, minute=30, day_of_week="mon-fri", timezone=IST),
+        id="gift_nifty",
+        name="GIFT Nifty Pre-Market Check (08:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
 
     # --- Job 1: Morning scan ---
     scheduler.add_job(

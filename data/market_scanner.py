@@ -53,7 +53,8 @@ class MarketScanner:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, max_workers: int = None) -> dict[str, pd.DataFrame]:
+    def run(self, max_workers: int = None,
+            regime: str = "bull") -> dict[str, pd.DataFrame]:
         """
         Fetch data for all symbols using smart cache + batch fetching.
 
@@ -67,8 +68,17 @@ class MarketScanner:
             Dict mapping symbol → cleaned OHLCV DataFrame.
         """
         workers  = max_workers or SCANNER_WORKERS
-        symbols  = self.symbols_df["symbol"].dropna().unique().tolist()
-        logger.info(f"Starting NSE 500 scan — {len(symbols)} symbols...")
+
+        # B4: Regime-aware watchlist shrinking
+        # In bear/sideways markets scan only the top 100 (Nifty 100) to reduce noise
+        if regime in ("bear", "sideways") and "index_membership" in self.symbols_df.columns:
+            valid_memberships = {"NIFTY50", "NIFTY100"}
+            mask    = self.symbols_df["index_membership"].isin(valid_memberships)
+            symbols = self.symbols_df[mask]["symbol"].dropna().unique().tolist()
+            logger.info(f"[B4] {regime.upper()} market — scanning top {len(symbols)} (Nifty 100 only)")
+        else:
+            symbols = self.symbols_df["symbol"].dropna().unique().tolist()
+        logger.info(f"Starting NSE scan — {len(symbols)} symbols...")
 
         results:  dict[str, pd.DataFrame] = {}
         to_fetch: list[str] = []

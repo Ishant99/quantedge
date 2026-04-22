@@ -145,6 +145,14 @@ IV_RANK_MIN          = float(_S("IV_RANK_MIN",          default=0.60)) # options
 SECTOR_HOT_MULT      = float(_S("SECTOR_HOT_MULT",      default=1.2))
 SECTOR_COLD_MULT     = float(_S("SECTOR_COLD_MULT",     default=0.7))
 
+# India VIX thresholds for dynamic position sizing (B3)
+VIX_HIGH_THRESHOLD    = float(_S("VIX_HIGH_THRESHOLD",    default=20.0))  # reduce to 75%
+VIX_EXTREME_THRESHOLD = float(_S("VIX_EXTREME_THRESHOLD", default=30.0))  # reduce to 50%
+
+# GIFT Nifty gap thresholds for pre-market signal
+GIFT_NIFTY_GAP_STRONG = float(_S("GIFT_NIFTY_GAP_STRONG", default=0.5))   # ±0.5% = strong
+GIFT_NIFTY_GAP_MILD   = float(_S("GIFT_NIFTY_GAP_MILD",   default=0.2))   # ±0.2% = mild
+
 # -----------------------------------------------------------------------------
 # PORTFOLIO MEMORY — ChromaDB (M6)
 # -----------------------------------------------------------------------------
