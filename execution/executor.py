@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
     TRADING_MODE, VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE,
     KITE_API_KEY, KITE_API_SECRET, KITE_ACCESS_TOKEN_FILE,
-    SQLITE_DB_FILE
+    SQLITE_DB_FILE, RISK_PER_TRADE_PCT, MAX_POSITION_RISK_PCT,
 )
 from strategy.engine import TradeSignal
 from services.paper_treasury import can_allocate, log_treasury_event, write_treasury_snapshot
@@ -56,7 +56,48 @@ class PaperExecutor:
             if signal.symbol in self.portfolio["positions"]:
                 return {"status": "skipped", "reason": "position already open"}
 
-            cost = signal.entry_price * signal.position_size
+            # --- Live price refresh at execution time ---
+            # Signal prices may be stale by minutes; recalculate using live price.
+            entry_price = signal.entry_price
+            stop_loss   = signal.stop_loss
+            take_profit = signal.take_profit
+            live_price  = self._get_mark_price(signal.symbol)
+            if live_price and abs(live_price - entry_price) / max(entry_price, 1) > 0.002:
+                sl_pct  = (entry_price - stop_loss)   / entry_price
+                tp_pct  = (take_profit - entry_price) / entry_price
+                entry_price = live_price
+                stop_loss   = round(entry_price * (1 - sl_pct),  2)
+                take_profit = round(entry_price * (1 + tp_pct),  2)
+                logger.info(
+                    f"BUY {signal.symbol}: price refreshed "
+                    f"₹{signal.entry_price:,.2f} → ₹{entry_price:,.2f}"
+                )
+
+            # Recalculate position size from refreshed entry / SL
+            sl_distance   = entry_price - stop_loss
+            portfolio_val = self.portfolio["cash"] + sum(
+                p["entry"] * p["qty"] for p in self.portfolio["positions"].values()
+            )
+            if sl_distance > 0:
+                position_size = int((portfolio_val * RISK_PER_TRADE_PCT) / sl_distance)
+                position_size = max(1, position_size)
+            else:
+                position_size = signal.position_size
+
+            # --- Position-level max loss guard ---
+            position_risk = sl_distance * position_size
+            max_allowed   = portfolio_val * MAX_POSITION_RISK_PCT
+            if position_risk > max_allowed:
+                position_size = max(1, int(max_allowed / sl_distance)) if sl_distance > 0 else 1
+                logger.info(
+                    f"BUY {signal.symbol}: size capped to {position_size} "
+                    f"(risk cap Rs.{max_allowed:,.0f})"
+                )
+
+            # Slippage (0.1%) + flat brokerage (₹20) on BUY
+            slippage_buy  = round(entry_price * position_size * 0.001, 2)
+            brokerage_buy = 20.0
+            cost = entry_price * position_size + slippage_buy + brokerage_buy
             ok, reason, _ = can_allocate("nse", cost)
             if not ok:
                 return {"status": "rejected", "reason": reason}
@@ -65,24 +106,25 @@ class PaperExecutor:
 
             self.portfolio["cash"] -= cost
             self.portfolio["positions"][signal.symbol] = {
-                "qty":              signal.position_size,
-                "entry":            signal.entry_price,
-                "stop_loss":        signal.stop_loss,
-                "take_profit":      signal.take_profit,
+                "qty":              position_size,
+                "entry":            entry_price,
+                "stop_loss":        stop_loss,
+                "take_profit":      take_profit,
                 "entry_confidence": signal.confidence,
                 "trade_type":       getattr(signal, "trade_type", "swing"),
                 "timestamp":        datetime.now().isoformat(),
             }
             result = {
-                "status":  "filled",
-                "action":  "BUY",
-                "symbol":  signal.symbol,
-                "qty":     signal.position_size,
-                "price":   signal.entry_price,
-                "cost":    round(cost, 2),
-                "mode":    "paper",
+                "status":    "filled",
+                "action":    "BUY",
+                "symbol":    signal.symbol,
+                "qty":       position_size,
+                "price":     entry_price,
+                "cost":      round(cost, 2),
+                "friction":  round(slippage_buy + brokerage_buy, 2),
+                "mode":      "paper",
             }
-            logger.info(f"PAPER BUY  {signal.symbol} × {signal.position_size} @ ₹{signal.entry_price}")
+            logger.info(f"PAPER BUY  {signal.symbol} × {position_size} @ ₹{entry_price:,.2f}")
             log_treasury_event("reserve_open", "nse", cost, f"{signal.symbol} BUY", {"symbol": signal.symbol})
 
         elif signal.action == "SELL":
@@ -98,7 +140,10 @@ class PaperExecutor:
                     sell_price = live
                     logger.debug(f"SELL {signal.symbol}: using live price ₹{live:,.2f} instead of stale entry")
 
-            proceeds = sell_price * pos["qty"]
+            # Slippage (0.1%) + flat brokerage (₹20) on SELL
+            slippage_sell  = round(sell_price * pos["qty"] * 0.001, 2)
+            brokerage_sell = 20.0
+            proceeds = sell_price * pos["qty"] - slippage_sell - brokerage_sell
             pnl      = proceeds - (pos["entry"] * pos["qty"])
             self.portfolio["cash"] += proceeds
             del self.portfolio["positions"][signal.symbol]
@@ -107,20 +152,23 @@ class PaperExecutor:
                 self.portfolio["wins"] += 1
 
             result = {
-                "status":   "filled",
-                "action":   "SELL",
-                "symbol":   signal.symbol,
-                "qty":      pos["qty"],
-                "price":    sell_price,
-                "pnl":      round(pnl, 2),
-                "mode":     "paper",
+                "status":    "filled",
+                "action":    "SELL",
+                "symbol":    signal.symbol,
+                "qty":       pos["qty"],
+                "price":     sell_price,
+                "pnl":       round(pnl, 2),
+                "friction":  round(slippage_sell + brokerage_sell, 2),
+                "mode":      "paper",
             }
             logger.info(f"PAPER SELL {signal.symbol} × {pos['qty']} @ ₹{sell_price:,.2f} | PnL ₹{pnl:+,.0f}")
             log_treasury_event("release_close", "nse", pos["entry"] * pos["qty"], f"{signal.symbol} SELL", {"symbol": signal.symbol, "pnl": round(pnl, 2)})
 
+        # SQLite first — if it fails we don't update the portfolio JSON,
+        # keeping both stores consistent (atomic write ordering).
+        self._log_trade(signal, result)
         self._save_portfolio()
         write_treasury_snapshot()
-        self._log_trade(signal, result)
         return result
 
     def get_portfolio_value(self) -> float:

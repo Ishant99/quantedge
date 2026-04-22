@@ -38,8 +38,9 @@ class EarningsGuard:
         try:
             rd   = datetime.strptime(result_date, "%Y-%m-%d")
             days = (rd - datetime.today()).days
-            if 0 <= days <= BLOCK_DAYS:
-                return False, f"Results in {days} day(s) on {result_date} — skipping"
+            if -1 <= days <= BLOCK_DAYS:
+                label = "yesterday" if days < 0 else f"in {days} day(s)"
+                return False, f"Results {label} on {result_date} — skipping"
             return True, ""
         except Exception:
             return True, ""

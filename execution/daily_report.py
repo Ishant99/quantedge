@@ -109,50 +109,53 @@ class DailyReporter:
         gates_str = f"{r.get('passed',0)}/{r.get('total',8)}" if r else "N/A"
 
         # ── Build message ───────────────────────────────────────────────
+        day_icon = "✅" if combined_pnl >= 0 else "🔴"
         lines = [
-            f"*Daily Report — {today_str}*",
+            f"*📊 End of Day Report — {today_str}*",
             f"_{now_str}_",
             "",
-            "*NSE Equity*",
-            f"Portfolio: `Rs.{total_val:,.0f}` ({pnl_pct:+.2f}%)",
-            f"Open: `{len(positions)}` | Today trades: `{len(today_trades)}`",
-            f"Today P&L: `Rs.{today_pnl:+,.0f}`",
+            f"*NSE Equity*",
+            f"Portfolio value: `₹{total_val:,.0f}` ({pnl_pct:+.2f}% from start)",
+            f"Positions open: `{len(positions)}` | Trades today: `{len(today_trades)}`",
+            f"Today P&L: `₹{today_pnl:+,.0f}`",
         ]
 
         if today_trades:
             for t in today_trades[:3]:
-                icon = "✅" if float(t.get("pnl", 0)) > 0 else "🔴"
-                lines.append(f"  {icon} {t.get('symbol','')} → Rs.{float(t.get('pnl',0)):+,.0f}")
+                pnl_val = float(t.get("pnl", 0))
+                icon    = "✅" if pnl_val > 0 else "🔴"
+                lines.append(f"  {icon} {t.get('symbol','')} → `₹{pnl_val:+,.0f}`")
 
         lines += [
             "",
-            "*F&O Paper*",
-            f"Open: `{fno_open}` | Today closed: `{fno_today_count}`",
-            f"Today P&L: `Rs.{fno_today_pnl:+,.0f}`",
+            "*F&O (Options/Futures)*",
+            f"Open: `{fno_open}` positions | Closed today: `{fno_today_count}`",
+            f"Today P&L: `₹{fno_today_pnl:+,.0f}`",
             "",
             "*Crypto*",
-            f"Open: `{cr_open}` | Today closed: `{cr_today_count}`",
-            f"Today P&L: `{cr_today_pnl:+.2f} USDT` (Rs.{cr_today_pnl*INR_PER_USDT:+,.0f})",
+            f"Open: `{cr_open}` | Closed today: `{cr_today_count}`",
+            f"Today P&L: `{cr_today_pnl:+.2f} USDT` = `₹{cr_today_pnl * INR_PER_USDT:+,.0f}`",
             "",
             "*US Stocks*",
-            f"Open: `{us_open}` | Today closed: `{us_today_count}`",
-            f"Today P&L: `${us_today_pnl:+.2f}` (Rs.{us_today_pnl*INR_PER_USD:+,.0f})",
+            f"Open: `{us_open}` | Closed today: `{us_today_count}`",
+            f"Today P&L: `${us_today_pnl:+.2f}` = `₹{us_today_pnl * INR_PER_USD:+,.0f}`",
             "",
-            f"*Combined Today P&L: `Rs.{combined_pnl:+,.0f}`*",
+            f"{day_icon} *Total Today (all markets): `₹{combined_pnl:+,.0f}`*",
             "",
-            "*All-Time Stats*",
-            f"Trades: `{stats.get('total_trades',0)}` | "
-            f"Win Rate: `{stats.get('win_rate_pct',0):.1f}%` | "
-            f"P-Factor: `{stats.get('profit_factor',0):.2f}`",
-            f"Max Drawdown: `{stats.get('max_drawdown_pct',0):.1f}%`",
+            "*Overall Performance*",
+            f"Total trades: `{stats.get('total_trades', 0)}` | "
+            f"Win rate: `{stats.get('win_rate_pct', 0):.1f}%` | "
+            f"Profit factor: `{stats.get('profit_factor', 0):.2f}`",
+            f"Avg per trade: `₹{stats.get('expectancy', 0):+,.0f}` | "
+            f"Max drawdown: `{stats.get('max_drawdown_pct', 0):.1f}%`",
             "",
-            f"*Live Readiness: `{gates_str}` gates*",
+            f"*Readiness: `{gates_str}` gates passed*",
         ]
 
         # Next trading day note
         weekday = datetime.now(IST).weekday()
         if weekday >= 4:  # Friday or weekend
-            lines.append("\n_Next trading day: Monday_")
+            lines.append("_Next trading day: Monday_")
 
         send("\n".join(lines))
         logger.info(f"Daily report sent — NSE: {len(today_trades)} trades Rs.{today_pnl:+,.0f} | "

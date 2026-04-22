@@ -27,7 +27,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 INDEX_TICKERS = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
 from config import (FNO_LOT_SIZES as LOT_SIZES,
-                    FNO_HV_STRADDLE, FNO_HV_STRANGLE, FNO_SELL_DAYS)
+                    FNO_HV_STRADDLE, FNO_HV_STRANGLE, FNO_SELL_DAYS, IV_RANK_MIN)
 NIFTY_STEP    = 50
 BANKNIFTY_STEP= 100
 
@@ -93,7 +93,26 @@ class OptionsSellingGenerator:
             log_ret = np.log(close / close.shift(1)).dropna()
             hv_20   = float(log_ret.tail(20).std() * np.sqrt(252) * 100)
 
-            # Only sell when HV is elevated enough (expensive premiums = good to sell)
+            # IV Rank: what percentile is current HV vs. 1-year rolling HV?
+            # Only sell when IV is elevated (rank > IV_RANK_MIN) — expensive premiums.
+            hv_series = [
+                float(log_ret.iloc[i:i + 20].std() * np.sqrt(252) * 100)
+                for i in range(max(0, len(log_ret) - 252), len(log_ret) - 20)
+                if len(log_ret.iloc[i:i + 20]) == 20
+            ]
+            if hv_series:
+                iv_rank = sum(1 for h in hv_series if h < hv_20) / len(hv_series)
+            else:
+                iv_rank = 0.5  # not enough history — assume neutral
+
+            if iv_rank < IV_RANK_MIN:
+                logger.info(
+                    f"{index}: IV rank {iv_rank:.0%} below {IV_RANK_MIN:.0%} — "
+                    f"HV {hv_20:.1f}% not elevated enough, skip selling"
+                )
+                return None
+
+            # Also reject if HV too low in absolute terms
             if hv_20 < FNO_HV_STRANGLE:
                 logger.info(f"{index}: HV {hv_20:.1f}% too low — premiums cheap, skip selling")
                 return None
@@ -111,8 +130,24 @@ class OptionsSellingGenerator:
             if dte <= 0:
                 return None
 
+            # Try to get real ATM premium from NSE options chain
+            atm_prem = None
+            try:
+                from data.nse_options_chain import NSEOptionsChain
+                chain = NSEOptionsChain()
+                atm_prem = chain.get_atm_premium(index, atm)
+            except Exception:
+                pass
+
+            if not atm_prem or atm_prem <= 0:
+                # Fallback: simplified Black-Scholes proxy
+                time_factor = np.sqrt(dte / 252)
+                atm_prem = round(spot * (hv_20 / 100) * time_factor * 0.4, 1)
+            else:
+                atm_prem = round(float(atm_prem), 1)
+                logger.info(f"{index}: using live NSE ATM premium ₹{atm_prem}")
+
             time_factor = np.sqrt(dte / 252)
-            atm_prem    = round(spot * (hv_20 / 100) * time_factor * 0.4, 1)
             otm_prem    = round(atm_prem * 0.6, 1)   # OTM ~60% of ATM
 
             # Expiry
@@ -144,7 +179,7 @@ class OptionsSellingGenerator:
                 confidence += 0.10   # last 2 days = max theta
 
             iv_note = (
-                f"HV {hv_20:.1f}% | DTE {dte}d | "
+                f"HV {hv_20:.1f}% | IV Rank {iv_rank:.0%} | DTE {dte}d | "
                 f"Collect Rs.{total_prem:.0f}/lot ({lot} shares)"
             )
             reasoning = (

@@ -37,30 +37,32 @@ class CircuitBreaker:
         """
         today = str(date.today())
 
-        # Reset if new day
         if self.state.get("date") != today:
             self._reset(today, current_portfolio_value)
 
-        # Get opening value for today
         opening_value   = self.state.get("opening_value", current_portfolio_value)
         daily_loss_pct  = (opening_value - current_portfolio_value) / opening_value * 100
         weekly_loss_pct = self._weekly_loss(current_portfolio_value)
 
-        # Update state
-        self.state["current_value"]    = current_portfolio_value
-        self.state["daily_loss_pct"]   = round(daily_loss_pct, 2)
-        self.state["weekly_loss_pct"]  = round(weekly_loss_pct, 2)
+        self.state["current_value"]   = current_portfolio_value
+        self.state["daily_loss_pct"]  = round(daily_loss_pct, 2)
+        self.state["weekly_loss_pct"] = round(weekly_loss_pct, 2)
         self._save_state()
 
-        # Check daily circuit breaker
         if daily_loss_pct >= MAX_DAILY_LOSS_PCT * 100:
             reason = (f"Daily circuit breaker triggered — "
                       f"portfolio down {daily_loss_pct:.1f}% today "
                       f"(limit: {MAX_DAILY_LOSS_PCT*100:.0f}%)")
             if not self.state.get("daily_alert_sent"):
-                send(f"*Circuit Breaker Triggered*\n"
-                     f"Portfolio down {daily_loss_pct:.1f}% today\n"
-                     f"All new trades blocked until tomorrow.")
+                loss_amt = round((current_portfolio_value * daily_loss_pct) / 100, 0)
+                send(
+                    f"🚨 *Trading Paused — Daily Loss Limit Hit*\n"
+                    f"Portfolio is down *{daily_loss_pct:.1f}%* today "
+                    f"(limit is {MAX_DAILY_LOSS_PCT*100:.0f}%).\n"
+                    f"Today's loss: `₹{loss_amt:,.0f}`\n"
+                    f"No new trades until tomorrow morning.\n"
+                    f"_Existing positions are still being monitored._"
+                )
                 self.state["daily_alert_sent"] = True
                 self._save_state()
             logger.warning(reason)
@@ -71,6 +73,16 @@ class CircuitBreaker:
             reason = (f"Weekly circuit breaker triggered — "
                       f"portfolio down {weekly_loss_pct:.1f}% this week "
                       f"(limit: {MAX_WEEKLY_LOSS_PCT*100:.0f}%)")
+            if not self.state.get("weekly_alert_sent"):
+                send(
+                    f"🚨 *Trading Paused — Weekly Loss Limit Hit*\n"
+                    f"Portfolio is down *{weekly_loss_pct:.1f}%* this week "
+                    f"(limit is {MAX_WEEKLY_LOSS_PCT*100:.0f}%).\n"
+                    f"No new trades until next Monday.\n"
+                    f"_Existing positions are still being monitored._"
+                )
+                self.state["weekly_alert_sent"] = True
+                self._save_state()
             logger.warning(reason)
             return False, reason
 
@@ -97,23 +109,38 @@ class CircuitBreaker:
 
     def _reset(self, today: str, current_value: float):
         logger.info(f"Circuit breaker reset for {today}")
+        # Preserve weekly_alert_sent within the same ISO week so the alert
+        # fires at most once per week, not once per day.
+        prev_date = self.state.get("date", "")
+        try:
+            same_week = (
+                date.fromisoformat(prev_date).isocalendar().week
+                == date.fromisoformat(today).isocalendar().week
+            )
+        except Exception:
+            same_week = False
         self.state = {
-            "date":            today,
-            "opening_value":   current_value,
-            "current_value":   current_value,
-            "daily_loss_pct":  0.0,
-            "weekly_loss_pct": 0.0,
-            "daily_alert_sent":False,
+            "date":              today,
+            "opening_value":     current_value,
+            "current_value":     current_value,
+            "daily_loss_pct":    0.0,
+            "weekly_loss_pct":   0.0,
+            "daily_alert_sent":  False,
+            "weekly_alert_sent": self.state.get("weekly_alert_sent", False) if same_week else False,
         }
         self._save_state()
 
     def _weekly_loss(self, current: float) -> float:
-        """Compare to value 5 trading days ago from snapshots."""
+        """Compare to value 5 trading days ago (or oldest available) from snapshots."""
         try:
             from memory.portfolio_memory import PortfolioMemory
             snaps = PortfolioMemory().get_snapshots()
-            if len(snaps) >= 5:
-                week_ago = snaps[-5]["portfolio_value"]
+            if not snaps:
+                return 0.0
+            # Use snapshot from ~5 days ago; fall back to oldest if fewer exist
+            ref = snaps[-5] if len(snaps) >= 5 else snaps[0]
+            week_ago = ref["portfolio_value"]
+            if week_ago and week_ago > 0:
                 return max(0, (week_ago - current) / week_ago * 100)
         except Exception:
             pass

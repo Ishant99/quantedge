@@ -100,6 +100,57 @@ class PortfolioMemory:
                     total_trades    INTEGER,
                     win_rate        REAL
                 );
+
+                CREATE TABLE IF NOT EXISTS fno_trades (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   TEXT NOT NULL,
+                    symbol      TEXT NOT NULL,
+                    action      TEXT,
+                    instrument  TEXT,
+                    strike      REAL,
+                    expiry      TEXT,
+                    qty         INTEGER,
+                    entry_price REAL,
+                    exit_price  REAL,
+                    entry_time  TEXT,
+                    exit_time   TEXT,
+                    pnl         REAL DEFAULT 0,
+                    pnl_pct     REAL DEFAULT 0,
+                    status      TEXT DEFAULT 'open',
+                    mode        TEXT DEFAULT 'paper'
+                );
+
+                CREATE TABLE IF NOT EXISTS crypto_trades (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   TEXT NOT NULL,
+                    symbol      TEXT NOT NULL,
+                    action      TEXT,
+                    qty         REAL,
+                    entry_price REAL,
+                    exit_price  REAL,
+                    entry_time  TEXT,
+                    exit_time   TEXT,
+                    pnl         REAL DEFAULT 0,
+                    pnl_pct     REAL DEFAULT 0,
+                    status      TEXT DEFAULT 'open',
+                    mode        TEXT DEFAULT 'paper'
+                );
+
+                CREATE TABLE IF NOT EXISTS us_trades (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   TEXT NOT NULL,
+                    symbol      TEXT NOT NULL,
+                    action      TEXT,
+                    qty         INTEGER,
+                    entry_price REAL,
+                    exit_price  REAL,
+                    entry_time  TEXT,
+                    exit_time   TEXT,
+                    pnl         REAL DEFAULT 0,
+                    pnl_pct     REAL DEFAULT 0,
+                    status      TEXT DEFAULT 'open',
+                    mode        TEXT DEFAULT 'paper'
+                );
             """)
             cols = [r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()]
             alter_statements = {
@@ -271,7 +322,7 @@ class PortfolioMemory:
             return {
                 "total_trades": 0, "wins": 0, "losses": 0, "win_rate_pct": 0.0,
                 "total_pnl": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
-                "profit_factor": 0.0, "max_drawdown_pct": 0.0,
+                "profit_factor": 0.0, "max_drawdown_pct": 0.0, "expectancy": 0.0,
             }
         try:
             with self._conn() as conn:
@@ -304,23 +355,29 @@ class PortfolioMemory:
             return {
                 "total_trades": 0, "wins": 0, "losses": 0, "win_rate_pct": 0.0,
                 "total_pnl": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
-                "profit_factor": 0.0, "max_drawdown_pct": 0.0,
+                "profit_factor": 0.0, "max_drawdown_pct": 0.0, "expectancy": 0.0,
             }
 
-        win_rate     = (wins / total * 100) if total > 0 else 0
-        profit_factor= abs(avg_win / avg_loss) if avg_loss != 0 else 0
-        max_drawdown = self._calc_drawdown([s[0] for s in snapshots])
+        losses        = total - wins
+        win_rate      = (wins / total * 100) if total > 0 else 0
+        loss_rate     = (losses / total) if total > 0 else 0
+        win_rate_frac = win_rate / 100
+        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+        max_drawdown  = self._calc_drawdown([s[0] for s in snapshots])
+        # Expectancy: average Rs. earned per trade
+        expectancy    = (avg_win * win_rate_frac) + (avg_loss * loss_rate)
 
         return {
-            "total_trades":   total,
-            "wins":           wins,
-            "losses":         total - wins,
-            "win_rate_pct":   round(win_rate, 1),
-            "total_pnl":      round(total_pnl, 2),
-            "avg_win":        round(avg_win, 2),
-            "avg_loss":       round(avg_loss, 2),
-            "profit_factor":  round(profit_factor, 2),
+            "total_trades":     total,
+            "wins":             wins,
+            "losses":           losses,
+            "win_rate_pct":     round(win_rate, 1),
+            "total_pnl":        round(total_pnl, 2),
+            "avg_win":          round(avg_win, 2),
+            "avg_loss":         round(avg_loss, 2),
+            "profit_factor":    round(profit_factor, 2),
             "max_drawdown_pct": round(max_drawdown, 2),
+            "expectancy":       round(expectancy, 2),
         }
 
     def get_recent_signals(self, limit: int = 20) -> list[dict]:

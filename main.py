@@ -254,7 +254,10 @@ def run_agent(dry_run: bool = False) -> list:
             sig.reasoning += f". POC Rs.{vp.poc:,.0f}"
         if mtf:
             sig.reasoning += f". Weekly: {mtf.weekly_trend}"
-            if mtf.mtf_penalty > 0:
+            if mtf.confirmed and mtf.weekly_trend == "up" and mtf.daily_signal == "bullish":
+                extra += 0.05
+                sig.reasoning += " (MTF confirmed +5%)"
+            elif mtf.mtf_penalty > 0:
                 extra -= mtf.mtf_penalty
                 sig.reasoning += f" (MTF penalty -{mtf.mtf_penalty:.0%})"
         if fii_result.signal in ("buy", "strong_buy"):
@@ -281,6 +284,7 @@ def run_agent(dry_run: bool = False) -> list:
             sector_multiplier = sec_mult,
             regime_multiplier = regime.position_size_multiplier,
             fii_score         = fii_result.score,
+            setup_type        = getattr(sig, "setup_type", ""),
         )
         sig.position_size   = sizing.position_size
         sig.capital_at_risk = sizing.capital_at_risk

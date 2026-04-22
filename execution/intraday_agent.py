@@ -357,18 +357,20 @@ class IntradayAgent:
 
     def _send_telegram(self, signals: list):
         now_str = datetime.now(IST).strftime("%H:%M IST")
-        lines   = [f"*Intraday Signals — {now_str}*", ""]
+        lines   = [f"*⚡ Intraday Signals — {now_str}*", ""]
         for s in signals:
-            rr = round(
+            rr      = round(
                 (s.take_profit - s.entry_price) / (s.entry_price - s.stop_loss), 1
             ) if s.entry_price > s.stop_loss else 0
+            sl_risk = round(s.entry_price - s.stop_loss, 2)
             lines += [
-                f"*{s.symbol}*  conf {s.confidence:.0%}  ({len(s.criteria_met)}/5 criteria)",
-                f"Entry Rs.{s.entry_price:,.0f} | SL Rs.{s.stop_loss:,.0f} | "
-                f"TP Rs.{s.take_profit:,.0f} | R:R {rr}x",
-                f"VWAP Rs.{s.vwap:,.0f}  RSI {s.rsi_15m:.0f}  MACD hist {s.macd_hist:+.4f}",
-                f"_{', '.join(s.criteria_met)}_",
+                f"*🟢 {s.symbol}* — {s.confidence:.0%} confidence "
+                f"({len(s.criteria_met)}/5 checks passed)",
+                f"📥 Entry `₹{s.entry_price:,.0f}` | "
+                f"🛑 Stop `₹{s.stop_loss:,.0f}` (-₹{sl_risk:,.0f}) | "
+                f"🎯 Target `₹{s.take_profit:,.0f}` — {rr}x",
+                f"_Why: {', '.join(s.criteria_met)}_",
                 "",
             ]
-        lines.append("_All positions closed at 15:25 IST_")
+        lines.append("_⏰ All intraday positions auto-close at 15:25 IST_")
         send("\n".join(lines))

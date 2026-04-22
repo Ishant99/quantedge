@@ -124,9 +124,28 @@ class StrategyEngine:
         # ------------------------------------------------------------------
         # M5: Risk management — entry / SL / TP / position size
         # ------------------------------------------------------------------
-        entry       = last_close
-        stop_loss   = round(entry - (ATR_SL_MULTIPLIER * atr), 2)
-        take_profit = round(entry + (REWARD_RISK_RATIO * ATR_SL_MULTIPLIER * atr), 2)
+        entry     = last_close
+        atr_sl    = round(entry - (ATR_SL_MULTIPLIER * atr), 2)
+
+        # Pivot-based SL: anchor to nearest support level when available.
+        # Use whichever is HIGHER (closer to entry = tighter risk control).
+        try:
+            from analysis.support_resistance import SupportResistanceAnalyser
+            sr = SupportResistanceAnalyser().analyse(ta.symbol, df)
+            if sr and sr.nearest_support and sr.nearest_support < entry:
+                pivot_sl = round(sr.nearest_support * 0.995, 2)  # 0.5% buffer below support
+                stop_loss = max(atr_sl, pivot_sl)
+                if stop_loss != atr_sl:
+                    logger.debug(
+                        f"{ta.symbol}: pivot SL Rs.{pivot_sl:,.2f} "
+                        f"used over ATR SL Rs.{atr_sl:,.2f}"
+                    )
+            else:
+                stop_loss = atr_sl
+        except Exception:
+            stop_loss = atr_sl
+
+        take_profit = round(entry + (REWARD_RISK_RATIO * (entry - stop_loss)), 2)
 
         # 2% portfolio risk rule
         risk_per_trade = portfolio_value * RISK_PER_TRADE_PCT

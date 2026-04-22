@@ -68,7 +68,7 @@ def summarize_runtime_storage() -> dict:
 def cleanup_runtime_artifacts(
     keep_log_days: int = 14,
     max_log_files: int = 20,
-    keep_market_data_days: int = 7,
+    keep_market_data_days: int = 365,   # must cover SMA_LONG (200) + buffer
     keep_backtest_days: int = 30,
 ) -> dict:
     os.makedirs(LOGS_DIR, exist_ok=True)

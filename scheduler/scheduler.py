@@ -18,8 +18,9 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, date
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -42,6 +43,65 @@ from services.state_sync import sync_unified_state
 
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
+
+# =============================================================================
+# NSE Holiday Calendar 2025–2026
+# Source: NSE India official trading calendar
+# =============================================================================
+NSE_HOLIDAYS: set[date] = {
+    # 2025
+    date(2025, 1, 26),   # Republic Day
+    date(2025, 2, 26),   # Mahashivratri
+    date(2025, 3, 14),   # Holi
+    date(2025, 3, 31),   # Id-Ul-Fitr (Ramadan Eid)
+    date(2025, 4, 14),   # Dr. Ambedkar Jayanti / Ram Navami
+    date(2025, 4, 18),   # Good Friday
+    date(2025, 5, 1),    # Maharashtra Day
+    date(2025, 8, 15),   # Independence Day
+    date(2025, 8, 27),   # Ganesh Chaturthi
+    date(2025, 10, 2),   # Gandhi Jayanti / Dussehra
+    date(2025, 10, 21),  # Diwali Laxmi Puja (Muhurat Trading day — partial)
+    date(2025, 10, 22),  # Diwali Balipratipada
+    date(2025, 11, 5),   # Prakash Gurpurb (Gurunanak Jayanti)
+    date(2025, 12, 25),  # Christmas
+    # 2026
+    date(2026, 1, 26),   # Republic Day
+    date(2026, 3, 20),   # Holi (approx — confirm with NSE)
+    date(2026, 4, 3),    # Good Friday (approx)
+    date(2026, 4, 14),   # Dr. Ambedkar Jayanti
+    date(2026, 5, 1),    # Maharashtra Day
+    date(2026, 8, 15),   # Independence Day
+    date(2026, 10, 2),   # Gandhi Jayanti
+    date(2026, 11, 14),  # Gurunanak Jayanti (approx)
+    date(2026, 12, 25),  # Christmas
+}
+
+
+def _is_nse_holiday(dt: datetime | None = None) -> bool:
+    """Return True if today (or given dt) is an NSE trading holiday."""
+    check = (dt or datetime.now(IST)).date()
+    return check in NSE_HOLIDAYS
+
+
+# =============================================================================
+# Scan lock — prevents price_monitor / F&O monitor from running while a
+# full scan is active (avoids portfolio lock contention and double signals).
+# =============================================================================
+_SCAN_LOCK = threading.Event()   # set = scan running, clear = idle
+_SCAN_LOCK.clear()
+
+
+def _acquire_scan_lock(job_name: str) -> bool:
+    """Try to mark scan as running. Returns False if already locked."""
+    if _SCAN_LOCK.is_set():
+        logger.warning(f"{job_name}: scan lock held — skipping to avoid overlap")
+        return False
+    _SCAN_LOCK.set()
+    return True
+
+
+def _release_scan_lock():
+    _SCAN_LOCK.clear()
 
 
 def _release_pid_file():
@@ -111,9 +171,19 @@ def _preflight_check() -> bool:
 
 def run_daily_scan():
     """Full pipeline — runs every weekday at configured scan times."""
+    # Skip NSE holidays
+    if _is_nse_holiday():
+        logger.info(f"NSE holiday today ({date.today()}) — skipping scan")
+        _write_scheduler_status("daily_scan", "skipped", "NSE holiday")
+        return
+
+    if not _acquire_scan_lock("run_daily_scan"):
+        return
+
     _write_scheduler_status("daily_scan", "running")
     logger.info(f"Scheduled scan triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}")
     if not _preflight_check():
+        _release_scan_lock()
         _write_scheduler_status("daily_scan", "skipped", "Pre-flight failed")
         send_telegram_message("*Pre-flight FAILED* — skipping scan (network issue?)")
         return
@@ -153,6 +223,8 @@ def run_daily_scan():
             _write_scheduler_status("daily_scan", "error", f"Retry also failed: {e2}")
             logger.error(f"Scheduled scan retry also failed: {e2}")
             send_telegram_message(f"*Agent ERROR (scan)*\n`{e2}`")
+    finally:
+        _release_scan_lock()
 
 
 def _run_options_signals():
@@ -295,6 +367,12 @@ def run_price_monitor():
     Check all open positions for SL/TP hits and trailing stop updates.
     Runs every 15 minutes during market hours.
     """
+    if _is_nse_holiday():
+        return
+    # Skip if a full scan is currently running to avoid portfolio lock contention
+    if _SCAN_LOCK.is_set():
+        logger.debug("Price monitor: scan lock held — skipping this tick")
+        return
     _write_scheduler_status("price_monitor", "running")
     logger.debug(f"Price monitor tick at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
@@ -708,56 +786,39 @@ def run_weekly_summary():
 # =============================================================================
 
 def send_telegram_alert(signals: list, stats: dict):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-
+    """Send today's scan results — delegates to utils.telegram for consistent formatting."""
     from config import MIN_CONFIDENCE
-    # Only show signals that meet the confidence threshold
-    actionable = [s for s in signals
-                  if getattr(s, "confidence", 0) >= MIN_CONFIDENCE]
-
-    date_str = datetime.now(IST).strftime("%d %b %Y")
-    lines = [f"*NSE Agent — {date_str}*", f"Mode: {TRADING_MODE.upper()}", ""]
-
-    if not actionable:
-        lines.append("No actionable signals today (all below confidence threshold).")
-    else:
-        for i, s in enumerate(actionable[:5], 1):
-            lines += [
-                f"*#{i} {s.symbol}* — {s.action} ({s.confidence:.0%})",
-                f"Entry: Rs.{s.entry_price:,.0f} | "
-                f"SL: Rs.{s.stop_loss:,.0f} | "
-                f"TP: Rs.{s.take_profit:,.0f}",
-                f"_{s.reasoning[:80]}_",
-                "",
-            ]
-
-    lines.append(
-        f"Win Rate: {stats.get('win_rate_pct', 0):.0f}% | "
-        f"Trades: {stats.get('total_trades', 0)}"
-    )
-    send_telegram_message("\n".join(lines))
+    actionable = [s for s in signals if getattr(s, "confidence", 0) >= MIN_CONFIDENCE]
+    from utils.telegram import send_signals
+    send_signals(actionable, stats, mode=TRADING_MODE)
 
 
 def send_telegram_message(text: str):
+    """
+    Send a plain text message to Telegram (chunked) and Discord.
+    Central dispatcher used by all scheduler jobs.
+    """
+    from utils.alert_formatter import chunk_message
+    chunks  = chunk_message(text, limit=4000)
     sent_any = False
+
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-                timeout=10,
-            )
-            logger.info("Telegram message sent")
-            sent_any = True
-        except Exception as e:
-            logger.warning(f"Telegram send failed: {e}")
+        for chunk in chunks:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"},
+                    timeout=10,
+                )
+                sent_any = True
+            except Exception as e:
+                logger.warning(f"Telegram send failed: {e}")
 
     if send_discord_message_raw(text):
         sent_any = True
 
     if not sent_any:
-        logger.info("No Telegram/Discord alert channel available for this message")
+        logger.info("No Telegram/Discord channel available for this message")
 
 
 # =============================================================================
@@ -800,6 +861,10 @@ if __name__ == "__main__":
     h1, m1 = _parse_time(SCAN_TIME_1)
     h2, m2 = _parse_time(SCAN_TIME_2)
 
+    # misfire_grace_time: if job fires late (e.g. system busy), allow up to
+    # 120 s grace before treating it as a misfire and skipping it entirely.
+    _GRACE = 120   # seconds
+
     scheduler = BlockingScheduler(timezone=IST)
 
     # --- Job 1: Morning scan ---
@@ -808,6 +873,7 @@ if __name__ == "__main__":
         CronTrigger(hour=h1, minute=m1, day_of_week="mon-fri", timezone=IST),
         id="scan_1",
         name=f"Morning Scan ({SCAN_TIME_1} IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 2: Afternoon scan ---
@@ -816,6 +882,7 @@ if __name__ == "__main__":
         CronTrigger(hour=h2, minute=m2, day_of_week="mon-fri", timezone=IST),
         id="scan_2",
         name=f"Afternoon Scan ({SCAN_TIME_2} IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 3: Price monitor every 15 min, 9:20 AM – 3:20 PM ---
@@ -830,6 +897,7 @@ if __name__ == "__main__":
         ),
         id="price_monitor",
         name="Price Monitor (every 15 min, offset)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 3b: F&O paper position monitor every 15 min ---
@@ -843,6 +911,7 @@ if __name__ == "__main__":
         ),
         id="fno_monitor",
         name="F&O Paper Monitor (every 15 min, offset)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 4: EOD close at 3:25 PM ---
@@ -851,6 +920,7 @@ if __name__ == "__main__":
         CronTrigger(hour=15, minute=25, day_of_week="mon-fri", timezone=IST),
         id="eod_close",
         name="EOD Close (15:25 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 5: Intraday scan every hour 9:30–14:30 ---
@@ -864,6 +934,7 @@ if __name__ == "__main__":
         ),
         id="intraday_scan",
         name="Intraday Scan (hourly 09:30-14:30 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 5b: Thesis re-evaluation at 1:00 PM ---
@@ -872,6 +943,7 @@ if __name__ == "__main__":
         CronTrigger(hour=13, minute=0, day_of_week="mon-fri", timezone=IST),
         id="thesis_check",
         name="Thesis Re-evaluation (13:00 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 6: Outcome tracker at 3:30 PM (after market close) ---
@@ -880,6 +952,7 @@ if __name__ == "__main__":
         CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
         id="outcome_tracker",
         name="Signal Outcome Tracker (15:30 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 7: US stocks scan at 7:00 PM IST (US market open) ---
@@ -888,6 +961,7 @@ if __name__ == "__main__":
         CronTrigger(hour=19, minute=0, day_of_week="mon-fri", timezone=IST),
         id="us_scan",
         name="US Stocks Scan (19:00 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 8: Crypto scan every 4 hours (24/7) ---
@@ -896,6 +970,7 @@ if __name__ == "__main__":
         CronTrigger(hour="0,4,8,12,16,20", minute=0, timezone=IST),
         id="crypto_scan",
         name="Crypto Scan (every 4h)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 9: EOD daily digest at 6:00 PM (all markets) ---
@@ -904,6 +979,7 @@ if __name__ == "__main__":
         CronTrigger(hour=18, minute=0, day_of_week="mon-fri", timezone=IST),
         id="eod_digest",
         name="EOD Digest (18:00 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     # --- Job 10: Weekly summary every Sunday 8 PM ---
@@ -912,6 +988,7 @@ if __name__ == "__main__":
         CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=IST),
         id="weekly_summary",
         name="Weekly Summary (Sun 20:00 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     scheduler.add_job(
@@ -919,6 +996,7 @@ if __name__ == "__main__":
         CronTrigger(hour=6, minute=5, timezone=IST),
         id="housekeeping",
         name="Housekeeping (06:05 IST)",
+        misfire_grace_time=_GRACE,
     )
 
     logger.info("=" * 60)

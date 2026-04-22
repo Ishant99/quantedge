@@ -282,11 +282,35 @@ class MarketScanner:
 
         keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
         df = df[keep]
+
+        # Drop rows with missing or zero close price
         df = df[df["close"].notna() & (df["close"] > 0)]
+
+        # Volume validation: drop zero-volume bars — they indicate halts or
+        # bad data and would corrupt RSI/MACD calculations.
+        if "volume" in df.columns:
+            zero_vol = (df["volume"] == 0) | df["volume"].isna()
+            if zero_vol.any():
+                logger.debug(f"{symbol}: dropping {zero_vol.sum()} zero-volume bars")
+            df = df[~zero_vol]
+
+        # Data gap detection: flag and drop bars where close jumps >15% in one
+        # day — almost always a corporate action not reflected in yfinance or
+        # stale/bad data rather than a genuine price move.
+        if len(df) > 1:
+            pct_chg = df["close"].pct_change().abs()
+            bad_bars = pct_chg > 0.15
+            if bad_bars.any():
+                logger.warning(
+                    f"{symbol}: {bad_bars.sum()} bar(s) with >15% single-day move "
+                    f"removed (possible split/bad data): "
+                    f"{df.index[bad_bars].strftime('%Y-%m-%d').tolist()}"
+                )
+                df = df[~bad_bars]
 
         df["symbol"]       = symbol
         df["daily_return"] = df["close"].pct_change()
-        df["vol_avg_20"]   = df["volume"].rolling(20).mean()
+        df["vol_avg_20"]   = df["volume"].rolling(20).mean() if "volume" in df.columns else 0.0
 
         return df.sort_index()
 

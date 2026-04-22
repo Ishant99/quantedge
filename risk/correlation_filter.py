@@ -14,6 +14,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import time
 import pandas as pd
 import numpy as np
 import sys, os
@@ -23,12 +24,20 @@ from utils import get_logger
 
 logger = get_logger("CorrelationFilter")
 
+_CORR_CACHE_TTL = 7200   # 2 hours in seconds
+
 
 class CorrelationFilter:
     """
     Filters out correlated signals to ensure true diversification.
     Works on the final list of BUY signals before execution.
     """
+    # Class-level cache shared across all instances within a process.
+    # Rebuilt at most once every 2 hours so intraday correlation shifts
+    # are reflected without refetching on every signal check.
+    _matrix_cache: dict | None = None
+    _cache_symbols: list | None = None
+    _cache_ts: float = 0.0
 
     def filter(
         self,
@@ -119,7 +128,20 @@ class CorrelationFilter:
     def _build_correlation(
         self, symbols: list, market_data: dict
     ) -> dict | None:
-        """Build pairwise correlation dict from last 60 days of returns."""
+        """Build pairwise correlation dict from last 60 days of returns.
+        Result is cached for 2 hours (class-level) to capture intraday shifts
+        without rebuilding on every scan.
+        """
+        now = time.time()
+        sorted_syms = sorted(symbols)
+        if (
+            CorrelationFilter._matrix_cache is not None
+            and CorrelationFilter._cache_symbols == sorted_syms
+            and now - CorrelationFilter._cache_ts < _CORR_CACHE_TTL
+        ):
+            logger.debug("Correlation matrix: using cached matrix")
+            return CorrelationFilter._matrix_cache
+
         try:
             returns = {}
             for sym in symbols:
@@ -150,6 +172,10 @@ class CorrelationFilter:
                             matrix[s1][s2] = round(corr, 3)
                         else:
                             matrix[s1][s2] = 0.0
+            CorrelationFilter._matrix_cache  = matrix
+            CorrelationFilter._cache_symbols = sorted_syms
+            CorrelationFilter._cache_ts      = now
+            logger.debug(f"Correlation matrix built and cached ({len(syms)} symbols)")
             return matrix
 
         except Exception as e:
@@ -167,11 +193,13 @@ class CorrelationFilter:
     def _filter_sector_concentration(
         self, signals: list, sectors: dict
     ) -> list:
-        """Max MAX_SAME_SECTOR stocks from same sector."""
+        """Max MAX_SAME_SECTOR stocks from same sector, highest confidence first."""
         sector_count = {}
         kept         = []
 
-        for sig in signals:
+        # Sort by confidence descending so higher-confidence signals
+        # are always kept when a sector is at capacity.
+        for sig in sorted(signals, key=lambda s: getattr(s, "confidence", 0), reverse=True):
             sector = sectors.get(sig.symbol, "Unknown")
             count  = sector_count.get(sector, 0)
 

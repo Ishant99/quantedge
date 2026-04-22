@@ -111,6 +111,7 @@ def _send():
     fno_week_pnl = fno_week_count = fno_open_count = 0
     crypto_week_pnl = crypto_week_count = crypto_open_count = 0
     us_week_pnl = us_week_count = us_open_count = 0
+    setup_breakdown: list[tuple] = []   # (setup_type, count, total_pnl)
 
     if os.path.exists(SQLITE_DB_FILE):
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
@@ -124,6 +125,19 @@ def _send():
                     ORDER BY exit_time DESC
                 """, (week_start,)).fetchall()
                 week_trades = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+            try:
+                sb_rows = conn.execute("""
+                    SELECT COALESCE(setup_type,'unknown') AS st,
+                           COUNT(*) AS cnt,
+                           COALESCE(SUM(pnl), 0) AS total_pnl
+                    FROM trades
+                    WHERE status='closed' AND exit_time >= ?
+                    GROUP BY st
+                    ORDER BY total_pnl DESC
+                """, (week_start,)).fetchall()
+                setup_breakdown = [(r[0], r[1], r[2]) for r in sb_rows]
             except sqlite3.OperationalError:
                 pass
             try:
@@ -174,6 +188,14 @@ def _send():
     best  = max(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
     worst = min(week_trades, key=lambda t: t.get("pnl") or 0, default=None)
 
+    # Expectancy from all-time stats (more stable than week-only)
+    try:
+        from memory.portfolio_memory import PortfolioMemory
+        all_stats = PortfolioMemory().get_stats()
+        expectancy = all_stats.get("expectancy", 0.0)
+    except Exception:
+        expectancy = 0.0
+
     realized_combined = (total_pnl_week + fno_week_pnl +
                          crypto_week_pnl * INR_PER_USDT + us_week_pnl * INR_PER_USD)
     true_combined = realized_combined + unrealized
@@ -207,6 +229,7 @@ def _send():
         f"Trades closed:     `{len(week_trades)}`",
         f"Wins / Losses:     `{len(wins)} / {len(losses)}`",
         f"Win rate:          `{win_rate:.0f}%`",
+        f"Expectancy (all):  `Rs.{expectancy:+,.0f}` per trade",
         f"Realized P&L:      `Rs.{total_pnl_week:+,.0f}`",
     ]
 
@@ -214,6 +237,11 @@ def _send():
         lines.append(f"Best:  `{best['symbol']}` `Rs.{best['pnl']:+,.0f}` ({best.get('pnl_pct', 0):+.1f}%)")
     if worst and worst.get("pnl"):
         lines.append(f"Worst: `{worst['symbol']}` `Rs.{worst['pnl']:+,.0f}` ({worst.get('pnl_pct', 0):+.1f}%)")
+
+    if setup_breakdown:
+        lines += ["", "*P&L by Setup Type*"]
+        for st, cnt, spnl in setup_breakdown:
+            lines.append(f"  {st}: `{cnt}` trades | `Rs.{spnl:+,.0f}`")
 
     lines += [
         "",
@@ -423,11 +451,11 @@ def _build_report(start_date: str, end_date: str) -> str:
         "",
         "## Period — Crypto",
         f"- Trades: {crypto_count}",
-        f"- P&L: {crypto_pnl:+.2f} USDT (≈ Rs.{crypto_pnl * INR_RATE:+,.0f})",
+        f"- P&L: {crypto_pnl:+.2f} USDT (≈ Rs.{crypto_pnl * INR_PER_USDT:+,.0f})",
         "",
         "## Period — US Stocks",
         f"- Trades: {us_count}",
-        f"- P&L: ${us_pnl:+.2f} (≈ Rs.{us_pnl * INR_RATE:+,.0f})",
+        f"- P&L: ${us_pnl:+.2f} (≈ Rs.{us_pnl * INR_PER_USD:+,.0f})",
         "",
         "## P&L Summary",
         f"- Realized (period, all markets): Rs.{realized_combined:+,.0f}",

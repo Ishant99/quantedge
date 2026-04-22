@@ -87,7 +87,7 @@ STOCH_D_PERIOD      = 3
 STOCH_OVERBOUGHT    = 80
 STOCH_OVERSOLD      = 20
 OBV_TREND_LOOKBACK  = 10
-TA_MIN_TREND_ADX    = float(_S("TA_MIN_TREND_ADX", default=18.0))
+TA_MIN_TREND_ADX    = float(_S("TA_MIN_TREND_ADX", default=20.0))
 TA_MAX_BUY_STOCH    = float(_S("TA_MAX_BUY_STOCH", default=88.0))
 
 # -----------------------------------------------------------------------------
@@ -139,6 +139,9 @@ MAX_WEEKLY_LOSS_PCT  = float(_S("MAX_WEEKLY_LOSS_PCT",  default=0.07))
 TRAIL_PCT            = float(_S("TRAIL_PCT",            default=0.02))
 CORRELATION_THRESHOLD= float(_S("CORRELATION_THRESHOLD",default=0.75))
 MAX_SAME_SECTOR      = int(  _S("MAX_SAME_SECTOR",      default=2))
+HOLD_DAYS_MAX        = int(  _S("HOLD_DAYS_MAX",        default=12))   # auto-exit after N days
+MAX_POSITION_RISK_PCT= float(_S("MAX_POSITION_RISK_PCT",default=0.03)) # single trade max 3% risk
+IV_RANK_MIN          = float(_S("IV_RANK_MIN",          default=0.60)) # options: min IV percentile
 SECTOR_HOT_MULT      = float(_S("SECTOR_HOT_MULT",      default=1.2))
 SECTOR_COLD_MULT     = float(_S("SECTOR_COLD_MULT",     default=0.7))
 
@@ -255,8 +258,59 @@ TELEGRAM_CHAT_ID    = _S("TELEGRAM_CHAT_ID",   "TELEGRAM_CHAT_ID",   "")
 DISCORD_BOT_TOKEN   = _S("DISCORD_BOT_TOKEN",  "DISCORD_BOT_TOKEN",  "")
 DISCORD_CHANNEL_ID  = _S("DISCORD_CHANNEL_ID", "DISCORD_CHANNEL_ID", "")
 
+# Dashboard / API security (leave blank to disable auth in dev mode)
+DASHBOARD_PASSWORD  = _S("DASHBOARD_PASSWORD", "DASHBOARD_PASSWORD", "")
+API_SECRET_KEY      = _S("API_SECRET_KEY",      "API_SECRET_KEY",      "")
+
 # -----------------------------------------------------------------------------
 # LOGGING
 # -----------------------------------------------------------------------------
 LOG_FILE            = "logs/agent.log"
 LOG_LEVEL           = "INFO"
+
+# -----------------------------------------------------------------------------
+# CONFIG VALIDATION — called once at import time
+# Raises ValueError with a descriptive message so misconfiguration is
+# caught at startup rather than silently corrupting trades.
+# -----------------------------------------------------------------------------
+def _validate_config():
+    errors = []
+
+    def _chk(condition: bool, msg: str):
+        if not condition:
+            errors.append(msg)
+
+    _chk(0.001 <= RISK_PER_TRADE_PCT <= 0.05,
+         f"RISK_PER_TRADE_PCT={RISK_PER_TRADE_PCT} out of range (0.001–0.05)")
+    _chk(1 <= MAX_OPEN_POSITIONS <= 20,
+         f"MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS} out of range (1–20)")
+    _chk(0.01 <= MAX_DAILY_LOSS_PCT <= 0.20,
+         f"MAX_DAILY_LOSS_PCT={MAX_DAILY_LOSS_PCT} out of range (0.01–0.20)")
+    _chk(0.01 <= MAX_WEEKLY_LOSS_PCT <= 0.40,
+         f"MAX_WEEKLY_LOSS_PCT={MAX_WEEKLY_LOSS_PCT} out of range (0.01–0.40)")
+    _chk(MAX_WEEKLY_LOSS_PCT >= MAX_DAILY_LOSS_PCT,
+         "MAX_WEEKLY_LOSS_PCT must be >= MAX_DAILY_LOSS_PCT")
+    _chk(0.001 <= TRAIL_PCT <= 0.10,
+         f"TRAIL_PCT={TRAIL_PCT} out of range (0.001–0.10)")
+    _chk(VIRTUAL_CAPITAL >= 10_000,
+         f"VIRTUAL_CAPITAL={VIRTUAL_CAPITAL} too small (minimum 10,000)")
+    _chk(1.0 <= REWARD_RISK_RATIO <= 5.0,
+         f"REWARD_RISK_RATIO={REWARD_RISK_RATIO} out of range (1.0–5.0)")
+    _chk(0.5 <= ATR_SL_MULTIPLIER <= 4.0,
+         f"ATR_SL_MULTIPLIER={ATR_SL_MULTIPLIER} out of range (0.5–4.0)")
+    _chk(0.30 <= MIN_CONFIDENCE <= 0.95,
+         f"MIN_CONFIDENCE={MIN_CONFIDENCE} out of range (0.30–0.95)")
+    _chk(1 <= HOLD_DAYS_MAX <= 90,
+         f"HOLD_DAYS_MAX={HOLD_DAYS_MAX} out of range (1–90)")
+    _chk(0.01 <= MAX_POSITION_RISK_PCT <= 0.10,
+         f"MAX_POSITION_RISK_PCT={MAX_POSITION_RISK_PCT} out of range (0.01–0.10)")
+    _chk(0.20 <= IV_RANK_MIN <= 0.95,
+         f"IV_RANK_MIN={IV_RANK_MIN} out of range (0.20–0.95)")
+
+    if errors:
+        raise ValueError(
+            "Config validation failed — fix these values in user_settings.json or .env:\n"
+            + "\n".join(f"  • {e}" for e in errors)
+        )
+
+_validate_config()

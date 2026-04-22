@@ -12,11 +12,40 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import sqlite3
 from dataclasses import dataclass
 from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO
 from utils import get_logger
 
 logger = get_logger("DynamicSizing")
+
+_TRADES_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "trades.db")
+
+
+def _kelly_multiplier(setup_type: str) -> float:
+    """Half-Kelly fraction based on historical win rate for this setup_type."""
+    try:
+        conn = sqlite3.connect(_TRADES_DB)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) "
+            "FROM trades WHERE setup_type = ? AND status = 'closed'",
+            (setup_type,),
+        )
+        row = cur.fetchone()
+        conn.close()
+        total, wins = (row[0] or 0), (row[1] or 0)
+        if total < 10:
+            return 1.0  # insufficient history — no adjustment
+        win_rate = wins / total
+        loss_rate = 1 - win_rate
+        avg_rr = REWARD_RISK_RATIO
+        kelly = (win_rate * avg_rr - loss_rate) / avg_rr
+        half_kelly = max(0.3, min(1.5, kelly * 0.5))
+        logger.debug(f"Kelly({setup_type}): win={win_rate:.0%} n={total} → half-Kelly={half_kelly:.2f}")
+        return round(half_kelly, 2)
+    except Exception:
+        return 1.0
 
 
 @dataclass
@@ -50,6 +79,7 @@ class DynamicPositionSizer:
         sector_multiplier:float= 1.0,
         regime_multiplier:float= 1.0,
         fii_score:        float= 5.0,
+        setup_type:       str  = "",
     ) -> SizingResult:
         """
         Calculate position size with all factors applied.
@@ -101,6 +131,10 @@ class DynamicPositionSizer:
         # FII multiplier (scale 0-10 score to 0.8-1.2 multiplier)
         fii_mult = 0.8 + (fii_score / 10) * 0.4
         multipliers["fii"] = round(fii_mult, 2)
+
+        # Kelly Criterion multiplier from historical win rate per setup type
+        if setup_type:
+            multipliers["kelly"] = _kelly_multiplier(setup_type)
 
         # Combined multiplier
         combined = 1.0

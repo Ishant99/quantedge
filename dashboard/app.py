@@ -59,6 +59,38 @@ st.set_page_config(
 )
 
 # =============================================================================
+# DASHBOARD AUTHENTICATION
+# Password is read from DASHBOARD_PASSWORD env var or user_settings.json.
+# If not set, auth is skipped (localhost dev convenience).
+# =============================================================================
+def _check_auth():
+    _pwd = os.environ.get("DASHBOARD_PASSWORD") or S.get("DASHBOARD_PASSWORD", "")
+    if not _pwd:
+        return  # no password configured — open access (dev mode)
+
+    if st.session_state.get("authenticated"):
+        return  # already verified this session
+
+    st.markdown(
+        "<h2 style='text-align:center;color:#FF6B00;margin-top:15vh'>QuantEdge Pro</h2>"
+        "<p style='text-align:center;color:#888'>Enter dashboard password to continue</p>",
+        unsafe_allow_html=True,
+    )
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        entered = st.text_input("Password", type="password", label_visibility="collapsed",
+                                placeholder="Password…")
+        if st.button("Login", use_container_width=True):
+            if entered == _pwd:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+    st.stop()
+
+_check_auth()
+
+# =============================================================================
 # BLOOMBERG CSS
 # =============================================================================
 st.markdown("""

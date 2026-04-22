@@ -8,6 +8,15 @@ from urllib.parse import parse_qs, urlparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+# API key auth: set API_SECRET_KEY env var or user_settings.json to enable.
+# If blank, auth is disabled (localhost dev convenience).
+def _get_api_key() -> str:
+    try:
+        import settings.manager as _S
+        return os.environ.get("API_SECRET_KEY") or _S.get("API_SECRET_KEY", "")
+    except Exception:
+        return os.environ.get("API_SECRET_KEY", "")
+
 from services.api_data import (  # noqa: E402
     activity_payload,
     analytics_summary_payload,
@@ -56,10 +65,25 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _is_authorised(self) -> bool:
+        """Check Bearer token or X-API-Key header. Skipped if no key configured."""
+        required = _get_api_key()
+        if not required:
+            return True  # auth disabled
+        auth_header = self.headers.get("Authorization", "")
+        api_key_header = self.headers.get("X-API-Key", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:] == required
+        return api_key_header == required
+
     def do_OPTIONS(self):
         self._send_json(200, {"ok": True})
 
     def do_GET(self):
+        if not self._is_authorised():
+            self._send_json(401, {"ok": False, "error": "Unauthorised — provide Bearer token or X-API-Key header"})
+            return
+
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         path = parsed.path.rstrip("/") or "/"

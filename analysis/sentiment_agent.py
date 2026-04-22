@@ -86,10 +86,14 @@ class SentimentAgent:
         "Metals":     ["steel prices", "metal sector", "iron ore", "aluminium", "copper"],
     }
 
+    # File used to persist sentiment scores between scans for momentum tracking
+    _MOMENTUM_CACHE = "logs/sentiment_momentum.json"
+
     def __init__(self):
         self.ollama_available = self._check_ollama()
         # Cache market-wide headlines once per run
         self._market_headlines = None
+        self._prev_scores: dict = self._load_momentum_cache()
         if self.ollama_available:
             logger.info(f"Ollama connected — using {SENTIMENT_MODEL} for sentiment")
         else:
@@ -121,6 +125,22 @@ class SentimentAgent:
 
         # Boost confidence when we have more headlines
         confidence = min(0.95, confidence + len(stock_headlines) * 0.05)
+
+        # Sentiment momentum: if score is accelerating positively vs. last scan,
+        # slightly boost score and confidence to reward improving setups.
+        prev = self._prev_scores.get(symbol)
+        if prev is not None:
+            delta = score - prev
+            if delta >= 0.20:       # strong positive acceleration
+                score      = min(1.0, score + 0.08)
+                confidence = min(0.95, confidence + 0.05)
+                logger.debug(f"{symbol}: sentiment momentum +{delta:.2f} → boosted")
+            elif delta <= -0.20:    # strong negative acceleration — penalise
+                score      = max(-1.0, score - 0.08)
+                confidence = min(0.95, confidence + 0.03)
+                logger.debug(f"{symbol}: sentiment momentum {delta:.2f} → penalised")
+        self._prev_scores[symbol] = round(score, 3)
+        self._save_momentum_cache()
 
         # Lower neutral threshold — be decisive
         if score > 0.1:
@@ -346,3 +366,22 @@ Return ONLY a JSON object, nothing else:
             return r.status_code == 200
         except Exception:
             return False
+
+    def _load_momentum_cache(self) -> dict:
+        try:
+            import json as _json
+            os.makedirs("logs", exist_ok=True)
+            if os.path.exists(self._MOMENTUM_CACHE):
+                with open(self._MOMENTUM_CACHE) as f:
+                    return _json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_momentum_cache(self):
+        try:
+            import json as _json
+            with open(self._MOMENTUM_CACHE, "w") as f:
+                _json.dump(self._prev_scores, f)
+        except Exception:
+            pass

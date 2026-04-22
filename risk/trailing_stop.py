@@ -15,11 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import yfinance as yf
-from datetime import datetime
-from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE, TRAIL_PCT, SQLITE_DB_FILE
+from datetime import datetime, timezone
+from config import VIRTUAL_PORTFOLIO_FILE, TRADING_MODE, TRAIL_PCT, SQLITE_DB_FILE, HOLD_DAYS_MAX
 from execution.portfolio_lock import load_portfolio_locked, save_portfolio_locked
 from utils import get_logger
 from utils.telegram import send
+from utils.alert_formatter import sl_alert_allowed
 
 logger = get_logger("TrailingStop")
 
@@ -55,29 +56,50 @@ class TrailingStopMonitor:
                 updates[symbol] = result
                 if result["action"] == "MOVE_SL":
                     positions[symbol]["stop_loss"] = result["new_sl"]
+                    moved_up  = round(result["new_sl"] - result["old_sl"], 2)
+                    locked    = result["locked_profit"]
+                    reason    = result.get("reason", "")
                     logger.info(f"{symbol}: SL moved UP "
-                                f"Rs.{result['old_sl']:,.0f} -> Rs.{result['new_sl']:,.0f} "
-                                f"(price: Rs.{result['current_price']:,.0f})")
-                    locked = result['locked_profit']
-                    if locked >= 0:
-                        profit_line = f"Locked profit: `Rs.{locked:+,.0f}`"
+                                f"₹{result['old_sl']:,.0f} → ₹{result['new_sl']:,.0f} "
+                                f"(price: ₹{result['current_price']:,.0f})")
+
+                    if reason == "breakeven":
+                        msg = (
+                            f"📈 *Stop Loss at Breakeven — {symbol}*\n"
+                            f"Position is up {result.get('gain_pct', 0):.1f}% — "
+                            f"stop loss moved to your entry price.\n"
+                            f"Current price: `₹{result['current_price']:,.0f}`\n"
+                            f"Stop loss now: `₹{result['new_sl']:,.0f}` (your entry)\n"
+                            f"_This trade can no longer lose money._"
+                        )
+                    elif locked >= 0:
+                        msg = (
+                            f"📈 *Stop Loss Raised — {symbol}*\n"
+                            f"Your stop loss moved up by ₹{moved_up:,.0f}.\n"
+                            f"Current price: `₹{result['current_price']:,.0f}`\n"
+                            f"New stop loss: `₹{result['new_sl']:,.0f}` (was ₹{result['old_sl']:,.0f})\n"
+                            f"✅ `₹{locked:+,.0f}` profit now protected"
+                        )
                     else:
-                        profit_line = f"Min P&L if SL hit: `Rs.{locked:+,.0f}` (below breakeven)"
-                    send(f"*Trailing SL Update*\n"
-                         f"{symbol}: Stop loss moved UP\n"
-                         f"Price: `Rs.{result['current_price']:,.0f}`\n"
-                         f"New SL: `Rs.{result['new_sl']:,.0f}` "
-                         f"(was Rs.{result['old_sl']:,.0f})\n"
-                         f"{profit_line}")
+                        msg = (
+                            f"📈 *Stop Loss Raised — {symbol}*\n"
+                            f"Current price: `₹{result['current_price']:,.0f}`\n"
+                            f"New stop loss: `₹{result['new_sl']:,.0f}` (was ₹{result['old_sl']:,.0f})"
+                        )
+                    send(msg)
 
                 elif result["action"] == "EXIT":
                     exits.append(symbol)
-                    logger.info(f"{symbol}: STOP LOSS HIT at Rs.{result['current_price']:,.0f} "
-                                f"(SL was Rs.{pos['stop_loss']:,.0f})")
-                    send(f"*Stop Loss Hit*\n"
-                         f"{symbol}: Position closed\n"
-                         f"Exit price: `Rs.{result['current_price']:,.0f}`\n"
-                         f"P&L: `Rs.{result['pnl']:+,.0f}`")
+                    pnl = result.get("pnl", 0)
+                    logger.info(f"{symbol}: STOP LOSS HIT at ₹{result['current_price']:,.0f} "
+                                f"(SL was ₹{pos['stop_loss']:,.0f})")
+                    icon = "✅" if pnl >= 0 else "🔴"
+                    send(
+                        f"{icon} *Stop Loss Hit — {symbol}*\n"
+                        f"Position automatically closed at your stop loss.\n"
+                        f"Exit price: `₹{result['current_price']:,.0f}`\n"
+                        f"P&L: `₹{pnl:+,.0f}`"
+                    )
 
         # Remove exited positions + close in SQLite
         for sym in exits:
@@ -171,10 +193,72 @@ class TrailingStopMonitor:
                     "pnl":           round(pnl, 2),
                 }
 
-            # Calculate trailing SL
-            # New SL = current price * (1 - TRAIL_PCT)
-            # Only move UP — never lower the SL
-            new_sl = round(current * (1 - TRAIL_PCT), 2)
+            # --- Time-based exit: auto-close positions held too long ---
+            try:
+                ts_str   = pos.get("timestamp", "")
+                if ts_str:
+                    entry_dt = datetime.fromisoformat(ts_str)
+                    # make both naive for comparison
+                    now_dt   = datetime.now()
+                    if entry_dt.tzinfo:
+                        entry_dt = entry_dt.replace(tzinfo=None)
+                    held_days = (now_dt - entry_dt).days
+                    if held_days >= HOLD_DAYS_MAX:
+                        pnl = (current - entry) * qty
+                        logger.info(
+                            f"{symbol}: time-based exit after {held_days}d "
+                            f"(max {HOLD_DAYS_MAX}d) | PnL ₹{pnl:+,.0f}"
+                        )
+                        return {
+                            "action":        "EXIT",
+                            "reason":        f"held {held_days}d ≥ HOLD_DAYS_MAX {HOLD_DAYS_MAX}d",
+                            "current_price": round(current, 2),
+                            "exit_price":    round(current, 2),
+                            "pnl":           round(pnl, 2),
+                        }
+            except Exception:
+                pass
+
+            # --- Breakeven trailing: move SL to entry when gain ≥ 2% ---
+            gain_pct = (current - entry) / entry * 100
+            if gain_pct >= 2.0 and sl < entry:
+                logger.info(f"{symbol}: breakeven SL triggered (+{gain_pct:.1f}%) — moving SL to entry ₹{entry}")
+                return {
+                    "action":        "MOVE_SL",
+                    "current_price": round(current, 2),
+                    "old_sl":        round(sl, 2),
+                    "new_sl":        round(entry, 2),
+                    "locked_profit": 0.0,
+                    "gain_pct":      round(gain_pct, 2),
+                    "reason":        "breakeven",
+                }
+
+            # --- Approaching SL alert: warn when within 2% of stop ---
+            sl_gap_pct = (current - sl) / max(current, 1) * 100
+            if 0 < sl_gap_pct <= 2.0:
+                try:
+                    if sl_alert_allowed(symbol):
+                        loss_if_hit = round((sl - entry) * qty, 0)
+                        send(
+                            f"⚠️ *Stop Loss Warning — {symbol}*\n"
+                            f"Price is very close to your stop loss.\n"
+                            f"Current price: `₹{current:,.2f}`\n"
+                            f"Stop loss at:  `₹{sl:,.2f}` (only {sl_gap_pct:.1f}% away)\n"
+                            f"If stop hits:  `₹{loss_if_hit:+,.0f}` loss"
+                        )
+                except Exception:
+                    pass
+
+            # Tighten trail as the gain grows — outsized winners get a tighter leash
+            # so a late reversal can't wipe out most of the profit.
+            if gain_pct >= 20:
+                trail_pct = 0.010
+            elif gain_pct >= 10:
+                trail_pct = 0.015
+            else:
+                trail_pct = TRAIL_PCT
+
+            new_sl = max(round(current * (1 - trail_pct), 2), entry)
 
             if new_sl > sl:
                 locked = (new_sl - entry) * qty
@@ -184,7 +268,7 @@ class TrailingStopMonitor:
                     "old_sl":        round(sl, 2),
                     "new_sl":        new_sl,
                     "locked_profit": round(locked, 2),
-                    "gain_pct":      round((current - entry) / entry * 100, 2),
+                    "gain_pct":      round(gain_pct, 2),
                 }
 
             # No action needed

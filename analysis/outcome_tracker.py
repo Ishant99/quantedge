@@ -269,24 +269,28 @@ class OutcomeTracker:
         sl_list  = [r for r in resolved if r["outcome"] == "SL_HIT"]
         exp_list = [r for r in resolved if r["outcome"] == "EXPIRED"]
 
-        lines = ["*Signal Outcomes — Today*", ""]
+        lines = ["*📋 Trade Outcomes — Today*", ""]
 
         if tp_list:
-            lines.append(f"TARGET HIT ({len(tp_list)})")
+            lines.append(f"🎯 *Target reached ({len(tp_list)})*")
             for r in tp_list:
-                lines.append(f"  {r['symbol']}  {r['pnl_pct']:+.1f}%  "
-                             f"({r['days']}d)  entry Rs.{r['entry']:,.0f}")
+                lines.append(
+                    f"  ✅ {r['symbol']}  `{r['pnl_pct']:+.1f}%`  "
+                    f"held {r['days']}d  entry ₹{r['entry']:,.0f}"
+                )
 
         if sl_list:
-            lines.append(f"STOP HIT ({len(sl_list)})")
+            lines.append(f"\n🛑 *Stop loss hit ({len(sl_list)})*")
             for r in sl_list:
-                lines.append(f"  {r['symbol']}  {r['pnl_pct']:+.1f}%  "
-                             f"({r['days']}d)  entry Rs.{r['entry']:,.0f}")
+                lines.append(
+                    f"  🔴 {r['symbol']}  `{r['pnl_pct']:+.1f}%`  "
+                    f"held {r['days']}d  entry ₹{r['entry']:,.0f}"
+                )
 
         if exp_list:
-            lines.append(f"EXPIRED ({len(exp_list)})")
+            lines.append(f"\n⏱ *Timed out — held too long ({len(exp_list)})*")
             for r in exp_list:
-                lines.append(f"  {r['symbol']}  {r['pnl_pct']:+.1f}%  expired")
+                lines.append(f"  ➡️ {r['symbol']}  `{r['pnl_pct']:+.1f}%`  closed at time limit")
 
         send("\n".join(lines))
 
