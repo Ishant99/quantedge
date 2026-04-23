@@ -543,7 +543,7 @@ def sync_unified_state() -> dict:
                     setup_type, regime_tag, quality_score, expectancy_score,
                     symbol_edge, setup_edge, quality_flags, timestamp, executed,
                     source, reasoning, raw_json, synced_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     (
