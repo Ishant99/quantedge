@@ -28,13 +28,13 @@ name: Deploy to Oracle VM
 
 on:
   push:
-    branches: [ main, codex-v2-phase-rollout ]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       deploy_ref:
         description: "Branch or ref to deploy manually"
         required: false
-        default: "codex-v2-phase-rollout"
+        default: "main"
 
 jobs:
   lint:
