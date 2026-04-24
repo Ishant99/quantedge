@@ -14,12 +14,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import numpy as np
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import yfinance as yf
 from utils import get_logger
 
 logger = get_logger("MarketRegime")
+
+_REGIME_STATE_FILE = "logs/regime_state.json"
+_STABILITY_REQUIRED = 2   # consecutive scans before committing a regime change
 
 
 @dataclass
@@ -34,15 +39,67 @@ class RegimeResult:
     allow_shorts:   bool    # True in bear/sideways — scan for bearish setups
     position_size_multiplier: float   # 1.0 = normal, 0.5 = cautious, 0.0 = blocked
     message:        str
+    stability_count: int = 0  # how many consecutive scans in committed regime
 
 
 class MarketRegimeFilter:
     """
     Checks Nifty 50 trend before allowing buy signals.
     Protects portfolio from buying into falling markets.
+    Uses a 2-scan stability gate to prevent rapid regime flipping on volatile opens.
     """
 
-    NIFTY_TICKER = "^NSEI"   # Nifty 50 on yfinance
+    NIFTY_TICKER = "^NSEI"
+
+    def __init__(self):
+        self._state = self._load_state()
+
+    def _load_state(self) -> dict:
+        os.makedirs("logs", exist_ok=True)
+        if os.path.exists(_REGIME_STATE_FILE):
+            try:
+                with open(_REGIME_STATE_FILE) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"committed_regime": "bull", "pending_regime": None, "stability_count": 0}
+
+    def _save_state(self):
+        with open(_REGIME_STATE_FILE, "w") as f:
+            json.dump(self._state, f, indent=2)
+
+    def _apply_hysteresis(self, raw_regime: str) -> tuple[str, int]:
+        """
+        Returns (committed_regime, stability_count).
+        Only commits a new regime after _STABILITY_REQUIRED consecutive matching scans.
+        """
+        committed = self._state.get("committed_regime", "bull")
+        pending   = self._state.get("pending_regime")
+        count     = self._state.get("stability_count", 0)
+
+        if raw_regime == committed:
+            # Stable — reset any pending transition
+            self._state["pending_regime"]  = None
+            self._state["stability_count"] = 0
+        elif raw_regime == pending:
+            # Same pending regime as last scan — increment counter
+            count += 1
+            self._state["stability_count"] = count
+            if count >= _STABILITY_REQUIRED:
+                logger.info(f"[REGIME] Committing regime change: {committed} → {raw_regime} "
+                            f"(stable for {count} scans)")
+                self._state["committed_regime"] = raw_regime
+                self._state["pending_regime"]   = None
+                self._state["stability_count"]  = 0
+                committed = raw_regime
+        else:
+            # New candidate regime — start fresh counter
+            self._state["pending_regime"]  = raw_regime
+            self._state["stability_count"] = 1
+            logger.debug(f"[REGIME] Pending transition: {committed} → {raw_regime} (1/{_STABILITY_REQUIRED})")
+
+        self._save_state()
+        return committed, self._state.get("stability_count", 0)
 
     def get_regime(self) -> RegimeResult:
         """Fetch Nifty 50 data and determine current market regime."""
@@ -136,6 +193,22 @@ class MarketRegimeFilter:
             except Exception as _be:
                 logger.debug(f"Breadth adjustment skipped: {_be}")
 
+            # Apply hysteresis — only commit regime after 2 consecutive matching scans
+            committed_regime, stability_count = self._apply_hysteresis(regime)
+            if committed_regime != regime:
+                logger.info(f"[REGIME] Hysteresis active: using committed={committed_regime} "
+                            f"(raw={regime}, stability={stability_count}/{_STABILITY_REQUIRED})")
+                # Revert allow/shorts/ps_mult to committed regime values
+                committed_map = {
+                    "bull":     (True,  False, min(ps_mult, 1.0)),
+                    "recovery": (True,  False, min(ps_mult, 0.7)),
+                    "sideways": (True,  True,  min(ps_mult, 0.5)),
+                    "bear":     (False, True,  0.0),
+                }
+                allow, allow_shorts, ps_mult = committed_map.get(committed_regime,
+                                                                  (True, False, ps_mult))
+                regime = committed_regime
+
             result = RegimeResult(
                 regime                   = regime,
                 nifty_trend              = trend,
@@ -147,6 +220,7 @@ class MarketRegimeFilter:
                 allow_shorts             = allow_shorts,
                 position_size_multiplier = ps_mult,
                 message                  = message,
+                stability_count          = stability_count,
             )
 
             logger.info(f"Market regime: {regime.upper()} | "

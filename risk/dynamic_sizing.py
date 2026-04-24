@@ -26,9 +26,9 @@ _vix_cache: dict = {}
 
 
 def _get_india_vix() -> float:
-    """Fetch India VIX. Cached for 1 hour — only 1 yfinance call per session."""
+    """Fetch India VIX. Cached for 15 minutes — reduces stale values during intraday moves."""
     import time
-    if _vix_cache.get("ts", 0) and time.time() - _vix_cache["ts"] < 3600:
+    if _vix_cache.get("ts", 0) and time.time() - _vix_cache["ts"] < 900:
         return _vix_cache["value"]
     try:
         hist = yf.Ticker("^INDIAVIX").history(period="2d", interval="1d")
@@ -112,6 +112,8 @@ class DynamicPositionSizer:
         regime_multiplier:float= 1.0,
         fii_score:        float= 5.0,
         setup_type:       str  = "",
+        sentiment_modifier: float = 0.0,   # Layer 3 only: ±0.10 additive on position_size_pct
+        journal=None,                      # DecisionJournal — votes appended if provided
     ) -> SizingResult:
         """
         Calculate position size with all factors applied.
@@ -182,15 +184,23 @@ class DynamicPositionSizer:
         adjusted_risk = base_risk * combined
 
         # Calculate stop loss and position size
-        # Widen SL in high-volatility markets (VIX > 15 → 2x ATR, else 1.5x)
-        vix         = _get_india_vix()
-        atr_mult    = 2.0 if vix > 15 else 1.5
+        # Widen SL proportionally with VIX (linear interpolation, no hard jump)
+        vix      = _get_india_vix()
+        atr_mult = 1.5 + max(0.0, (vix - 15) / 15) * 0.5   # 1.5 at VIX≤15, 2.0 at VIX=30
         sl_distance = max(atr_mult * atr, entry_price * 0.02)
         stop_loss   = round(entry_price - sl_distance, 2)
         take_profit = round(entry_price + (REWARD_RISK_RATIO * sl_distance), 2)
 
         risk_amount  = portfolio_value * adjusted_risk
         position_size= int(risk_amount / sl_distance) if sl_distance > 0 else 0
+        capital_risk = round(position_size * sl_distance, 2)
+
+        # Apply sentiment modifier: additive ±10% on position size (Layer 3 only)
+        sentiment_modifier = max(-0.10, min(0.10, sentiment_modifier))
+        if sentiment_modifier != 0.0:
+            position_size = max(0, int(position_size * (1.0 + sentiment_modifier)))
+            multipliers["sentiment_modifier"] = round(1.0 + sentiment_modifier, 3)
+
         capital_risk = round(position_size * sl_distance, 2)
 
         reasoning = (
@@ -200,6 +210,26 @@ class DynamicPositionSizer:
         )
 
         logger.info(f"{symbol}: {reasoning}")
+
+        # Append Layer 3 journal votes
+        if journal is not None:
+            for name, val in multipliers.items():
+                vote = "BUY" if val >= 1.0 else "REDUCE"
+                journal.add_vote(3, name, vote, raw_score=val, weight=val,
+                                 note=f"{name}={val:.2f}")
+            # Populate sizing_rationale
+            journal.sizing_rationale.base_risk_pct     = round(base_risk * 100, 2)
+            journal.sizing_rationale.confidence_mult   = multipliers.get("confidence", 1.0)
+            journal.sizing_rationale.kelly_mult        = multipliers.get("kelly", 1.0)
+            journal.sizing_rationale.vix_mult          = multipliers.get("vix", 1.0)
+            journal.sizing_rationale.regime_mult       = multipliers.get("regime", 1.0)
+            journal.sizing_rationale.pattern_mult      = multipliers.get("pattern", 1.0)
+            journal.sizing_rationale.sector_mult       = multipliers.get("sector", 1.0)
+            journal.sizing_rationale.fii_mult          = multipliers.get("fii", 1.0)
+            journal.sizing_rationale.sentiment_modifier = sentiment_modifier
+            journal.sizing_rationale.combined_mult     = combined
+            journal.sizing_rationale.final_risk_pct    = round(adjusted_risk * 100, 2)
+            journal.sizing_rationale.final_size        = max(0, position_size)
 
         return SizingResult(
             symbol            = symbol,

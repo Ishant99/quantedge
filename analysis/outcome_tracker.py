@@ -78,6 +78,14 @@ class OutcomeTracker:
         self._check_crypto_positions()
         self._check_us_positions()
 
+        # Update multi-horizon returns for all journalled signals
+        try:
+            from memory.portfolio_memory import PortfolioMemory
+            mem = PortfolioMemory()
+            self.track_journal_outcomes(mem)
+        except Exception as e:
+            logger.warning(f"track_journal_outcomes skipped: {e}")
+
         return counts
 
     def _check_fno_positions(self):
@@ -225,6 +233,15 @@ class OutcomeTracker:
                 conn.execute("ALTER TABLE signals ADD COLUMN outcome_date TEXT DEFAULT NULL")
             if "days_to_outcome" not in cols:
                 conn.execute("ALTER TABLE signals ADD COLUMN days_to_outcome INTEGER DEFAULT NULL")
+            if "outcome_1d" not in cols:
+                conn.execute("ALTER TABLE signals ADD COLUMN outcome_1d REAL DEFAULT NULL")
+                logger.info("OutcomeTracker: added 'outcome_1d' column to signals table")
+            if "outcome_3d" not in cols:
+                conn.execute("ALTER TABLE signals ADD COLUMN outcome_3d REAL DEFAULT NULL")
+                logger.info("OutcomeTracker: added 'outcome_3d' column to signals table")
+            if "outcome_5d" not in cols:
+                conn.execute("ALTER TABLE signals ADD COLUMN outcome_5d REAL DEFAULT NULL")
+                logger.info("OutcomeTracker: added 'outcome_5d' column to signals table")
 
     def _get_pending_signals(self) -> list[dict]:
         """Return all signals without an outcome yet (BUY signals only, not too old)."""
@@ -258,6 +275,116 @@ class OutcomeTracker:
     def _latest_price(self, symbol: str) -> float:
         hist = yf.Ticker(f"{symbol}.NS").history(period="2d", interval="1d", auto_adjust=True)
         return float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
+
+    def _price_at_date(self, symbol: str, date_str: str) -> float:
+        """
+        Fetch the closing price for a given symbol on or after date_str (up to +4 calendar days
+        to account for weekends/holidays).  Returns 0.0 if no data is available.
+        """
+        try:
+            start = datetime.fromisoformat(date_str)
+            end   = start + timedelta(days=6)
+            hist  = yf.Ticker(f"{symbol}.NS").history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                interval="1d",
+                auto_adjust=True,
+            )
+            if hist.empty:
+                return 0.0
+            # Return the first close on or after date_str
+            return float(hist["Close"].iloc[0])
+        except Exception as e:
+            logger.debug(f"_price_at_date({symbol}, {date_str}) failed: {e}")
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # Multi-horizon journal outcome tracking
+    # ------------------------------------------------------------------
+
+    def track_journal_outcomes(self, memory) -> int:
+        """
+        For every signal from the last 30 days that has a decision_journals row,
+        compute the return at 1d, 3d, and 5d from signal date and write the
+        values back via memory.update_journal_outcome().
+
+        Returns the number of signals processed.
+        """
+        if not os.path.exists(SQLITE_DB_FILE):
+            logger.debug("track_journal_outcomes: DB not found, skipping")
+            return 0
+
+        cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+
+        try:
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT s.id        AS signal_id,
+                           s.symbol    AS symbol,
+                           s.entry_price AS entry_price,
+                           s.timestamp AS sig_ts,
+                           dj.outcome_1d,
+                           dj.outcome_3d,
+                           dj.outcome_5d
+                    FROM signals s
+                    JOIN decision_journals dj ON dj.signal_id = s.id
+                    WHERE s.timestamp >= ?
+                      AND s.action = 'BUY'
+                      AND s.entry_price IS NOT NULL
+                    ORDER BY s.timestamp DESC
+                """, (cutoff,)).fetchall()
+        except Exception as e:
+            logger.warning(f"track_journal_outcomes: query failed: {e}")
+            return 0
+
+        if not rows:
+            logger.info("track_journal_outcomes: no journalled signals in last 30 days")
+            return 0
+
+        processed = 0
+        for row in rows:
+            signal_id  = row["signal_id"]
+            symbol     = row["symbol"]
+            entry_px   = row["entry_price"]
+            sig_date   = row["sig_ts"][:10]   # "YYYY-MM-DD"
+
+            if entry_px is None or entry_px == 0:
+                continue
+
+            for horizon, days_offset in (("1d", 1), ("3d", 3), ("5d", 5)):
+                # Skip horizons already recorded
+                existing_key = f"outcome_{horizon.replace('d', 'd')}"
+                if row[existing_key] is not None:
+                    continue
+
+                # Compute the target calendar date
+                target_date = (
+                    datetime.fromisoformat(sig_date) + timedelta(days=days_offset)
+                ).strftime("%Y-%m-%d")
+
+                # Don't fill future horizons yet
+                if datetime.fromisoformat(target_date).date() > datetime.now().date():
+                    continue
+
+                price = self._price_at_date(symbol, target_date)
+                if price and price > 0:
+                    return_pct = round((price - entry_px) / entry_px * 100, 4)
+                    try:
+                        memory.update_journal_outcome(signal_id, horizon, return_pct)
+                        logger.debug(
+                            f"track_journal_outcomes: {symbol} signal {signal_id} "
+                            f"{horizon} return={return_pct:+.2f}%"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"track_journal_outcomes: update failed for signal {signal_id}: {e}"
+                        )
+
+            processed += 1
+
+        logger.info(f"track_journal_outcomes: processed {processed} signals")
+        return processed
 
     # ------------------------------------------------------------------
     # Reporting

@@ -131,15 +131,33 @@ class CircuitBreaker:
         self._save_state()
 
     def _weekly_loss(self, current: float) -> float:
-        """Compare to value 5 trading days ago (or oldest available) from snapshots."""
+        """Compare to value ~5 trading days ago using date arithmetic, not index offset."""
         try:
             from memory.portfolio_memory import PortfolioMemory
             snaps = PortfolioMemory().get_snapshots()
             if not snaps:
                 return 0.0
-            # Use snapshot from ~5 days ago; fall back to oldest if fewer exist
-            ref = snaps[-5] if len(snaps) >= 5 else snaps[0]
-            week_ago = ref["portfolio_value"]
+
+            now = datetime.now()
+            ref = None
+
+            # Walk snapshots newest-first to find one that is 4-6 trading days old
+            for snap in reversed(snaps):
+                try:
+                    snap_dt = datetime.fromisoformat(snap["timestamp"])
+                    delta_days = (now - snap_dt).days
+                    # 4-6 calendar days covers Mon-Wed entries for a full trading week
+                    if 4 <= delta_days <= 8:
+                        ref = snap
+                        break
+                except Exception:
+                    continue
+
+            # Fallback: oldest available snapshot if no window match
+            if ref is None:
+                ref = snaps[0]
+
+            week_ago = ref.get("portfolio_value")
             if week_ago and week_ago > 0:
                 return max(0, (week_ago - current) / week_ago * 100)
         except Exception:

@@ -2780,6 +2780,105 @@ elif page == "HISTORY":
                     f"with at least {symbol_edge.get('min_sample', 3)} resolved outcomes."
                 )
 
+        # ── Section 1: Confidence Calibration Curve ──────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:18px;">CONFIDENCE CALIBRATION</div>',
+                    unsafe_allow_html=True)
+        st.caption("Stated p_direction vs actual win rate by confidence bucket. "
+                   "A well-calibrated model has dots on the diagonal.")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            cal_data = ConfidenceCalibrator().calibration_curve(n_buckets=8)
+            if cal_data:
+                cal_df = pd.DataFrame(cal_data)
+                fig_cal = go.Figure()
+                # Actual win rate bars
+                fig_cal.add_trace(go.Bar(
+                    x=[f"{r['bucket_low']:.0%}–{r['bucket_high']:.0%}" for r in cal_data],
+                    y=[r['actual_win_rate'] * 100 for r in cal_data],
+                    name="Actual Win Rate",
+                    marker_color=["#00C805" if r['actual_win_rate'] >= r['stated_pct'] else "#FF3B3B"
+                                  for r in cal_data],
+                    text=[f"n={r['n_trades']}" for r in cal_data],
+                    textposition="outside",
+                    textfont=dict(family="JetBrains Mono", size=9, color="#888"),
+                ))
+                # Stated confidence line
+                fig_cal.add_trace(go.Scatter(
+                    x=[f"{r['bucket_low']:.0%}–{r['bucket_high']:.0%}" for r in cal_data],
+                    y=[r['stated_pct'] * 100 for r in cal_data],
+                    mode="lines+markers",
+                    name="Stated Confidence",
+                    line=dict(color="#FF6B00", width=2, dash="dot"),
+                    marker=dict(size=6),
+                ))
+                fig_cal.update_layout(**_plotly_cfg(
+                    240,
+                    yaxis=dict(title="Win Rate %", range=[0, 110], color="#555", gridcolor="#1a1a1a"),
+                    xaxis=dict(color="#555"),
+                    showlegend=True,
+                    legend=dict(orientation="h", font=dict(color="#666", size=9, family="JetBrains Mono")),
+                ))
+                st.plotly_chart(fig_cal, use_container_width=True)
+            else:
+                st.info("Calibration requires resolved signals (TP_HIT/SL_HIT). Check back after a few trades.")
+        except Exception as _ce:
+            st.info(f"Calibration not available yet: {_ce}")
+
+        # ── Section 2: Regime-Segmented Stats ────────────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:14px;">REGIME PERFORMANCE BREAKDOWN</div>',
+                    unsafe_allow_html=True)
+        st.caption("Win rate and average P&L segmented by market regime at signal time.")
+        try:
+            seg = PortfolioMemory().get_segmented_stats()
+            by_regime = seg.get("by_regime", {})
+            if by_regime:
+                reg_rows = []
+                for regime, s in by_regime.items():
+                    reg_rows.append({
+                        "Regime":      regime.upper(),
+                        "Trades":      s.get("trades", 0),
+                        "Win Rate":    f"{s.get('win_rate', 0)*100:.1f}%",
+                        "Avg P&L":     f"Rs.{s.get('avg_pnl', 0):,.0f}",
+                    })
+                st.dataframe(pd.DataFrame(reg_rows), use_container_width=True, hide_index=True, height=200)
+
+            by_conf = seg.get("by_confidence", {})
+            if by_conf:
+                st.markdown('<div class="bb-header" style="margin-top:10px;">BY CONFIDENCE BUCKET</div>',
+                            unsafe_allow_html=True)
+                conf_rows = [{"Bucket": k, "Trades": v.get("trades",0),
+                              "Win Rate": f"{v.get('win_rate',0)*100:.1f}%",
+                              "Avg P&L": f"Rs.{v.get('avg_pnl',0):,.0f}"}
+                             for k, v in sorted(by_conf.items())]
+                st.dataframe(pd.DataFrame(conf_rows), use_container_width=True, hide_index=True, height=200)
+        except Exception as _se:
+            st.info(f"Segmented stats not available: {_se}")
+
+        # ── Section 3: Module Attribution ─────────────────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:14px;">MODULE ATTRIBUTION</div>',
+                    unsafe_allow_html=True)
+        st.caption("Edge contribution per pipeline module — based on actual TP/SL outcomes from decision journals.")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            attrib = ConfidenceCalibrator().module_attribution()
+            if attrib:
+                attr_rows = []
+                for module, stats in list(attrib.items())[:12]:
+                    edge = stats.get("edge", 0)
+                    attr_rows.append({
+                        "Module":   module,
+                        "BUY Votes": stats.get("n_votes", 0),
+                        "TP Rate":  f"{stats.get('tp_rate', 0)*100:.1f}%",
+                        "SL Rate":  f"{stats.get('sl_rate', 0)*100:.1f}%",
+                        "Edge":     f"{'+' if edge>=0 else ''}{edge*100:.1f}%",
+                    })
+                attr_df = pd.DataFrame(attr_rows)
+                st.dataframe(attr_df, use_container_width=True, hide_index=True, height=350)
+            else:
+                st.info("Module attribution requires decision journals with resolved outcomes.")
+        except Exception as _ae:
+            st.info(f"Module attribution not available: {_ae}")
+
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
             with st.spinner("Checking gates..."):

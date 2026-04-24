@@ -112,10 +112,10 @@ class SentimentAgent:
         all_weights   = stock_weights   + [0.6] * len(sector_headlines[:3])
 
         if not all_headlines:
-            # No news = slightly positive bias (no bad news = good news in markets)
+            # No news = truly neutral; do not inflate confidence on absence of data
             return SentimentResult(
-                symbol=symbol, score=0.15, label="neutral",
-                headlines=[], confidence=0.2
+                symbol=symbol, score=0.0, label="neutral",
+                headlines=[], confidence=0.1
             )
 
         if self.ollama_available and stock_headlines:
@@ -155,6 +155,25 @@ class SentimentAgent:
             label=label, headlines=all_headlines[:5],
             confidence=round(confidence, 2)
         )
+
+    def get_sizing_modifier(self, result: SentimentResult) -> float:
+        """
+        Layer 3 role of sentiment: return a position-size modifier in ±0.10 range.
+        Sentiment is NOT used for directional decisions (Layer 1 / Layer 2).
+        Strong positive news → +10% size.  Strong negative → -10% size.
+        Low confidence sentiment → no modification.
+        """
+        if result.confidence < 0.3:
+            return 0.0
+        if result.score >= 0.5 and result.confidence >= 0.6:
+            return 0.10
+        if result.score >= 0.25:
+            return 0.05
+        if result.score <= -0.5 and result.confidence >= 0.6:
+            return -0.10
+        if result.score <= -0.25:
+            return -0.05
+        return 0.0
 
     def analyse_all(self, symbols: list[str],
                     symbol_names: dict = None,
@@ -196,11 +215,11 @@ Headlines:
 {headlines_text}
 
 Rules:
-- Be DECISIVE — avoid neutral unless headlines are genuinely mixed
+- Rate accurately — neutral (0.0) is valid when headlines are mixed or unclear
 - Positive news about earnings, growth, deals = score 0.4 to 0.9
 - Negative news about losses, fines, weak results = score -0.4 to -0.9
-- Mixed or unclear = score -0.1 to 0.1
-- No news about company specifically = score 0.1 (slight positive bias)
+- Mixed or genuinely unclear = score -0.1 to 0.1
+- No news about the company specifically = score 0.0 (true neutral)
 
 Return ONLY a JSON object, nothing else:
 {{"score": 0.6, "confidence": 0.8, "reason": "strong earnings beat"}}"""
@@ -249,7 +268,7 @@ Return ONLY a JSON object, nothing else:
 
         total = pos + neg
         if total == 0:
-            return 0.15, 0.25   # slight positive bias when no keywords found
+            return 0.0, 0.15   # no keywords found — genuinely neutral
 
         score      = (pos - neg) / (total + 2)   # +2 dampens extremes
         confidence = min(0.85, 0.3 + total * 0.06)

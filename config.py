@@ -149,6 +149,11 @@ SECTOR_COLD_MULT     = float(_S("SECTOR_COLD_MULT",     default=0.7))
 VIX_HIGH_THRESHOLD    = float(_S("VIX_HIGH_THRESHOLD",    default=20.0))  # reduce to 75%
 VIX_EXTREME_THRESHOLD = float(_S("VIX_EXTREME_THRESHOLD", default=30.0))  # reduce to 50%
 
+# Risk gate thresholds (Phase 2)
+RISK_GATE_MIN_CONFIDENCE     = float(_S("RISK_GATE_MIN_CONFIDENCE",     default=0.55))
+ABSTENTION_MIN_P_DIRECTION   = float(_S("ABSTENTION_MIN_P_DIRECTION",   default=0.60))
+ABSTENTION_MIN_SETUP_QUALITY = float(_S("ABSTENTION_MIN_SETUP_QUALITY", default=0.55))
+
 # GIFT Nifty gap thresholds for pre-market signal
 GIFT_NIFTY_GAP_STRONG = float(_S("GIFT_NIFTY_GAP_STRONG", default=0.5))   # ±0.5% = strong
 GIFT_NIFTY_GAP_MILD   = float(_S("GIFT_NIFTY_GAP_MILD",   default=0.2))   # ±0.2% = mild

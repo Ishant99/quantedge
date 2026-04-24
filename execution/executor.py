@@ -53,6 +53,8 @@ class PaperExecutor:
         result = {}
 
         if signal.action == "BUY":
+            # Re-check after reload — trailing stop or scheduler may have opened/closed
+            # a position between the caller's check and now.
             if signal.symbol in self.portfolio["positions"]:
                 return {"status": "skipped", "reason": "position already open"}
 
@@ -353,6 +355,15 @@ class LiveExecutor:
         if signal.position_size <= 0:
             return {"status": "skipped", "reason": "position size is 0"}
 
+        # Guard against race conditions — re-check live positions before placing order
+        if signal.action == "BUY":
+            try:
+                live_positions = {p["tradingsymbol"] for p in self.kite.positions().get("net", [])}
+                if signal.symbol in live_positions:
+                    return {"status": "skipped", "reason": "position already open (live check)"}
+            except Exception as e:
+                logger.warning(f"Live position check failed for {signal.symbol}: {e}")
+
         from kiteconnect import KiteConnect
         transaction = (
             self.kite.TRANSACTION_TYPE_BUY
@@ -369,9 +380,13 @@ class LiveExecutor:
                 product       = self.kite.PRODUCT_CNC,   # delivery (not intraday)
                 variety       = self.kite.VARIETY_REGULAR,
             )
-            # Place GTT stop-loss
+            # Place GTT stop-loss — if this fails, return error so caller can alert operator
             if signal.action == "BUY":
-                self._place_gtt_sl(signal, order_id)
+                gtt_ok = self._place_gtt_sl(signal, order_id)
+                if not gtt_ok:
+                    logger.error(f"GTT SL failed for {signal.symbol} — position is LONG but unhedged")
+                    return {"status": "gtt_failed", "order_id": order_id, "mode": "live",
+                            "warning": "BUY placed but GTT stop-loss failed — manual action required"}
 
             logger.info(f"LIVE {signal.action} {signal.symbol} × {signal.position_size} — order_id: {order_id}")
             return {"status": "filled", "order_id": order_id, "mode": "live"}
@@ -380,8 +395,8 @@ class LiveExecutor:
             logger.error(f"Order failed for {signal.symbol}: {e}")
             return {"status": "failed", "error": str(e)}
 
-    def _place_gtt_sl(self, signal: TradeSignal, parent_order_id: str):
-        """Place a GTT (Good Till Triggered) stop-loss order."""
+    def _place_gtt_sl(self, signal: TradeSignal, parent_order_id: str) -> bool:
+        """Place a GTT stop-loss. Returns True on success, False on failure."""
         try:
             self.kite.place_gtt(
                 trigger_type  = self.kite.GTT_TYPE_SINGLE,
@@ -398,8 +413,10 @@ class LiveExecutor:
                 }]
             )
             logger.info(f"GTT SL placed for {signal.symbol} @ ₹{signal.stop_loss}")
+            return True
         except Exception as e:
             logger.error(f"GTT SL failed for {signal.symbol}: {e}")
+            return False
 
     def get_portfolio_value(self) -> float:
         margins = self.kite.margins()

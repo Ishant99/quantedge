@@ -229,6 +229,11 @@ def run_agent(dry_run: bool = False) -> list:
         memory = PortfolioMemory()
         for sig in sell_signals:
             signal_id = memory.save_signal(sig)
+            if getattr(sig, "journal", None) is not None:
+                try:
+                    memory.save_journal(sig.journal, signal_id=signal_id)
+                except Exception as _je:
+                    logger.debug(f"Journal save failed ({sig.symbol}): {_je}")
             if not dry_run:
                 result = executor.execute(sig)
                 logger.info(f"  SELL {sig.symbol}: {result.get('status','unknown')}")
@@ -249,12 +254,24 @@ def run_agent(dry_run: bool = False) -> list:
     block_deals = BlockDealsAnalyser()
 
     # A3: Fetch Nifty 1-month return once (used for relative strength comparison)
+    # Wrapped in a 10-second timeout so a rate-limit or network hang cannot block the pipeline.
     _nifty_ret_1m = 0.0
     try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
         import yfinance as _yf
-        _ni = _yf.Ticker("^NSEI").history(period="1mo", interval="1d")
-        if not _ni.empty and len(_ni) >= 2:
-            _nifty_ret_1m = float((_ni["Close"].iloc[-1] / _ni["Close"].iloc[0] - 1) * 100)
+        def _fetch_nifty():
+            ni = _yf.Ticker("^NSEI").history(period="1mo", interval="1d")
+            if not ni.empty and len(ni) >= 2:
+                return float((ni["Close"].iloc[-1] / ni["Close"].iloc[0] - 1) * 100)
+            return 0.0
+        with ThreadPoolExecutor(max_workers=1) as _pool:
+            _future = _pool.submit(_fetch_nifty)
+            try:
+                _nifty_ret_1m = _future.result(timeout=10)
+            except FuturesTimeout:
+                logger.warning("Nifty return fetch timed out — defaulting to 0.0%")
+            except Exception as _ne:
+                logger.warning(f"Nifty return fetch failed ({_ne}) — defaulting to 0.0%")
     except Exception:
         pass
 
@@ -425,21 +442,36 @@ def run_agent(dry_run: bool = False) -> list:
     if regime.regime in ("recovery", "sideways"):
         logger.info(f"[REGIME] {regime.regime} — min confidence lowered to {effective_min_conf:.0%}")
 
-    # Final sort
-    buy_signals = sorted(
-        buy_signals,
-        key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
-        reverse=True,
-    )
+    # Final sort / Phase 6.2: Use ExecutionPlanner for candidate competition ranking
     logger.info(f"Final: {len(buy_signals)} BUY signals after all filters")
 
     remaining_slots = max(0, MAX_OPEN_POSITIONS - open_positions)
-    actionable_limit = min(TOP_N_SIGNALS, remaining_slots)
-    actionable_signals = buy_signals[:actionable_limit]
+    try:
+        from strategy.execution_planner import ExecutionPlanner
+        _deployed_pct = min(1.0, open_positions / MAX_OPEN_POSITIONS) if MAX_OPEN_POSITIONS else 0.0
+        ranked = ExecutionPlanner().rank_and_allocate(
+            signals=buy_signals,
+            max_slots=remaining_slots,
+            open_position_sectors=set(symbol_sectors.get(sym, "") for sym in
+                                       (executor.portfolio.get("positions", {}).keys()
+                                        if hasattr(executor, "portfolio") else [])),
+            market_data=market_data,
+            portfolio_deployed_pct=_deployed_pct,
+        )
+        buy_signals = [c.signal for c in ranked if c.slot_allocated]
+        logger.info(f"[PLANNER] {len(buy_signals)} allocated from {len(ranked)} candidates")
+    except Exception as e:
+        logger.warning(f"ExecutionPlanner failed ({e}) — using quality sort fallback")
+        buy_signals = sorted(
+            buy_signals,
+            key=lambda x: (x.quality_score or 0.0, x.confidence, x.ta_score),
+            reverse=True,
+        )
+
+    actionable_signals = buy_signals
     if remaining_slots <= 0:
         logger.info(f"[M7] Max open positions reached ({MAX_OPEN_POSITIONS}) -- skipping new BUY executions")
-    elif actionable_limit < min(TOP_N_SIGNALS, len(buy_signals)):
-        logger.info(f"[M7] Limiting executions to {actionable_limit} BUY signals due to open position cap")
+        actionable_signals = []
 
     _print_signals(actionable_signals, regime)
 
@@ -450,6 +482,12 @@ def run_agent(dry_run: bool = False) -> list:
     signal_ids = {}
     for sig in actionable_signals:
         signal_ids[sig.symbol] = memory.save_signal(sig)
+        # Persist decision journal if available
+        if getattr(sig, "journal", None) is not None:
+            try:
+                memory.save_journal(sig.journal, signal_id=signal_ids[sig.symbol])
+            except Exception as _je:
+                logger.debug(f"Journal save failed ({sig.symbol}): {_je}")
 
     stats = memory.get_stats()
     send_signals(actionable_signals, stats, mode=TRADING_MODE, dry_run=dry_run)
@@ -556,9 +594,49 @@ def _print_signals(signals: list, regime=None):
     print("\n" + "=" * 70 + "\n")
 
 
+def run_pipeline(symbols: list = None, dry_run: bool = False) -> list:
+    """
+    Thin wrapper around TradingPipeline — the new typed 9-stage pipeline.
+    Falls back to run_agent() if pipeline import fails.
+    """
+    try:
+        from pipeline.runner import TradingPipeline
+        from data.market_scanner import MarketScanner
+        executor = get_executor()
+        pv = executor.get_portfolio_value()
+        memory = PortfolioMemory()
+        pipeline = TradingPipeline(
+            mode=TRADING_MODE,
+            portfolio_value=pv,
+            memory=memory,
+        )
+        if symbols is None:
+            scanner = MarketScanner(lookback_days=400)
+            scanner.run(max_workers=1, regime=None)
+            symbols = [r["symbol"] for _, r in scanner.symbols_df.iterrows()]
+            sym_names   = {r["symbol"]: r["name"]   for _, r in scanner.symbols_df.iterrows()}
+            sym_sectors = {r["symbol"]: r["sector"] for _, r in scanner.symbols_df.iterrows()}
+        else:
+            sym_names, sym_sectors = {}, {}
+        result = pipeline.run(symbols, symbol_names=sym_names, symbol_sectors=sym_sectors)
+        logger.info(
+            f"Pipeline complete: {result.buys} BUY, {result.sells} SELL, "
+            f"{result.blocked} BLOCKED in {result.duration_seconds:.1f}s"
+        )
+        return [a.signal for a in result.allocations if a.signal.action == "BUY"]
+    except Exception as e:
+        logger.warning(f"Pipeline failed ({e}) — falling back to run_agent()")
+        return run_agent(dry_run=dry_run)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--pipeline", action="store_true",
+                        help="Use new typed pipeline instead of legacy run_agent()")
     args = parser.parse_args()
-    run_agent(dry_run=args.dry_run)
+    if args.pipeline:
+        run_pipeline(dry_run=args.dry_run)
+    else:
+        run_agent(dry_run=args.dry_run)

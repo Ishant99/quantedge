@@ -151,6 +151,20 @@ class PortfolioMemory:
                     status      TEXT DEFAULT 'open',
                     mode        TEXT DEFAULT 'paper'
                 );
+
+                CREATE TABLE IF NOT EXISTS decision_journals (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    signal_id    INTEGER,
+                    symbol       TEXT NOT NULL,
+                    timestamp    TEXT NOT NULL,
+                    regime       TEXT,
+                    json_blob    TEXT NOT NULL,
+                    outcome_1d   REAL,
+                    outcome_3d   REAL,
+                    outcome_5d   REAL,
+                    outcome_exit REAL,
+                    FOREIGN KEY (signal_id) REFERENCES signals(id)
+                );
             """)
             cols = [r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()]
             alter_statements = {
@@ -312,6 +326,65 @@ class PortfolioMemory:
             logger.warning(f"save_snapshot failed: {e}")
             self.db_available = False
 
+    def save_journal(self, journal, signal_id: int = -1) -> int:
+        """Persist a DecisionJournal. Returns row id, or -1 on failure."""
+        if not self.db_available:
+            return -1
+        try:
+            blob = json.dumps(journal.to_dict())
+            with self._conn() as conn:
+                cur = conn.execute("""
+                    INSERT INTO decision_journals
+                    (signal_id, symbol, timestamp, regime, json_blob)
+                    VALUES (?,?,?,?,?)
+                """, (
+                    signal_id,
+                    journal.symbol,
+                    journal.timestamp.isoformat(),
+                    journal.regime,
+                    blob,
+                ))
+                return cur.lastrowid
+        except Exception as e:
+            logger.warning(f"save_journal failed ({journal.symbol}): {e}")
+            return -1
+
+    def get_journal(self, signal_id: int):
+        """Retrieve a DecisionJournal by signal_id. Returns None if not found."""
+        if not self.db_available:
+            return None
+        try:
+            from strategy.decision_journal import DecisionJournal
+            with self._conn() as conn:
+                row = conn.execute(
+                    "SELECT json_blob FROM decision_journals WHERE signal_id=? LIMIT 1",
+                    (signal_id,)
+                ).fetchone()
+            if row:
+                return DecisionJournal.from_dict(json.loads(row[0]))
+        except Exception as e:
+            logger.warning(f"get_journal failed (signal_id={signal_id}): {e}")
+        return None
+
+    def update_journal_outcome(self, signal_id: int, horizon: str, return_pct: float):
+        """Update post-trade outcome for a journal row. horizon: '1d'|'3d'|'5d'|'exit'."""
+        if not self.db_available:
+            return
+        col_map = {"1d": "outcome_1d", "3d": "outcome_3d",
+                   "5d": "outcome_5d", "exit": "outcome_exit"}
+        col = col_map.get(horizon)
+        if not col:
+            logger.warning(f"update_journal_outcome: unknown horizon '{horizon}'")
+            return
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    f"UPDATE decision_journals SET {col}=? WHERE signal_id=?",
+                    (round(return_pct, 4), signal_id)
+                )
+        except Exception as e:
+            logger.warning(f"update_journal_outcome failed (signal_id={signal_id}): {e}")
+
     # ------------------------------------------------------------------
     # Read / analytics
     # ------------------------------------------------------------------
@@ -378,6 +451,97 @@ class PortfolioMemory:
             "profit_factor":    round(profit_factor, 2),
             "max_drawdown_pct": round(max_drawdown, 2),
             "expectancy":       round(expectancy, 2),
+        }
+
+    def get_segmented_stats(self) -> dict:
+        """
+        Returns performance stats broken down by:
+          - regime_tag  (bull, bear, sideways, recovery, …)
+          - setup_type  (technical_base, momentum, …)
+          - confidence bucket (0.5-0.6, 0.6-0.7, 0.7-0.8, 0.8+)
+
+        Joins signals → trades on signal_id to get pnl data.
+        Only closed trades are considered.
+
+        Returns:
+            {
+                "by_regime":     {"bull": {"trades": int, "win_rate": float, "avg_pnl": float}, …},
+                "by_setup":      {"technical_base": {…}, …},
+                "by_confidence": {"0.5-0.6": {…}, "0.6-0.7": {…}, "0.7-0.8": {…}, "0.8+": {…}},
+            }
+        """
+        empty = {"by_regime": {}, "by_setup": {}, "by_confidence": {}}
+        if not self.db_available:
+            return empty
+
+        try:
+            with self._conn() as conn:
+                rows = conn.execute("""
+                    SELECT
+                        s.regime_tag,
+                        s.setup_type,
+                        s.confidence,
+                        t.pnl
+                    FROM trades t
+                    JOIN signals s ON s.id = t.signal_id
+                    WHERE t.status = 'closed'
+                      AND t.pnl IS NOT NULL
+                """).fetchall()
+        except sqlite3.Error as e:
+            logger.warning(f"get_segmented_stats: query failed: {e}")
+            return empty
+
+        if not rows:
+            return empty
+
+        def _conf_bucket(conf) -> str:
+            if conf is None:
+                return "unknown"
+            c = float(conf)
+            if c < 0.6:
+                return "0.5-0.6"
+            if c < 0.7:
+                return "0.6-0.7"
+            if c < 0.8:
+                return "0.7-0.8"
+            return "0.8+"
+
+        # Accumulators: {key: {"pnls": [float], "wins": int}}
+        regime_acc:     dict[str, dict] = {}
+        setup_acc:      dict[str, dict] = {}
+        confidence_acc: dict[str, dict] = {}
+
+        def _add(acc: dict, key: str, pnl: float):
+            key = key.strip() if key else "unknown"
+            if not key:
+                key = "unknown"
+            if key not in acc:
+                acc[key] = {"pnls": [], "wins": 0}
+            acc[key]["pnls"].append(pnl)
+            if pnl > 0:
+                acc[key]["wins"] += 1
+
+        for regime_tag, setup_type, confidence, pnl in rows:
+            _add(regime_acc,     regime_tag or "unknown", pnl)
+            _add(setup_acc,      setup_type or "unknown", pnl)
+            _add(confidence_acc, _conf_bucket(confidence), pnl)
+
+        def _summarise(acc: dict) -> dict:
+            result = {}
+            for key, data in sorted(acc.items()):
+                pnls = data["pnls"]
+                n    = len(pnls)
+                result[key] = {
+                    "trades":   n,
+                    "win_rate": round(data["wins"] / n, 4) if n > 0 else 0.0,
+                    "avg_pnl":  round(sum(pnls) / n, 2)   if n > 0 else 0.0,
+                }
+            return result
+
+        return {
+            "by_regime":     _summarise(regime_acc),
+            "by_setup":      _summarise(setup_acc),
+            "by_confidence": _summarise(confidence_acc),
         }
 
     def get_recent_signals(self, limit: int = 20) -> list[dict]:
