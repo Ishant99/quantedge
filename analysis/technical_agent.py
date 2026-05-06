@@ -26,7 +26,7 @@ from config import (
     ADX_PERIOD, STOCH_K_PERIOD, STOCH_D_PERIOD,
     STOCH_OVERBOUGHT, STOCH_OVERSOLD, OBV_TREND_LOOKBACK,
     TA_MIN_TREND_ADX, TA_MAX_BUY_STOCH,
-)
+    TA_MAX_BUY_RSI)
 from utils import get_logger
 
 logger = get_logger("TechnicalAgent")
@@ -287,7 +287,12 @@ class TechnicalAgent:
 
             tradeable = score >= MIN_TA_SCORE
             if signal == "bullish":
-                if adx_val < TA_MIN_TREND_ADX:
+                if rsi > TA_MAX_BUY_RSI:
+                    tradeable = False
+                    reasons.append(
+                        f"Tradeability blocked: RSI {rsi:.1f} above buy gate {TA_MAX_BUY_RSI:.1f} (overbought)"
+                    )
+                elif adx_val < TA_MIN_TREND_ADX:
                     tradeable = False
                     reasons.append(
                         f"Tradeability blocked: ADX {adx_val:.1f} below trend gate {TA_MIN_TREND_ADX:.1f}"
