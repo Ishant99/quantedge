@@ -833,12 +833,15 @@ def send_telegram_message(text: str):
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         for chunk in chunks:
             try:
-                requests.post(
+                resp = requests.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                     json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"},
                     timeout=10,
                 )
-                sent_any = True
+                if resp.status_code == 200:
+                    sent_any = True
+                else:
+                    logger.warning(f"Telegram HTTP {resp.status_code}: {resp.text[:300]}")
             except Exception as e:
                 logger.warning(f"Telegram send failed: {e}")
 

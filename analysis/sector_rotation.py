@@ -39,6 +39,7 @@ class SectorRotationResult:
     sector_returns:  dict         # sector -> 1-week return %
     rotation_signal: str          # risk_on | risk_off | mixed
     message:         str
+    sector_scores:   dict = None  # sector -> 0-10 score (used by pipeline)
 
 
 class SectorRotationAnalyser:
@@ -90,12 +91,19 @@ class SectorRotationAnalyser:
         logger.info(f"Sector rotation: {rotation_signal} | "
                     f"Hot: {hot_sectors} | Cold: {cold_sectors}")
 
+        # Convert %-return to 0-10 score: 0% → 5.0, +5% → 10.0, -5% → 0.0
+        sector_scores = {
+            sector: round(max(0.0, min(10.0, 5.0 + ret)), 2)
+            for sector, ret in returns.items()
+        }
+
         return SectorRotationResult(
             hot_sectors     = hot_sectors,
             cold_sectors    = cold_sectors,
             sector_returns  = returns,
             rotation_signal = rotation_signal,
             message         = msg,
+            sector_scores   = sector_scores,
         )
 
     @staticmethod
@@ -115,5 +123,6 @@ class SectorRotationAnalyser:
         return SectorRotationResult(
             hot_sectors=[], cold_sectors=[],
             sector_returns={}, rotation_signal="mixed",
-            message="Sector data unavailable — neutral weighting"
+            message="Sector data unavailable — neutral weighting",
+            sector_scores={},
         )

@@ -281,8 +281,13 @@ class StrategyEngine:
         for sym, ta in ta_results.items():
             sent = sent_results.get(sym)
             df   = market_data.get(sym)
-            if sent is None or df is None:
+            if df is None:
                 continue
+            if sent is None:
+                sent = SentimentResult(
+                    symbol=sym, score=0.0, label="neutral",
+                    headlines=[], confidence=0.0,
+                )
             sig = self.generate(ta, sent, df, portfolio_value, open_positions,
                                 position_size_multiplier, regime=regime,
                                 regime_stability=regime_stability)

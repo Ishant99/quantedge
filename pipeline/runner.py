@@ -466,6 +466,9 @@ class TradingPipeline:
 
                     reduction = perm.reduction_factor if perm else 1.0
 
+                    _REGIME_MULT = {"bull": 1.0, "recovery": 0.85, "sideways": 0.70, "bear": 0.50}
+                    regime_multiplier = _REGIME_MULT.get(ctx.regime, 1.0)
+
                     sizing = sizer.calculate(
                         symbol=sig.symbol,
                         confidence=sig.p_direction,
@@ -474,7 +477,7 @@ class TradingPipeline:
                         portfolio_value=portfolio_value,
                         pattern_bias=getattr(sig, "setup_type", "neutral"),
                         sector_multiplier=sector_multiplier * reduction,
-                        regime_multiplier=1.0,
+                        regime_multiplier=regime_multiplier,
                         setup_type=getattr(sig, "setup_type", ""),
                         sentiment_modifier=sentiment_modifier,
                         journal=getattr(sig, "journal", None),
