@@ -795,6 +795,23 @@ def run_crypto_scan():
         send_telegram_message(f"*Agent ERROR (crypto)*\n`{e}`")
 
 
+def run_ohlcv_update():
+    """Store daily OHLCV candles for all watched symbols after market close."""
+    _write_scheduler_status("ohlcv_update", "running")
+    try:
+        from data.ohlcv_store import OHLCVStore
+        from data.market_scanner import MarketScanner
+        store   = OHLCVStore()
+        symbols = MarketScanner().get_all_symbols()
+        results = store.update_all(symbols, lookback_days=400)
+        ok = sum(1 for v in results.values() if v > 0)
+        _write_scheduler_status("ohlcv_update", "ok", f"{ok}/{len(symbols)} symbols stored")
+        logger.info(f"OHLCV update complete: {ok}/{len(symbols)} symbols")
+    except Exception as e:
+        _write_scheduler_status("ohlcv_update", "error", str(e))
+        logger.error(f"OHLCV update failed: {e}")
+
+
 def run_weekly_summary():
     """Send weekly performance report to Telegram."""
     _write_scheduler_status("weekly_summary", "running")
@@ -992,6 +1009,15 @@ if __name__ == "__main__":
         CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
         id="outcome_tracker",
         name="Signal Outcome Tracker (15:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
+    # --- Job 6b: OHLCV store update at 3:45 PM (after NSE close) ---
+    scheduler.add_job(
+        run_ohlcv_update,
+        CronTrigger(hour=15, minute=45, day_of_week="mon-fri", timezone=IST),
+        id="ohlcv_update",
+        name="OHLCV Store Update (15:45 IST)",
         misfire_grace_time=_GRACE,
     )
 

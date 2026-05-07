@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import sqlite3
 from datetime import datetime
-from config import SQLITE_DB_FILE, US_DEDUP_HOURS, US_DEDUP_PRICE_PCT
+from config import SQLITE_DB_FILE, US_DEDUP_HOURS, US_DEDUP_PRICE_PCT, US_MAX_POSITIONS
 from data.us_scanner import USScanner
 from services.paper_treasury import (
     can_allocate,
@@ -78,6 +78,10 @@ class USPaperBroker:
                      else entry_price * (1 + SL_PCT), 4)
         tp   = round(entry_price * (1 + TP_PCT) if direction == "LONG"
                      else entry_price * (1 - TP_PCT), 4)
+        open_count = len(self.get_open_positions())
+        if open_count >= US_MAX_POSITIONS:
+            logger.warning(f"US position cap reached ({US_MAX_POSITIONS}) — skipping {symbol}")
+            return None
         ok_dup, reason_dup = self._check_duplicate_position(symbol, direction, entry_price)
         if not ok_dup:
             logger.warning(f"{reason_dup} -- skipping")

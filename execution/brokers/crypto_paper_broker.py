@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import sqlite3
 from datetime import datetime
-from config import SQLITE_DB_FILE
+from config import SQLITE_DB_FILE, CRYPTO_MAX_POSITIONS
 from data.crypto_scanner import CryptoScanner
 from services.paper_treasury import (
     can_allocate,
@@ -53,6 +53,10 @@ class CryptoPaperBroker:
                        else entry_price * (1 + SL_PCT), 6)
         tp     = round(entry_price * (1 + TP_PCT) if direction == "LONG"
                        else entry_price * (1 - TP_PCT), 6)
+        open_count = len(self.get_open_positions())
+        if open_count >= CRYPTO_MAX_POSITIONS:
+            logger.warning(f"Crypto position cap reached ({CRYPTO_MAX_POSITIONS}) — skipping {symbol}")
+            return None
         reserve_inr = reserve_for_crypto_order(usdt_amount)
         ok, reason, _ = can_allocate("crypto", reserve_inr)
         if not ok:

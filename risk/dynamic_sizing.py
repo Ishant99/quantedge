@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sqlite3
 import yfinance as yf
 from dataclasses import dataclass
-from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD
+from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD, MAX_POSITION_VALUE_PCT
 from utils import get_logger
 
 logger = get_logger("DynamicSizing")
@@ -193,6 +193,14 @@ class DynamicPositionSizer:
 
         risk_amount  = portfolio_value * adjusted_risk
         position_size= int(risk_amount / sl_distance) if sl_distance > 0 else 0
+
+        # Hard cap: no single position > MAX_POSITION_VALUE_PCT of portfolio
+        if entry_price > 0:
+            max_shares = int((portfolio_value * MAX_POSITION_VALUE_PCT) / entry_price)
+            if position_size > max_shares:
+                logger.debug(f"{symbol}: size capped {position_size}→{max_shares} (20% portfolio cap)")
+                position_size = max_shares
+
         capital_risk = round(position_size * sl_distance, 2)
 
         # Apply sentiment modifier: additive ±10% on position size (Layer 3 only)

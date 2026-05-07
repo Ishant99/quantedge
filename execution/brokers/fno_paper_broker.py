@@ -14,7 +14,8 @@ import sqlite3
 from datetime import datetime
 from config import (SQLITE_DB_FILE, FNO_LOT_SIZES, FNO_TP_MULT, FNO_SL_MULT, FNO_MAX_POSITIONS,
     FNO_HV_CIRCUIT_BREAKER_PCT, FNO_SL_COOLDOWN_HOURS,
-    FNO_SELL_SL_MULT, FNO_SELL_SL_MULT_HIGH_VOL, FNO_SELL_SL_HV_THRESHOLD)
+    FNO_SELL_SL_MULT, FNO_SELL_SL_MULT_HIGH_VOL, FNO_SELL_SL_HV_THRESHOLD,
+    FUTURES_SL_PCT, FUTURES_TP_PCT)
 from data.nse_options_chain import NSEOptionsChain
 from services.paper_treasury import (
     can_allocate,
@@ -795,10 +796,10 @@ class FNOPaperBroker:
                 )
 
             reason = None
-            if chg_pct <= -2.0:
-                reason = "SL_HIT"     # 2% adverse move
-            elif chg_pct >= 3.0:
-                reason = "TP_HIT"     # 3% favourable
+            if chg_pct <= -(FUTURES_SL_PCT * 100):
+                reason = "SL_HIT"
+            elif chg_pct >= (FUTURES_TP_PCT * 100):
+                reason = "TP_HIT"
             elif self._is_expired(expiry):
                 reason = "EXPIRY"
 

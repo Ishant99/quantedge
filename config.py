@@ -142,6 +142,7 @@ CORRELATION_THRESHOLD= float(_S("CORRELATION_THRESHOLD",default=0.75))
 MAX_SAME_SECTOR      = int(  _S("MAX_SAME_SECTOR",      default=2))
 HOLD_DAYS_MAX        = int(  _S("HOLD_DAYS_MAX",        default=12))   # auto-exit after N days
 MAX_POSITION_RISK_PCT= float(_S("MAX_POSITION_RISK_PCT",default=0.03)) # single trade max 3% risk
+MAX_POSITION_VALUE_PCT=float(_S("MAX_POSITION_VALUE_PCT",default=0.20)) # max 20% of portfolio in one position
 IV_RANK_MIN          = float(_S("IV_RANK_MIN",          default=0.60)) # options: min IV percentile
 SECTOR_HOT_MULT      = float(_S("SECTOR_HOT_MULT",      default=1.2))
 SECTOR_COLD_MULT     = float(_S("SECTOR_COLD_MULT",     default=0.7))
@@ -202,7 +203,9 @@ FNO_LOT_SIZES      = {"NIFTY": NIFTY_LOT_SIZE, "BANKNIFTY": BANKNIFTY_LOT_SIZE}
 # F&O exit rules
 FNO_TP_MULT        = float(_S("FNO_TP_MULT", default=2.0))   # exit when premium 2x
 FNO_SL_MULT        = float(_S("FNO_SL_MULT", default=0.70))  # exit when premium -30% (was 0.50 → -50%, too wide)
-FNO_MAX_POSITIONS  = int(  _S("FNO_MAX_POSITIONS", default=6))  # max concurrent F&O positions
+FNO_MAX_POSITIONS  = int(  _S("FNO_MAX_POSITIONS",    default=6))  # max concurrent F&O positions
+US_MAX_POSITIONS   = int(  _S("US_MAX_POSITIONS",     default=3))  # max concurrent US positions
+CRYPTO_MAX_POSITIONS=int(  _S("CRYPTO_MAX_POSITIONS", default=2))  # max concurrent crypto positions
 
 # Options selling thresholds
 FNO_HV_STRADDLE    = float(_S("FNO_HV_STRADDLE", default=18.0))  # HV% above → straddle
