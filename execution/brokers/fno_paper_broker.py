@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import sqlite3
 from datetime import datetime
-from config import SQLITE_DB_FILE, FNO_LOT_SIZES, FNO_TP_MULT, FNO_SL_MULT, FNO_MAX_POSITIONS
+from config import (SQLITE_DB_FILE, FNO_LOT_SIZES, FNO_TP_MULT, FNO_SL_MULT, FNO_MAX_POSITIONS,
+    FNO_HV_CIRCUIT_BREAKER_PCT, FNO_SL_COOLDOWN_HOURS,
+    FNO_SELL_SL_MULT, FNO_SELL_SL_MULT_HIGH_VOL, FNO_SELL_SL_HV_THRESHOLD)
 from data.nse_options_chain import NSEOptionsChain
 from services.paper_treasury import (
     can_allocate,
@@ -181,6 +183,76 @@ class FNOPaperBroker:
             logger.warning(f"Daily loss check failed, allowing entry: {e}")
         return True, ""
 
+
+    def _check_hv_circuit_breaker(self, index):
+        """Block new F&O entries when 20d HV exceeds FNO_HV_CIRCUIT_BREAKER_PCT."""
+        try:
+            import yfinance as yf, numpy as np, math
+            limit = float(self._cfg("FNO_HV_CIRCUIT_BREAKER_PCT", FNO_HV_CIRCUIT_BREAKER_PCT) or 0)
+            if limit <= 0:
+                return True, ""
+            ticker = "^NSEI" if index.upper() == "NIFTY" else "^NSEBANK"
+            df = yf.Ticker(ticker).history(period="2mo", interval="1d", auto_adjust=True)
+            if df.empty or len(df) < 22:
+                return True, ""
+            close = df["Close"]
+            log_ret = np.log(close / close.shift(1)).dropna()
+            hv_20 = float(log_ret.tail(20).std() * math.sqrt(252) * 100)
+            if hv_20 > limit:
+                return False, (
+                    f"HV circuit breaker: {index} 20d HV={hv_20:.1f}% "
+                    f"exceeds limit {limit:.1f}% -- no new F&O entries"
+                )
+        except Exception as e:
+            logger.warning(f"HV circuit breaker check failed ({index}), allowing: {e}")
+        return True, ""
+
+    def _current_hv(self, index):
+        """Return current 20-day annualised HV% for the index. Returns 0.0 on failure."""
+        try:
+            import yfinance as yf, numpy as np, math
+            ticker = "^NSEI" if index.upper() == "NIFTY" else "^NSEBANK"
+            df = yf.Ticker(ticker).history(period="2mo", interval="1d", auto_adjust=True)
+            if df.empty or len(df) < 22:
+                return 0.0
+            close = df["Close"]
+            log_ret = np.log(close / close.shift(1)).dropna()
+            return float(log_ret.tail(20).std() * math.sqrt(252) * 100)
+        except Exception:
+            return 0.0
+
+    def _check_sl_cooldown(self, index, direction_type):
+        """Block re-entry on same index+direction_type for FNO_SL_COOLDOWN_HOURS after SL_HIT."""
+        try:
+            cooldown_h = int(self._cfg("FNO_SL_COOLDOWN_HOURS", FNO_SL_COOLDOWN_HOURS) or 0)
+            if cooldown_h <= 0:
+                return True, ""
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=cooldown_h)).isoformat()
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT option_type, exit_time FROM fno_trades "
+                    "WHERE instrument=? AND exit_reason='SL_HIT' AND exit_time >= ? "
+                    "ORDER BY exit_time DESC",
+                    (index.upper(), cutoff)
+                ).fetchall()
+            for (opt, exit_t) in rows:
+                opt_up = str(opt or "").upper()
+                if opt_up.startswith("SELL-"):
+                    ex_type = "SELL_VOL"
+                elif opt_up.startswith("FUT-"):
+                    ex_type = "FUT"
+                else:
+                    ex_type = "LONG_OPT"
+                if ex_type == direction_type:
+                    return False, (
+                        f"SL cooldown: {index} {direction_type} had SL_HIT at {exit_t} "
+                        f"-- waiting {cooldown_h}h before re-entry"
+                    )
+        except Exception as e:
+            logger.warning(f"SL cooldown check failed ({index}), allowing: {e}")
+        return True, ""
+
     def _is_expired(self, expiry: str, today: datetime | None = None) -> bool:
         """Robust expiry comparison for values like 03-Apr-2026."""
         try:
@@ -278,6 +350,14 @@ class FNOPaperBroker:
         ok, reason = self._within_daily_loss_limit()
         if not ok:
             logger.warning(f"{reason} — skipping {index} {direction}")
+            return None
+        ok, reason = self._check_hv_circuit_breaker(index)
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} {direction}")
+            return None
+        ok, reason = self._check_sl_cooldown(index, "LONG_OPT")
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} {direction}")
             return None
         ok, reason = self._check_same_day_index_duplicate(index, "LONG_OPT")
         if not ok:
@@ -507,6 +587,14 @@ class FNOPaperBroker:
         if not ok:
             logger.warning(f"{reason} — skipping {index} {strategy}")
             return None, None
+        ok, reason = self._check_hv_circuit_breaker(index)
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} {strategy}")
+            return None, None
+        ok, reason = self._check_sl_cooldown(index, "SELL_VOL")
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} {strategy}")
+            return None, None
         ok, reason = self._check_same_day_index_duplicate(index, "SELL_VOL")
         if not ok:
             logger.warning(f"{reason} — skipping {index} {strategy}")
@@ -581,7 +669,12 @@ class FNOPaperBroker:
                     (curr, pnl, trade_id)
                 )
 
-            sell_sl = float(self._cfg("FNO_SELL_SL_MULT", 1.5) or 1.5)
+            hv_now = self._current_hv(index)
+            hv_threshold = float(self._cfg("FNO_SELL_SL_HV_THRESHOLD", FNO_SELL_SL_HV_THRESHOLD) or 20.0)
+            if hv_now > hv_threshold:
+                sell_sl = float(self._cfg("FNO_SELL_SL_MULT_HIGH_VOL", FNO_SELL_SL_MULT_HIGH_VOL) or 2.0)
+            else:
+                sell_sl = float(self._cfg("FNO_SELL_SL_MULT", FNO_SELL_SL_MULT) or 1.5)
             reason = None
             if curr >= entry_prem * sell_sl:
                 reason = "SL_HIT"     # premium rose past SL multiplier — buy back, take loss
@@ -624,6 +717,14 @@ class FNOPaperBroker:
         ok, reason = self._within_daily_loss_limit()
         if not ok:
             logger.warning(f"{reason} — skipping {index} FUT-{direction}")
+            return None
+        ok, reason = self._check_hv_circuit_breaker(index)
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} FUT-{direction}")
+            return None
+        ok, reason = self._check_sl_cooldown(index, "FUT")
+        if not ok:
+            logger.warning(f"{reason} -- skipping {index} FUT-{direction}")
             return None
         ok, reason = self._check_same_day_index_duplicate(index, "FUT")
         if not ok:

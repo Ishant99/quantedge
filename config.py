@@ -89,6 +89,7 @@ STOCH_OVERSOLD      = 20
 OBV_TREND_LOOKBACK  = 10
 TA_MIN_TREND_ADX    = float(_S("TA_MIN_TREND_ADX", default=20.0))
 TA_MAX_BUY_STOCH    = float(_S("TA_MAX_BUY_STOCH", default=88.0))
+TA_MAX_BUY_RSI      = float(_S("TA_MAX_BUY_RSI",   default=80.0))  # block buy when RSI above this
 
 # -----------------------------------------------------------------------------
 # SENTIMENT AGENT (M3)
@@ -220,6 +221,21 @@ FNO_MAX_STRUCTURES_PER_UNDERLYING = int(_S("FNO_MAX_STRUCTURES_PER_UNDERLYING", 
 FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT", default=0.15))
 FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT", default=0.15))
 FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE = bool(_S("FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE", default=True))
+
+# F&O volatility circuit breaker
+FNO_HV_CIRCUIT_BREAKER_PCT = float(_S("FNO_HV_CIRCUIT_BREAKER_PCT", default=35.0))
+
+# F&O SL cooldown after SL hit
+FNO_SL_COOLDOWN_HOURS = int(_S("FNO_SL_COOLDOWN_HOURS", default=24))
+
+# Options selling — dynamic SL multiplier
+FNO_SELL_SL_MULT           = float(_S("FNO_SELL_SL_MULT",          default=1.5))
+FNO_SELL_SL_MULT_HIGH_VOL  = float(_S("FNO_SELL_SL_MULT_HIGH_VOL", default=2.0))
+FNO_SELL_SL_HV_THRESHOLD   = float(_S("FNO_SELL_SL_HV_THRESHOLD",  default=20.0))
+
+# US stocks deduplication
+US_DEDUP_HOURS     = int(  _S("US_DEDUP_HOURS",     default=24))
+US_DEDUP_PRICE_PCT = float(_S("US_DEDUP_PRICE_PCT", default=0.03))
 
 # INR conversion rate for combined P&L display
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))

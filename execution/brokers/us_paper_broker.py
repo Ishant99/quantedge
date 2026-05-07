@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import sqlite3
 from datetime import datetime
-from config import SQLITE_DB_FILE
+from config import SQLITE_DB_FILE, US_DEDUP_HOURS, US_DEDUP_PRICE_PCT
 from data.us_scanner import USScanner
 from services.paper_treasury import (
     can_allocate,
@@ -32,6 +32,37 @@ class USPaperBroker:
         self.scanner = USScanner()
         self._init_table()
 
+
+    def _check_duplicate_position(self, symbol, direction, entry_price):
+        """
+        Block entry if the same symbol+direction was entered within US_DEDUP_HOURS
+        at a price within +/-US_DEDUP_PRICE_PCT of current entry_price.
+        Prevents same-signal re-fires on consecutive days.
+        """
+        try:
+            hours = int(US_DEDUP_HOURS)
+            pct   = float(US_DEDUP_PRICE_PCT)
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            lo = entry_price * (1 - pct)
+            hi = entry_price * (1 + pct)
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, entry_price, entry_time FROM us_trades "
+                    "WHERE symbol=? AND direction=? AND entry_time >= ? "
+                    "AND status IN ('open','closed')",
+                    (symbol.upper(), direction.upper(), cutoff)
+                ).fetchall()
+            for (tid, ep, et) in rows:
+                if ep is not None and lo <= float(ep) <= hi:
+                    return False, (
+                        f"US dedup: {symbol} {direction} already entered at ${ep:.2f} "
+                        f"(within {pct*100:.0f}% of ${entry_price:.2f}) at {et}"
+                    )
+        except Exception as e:
+            logger.warning(f"US dedup check failed ({symbol}), allowing: {e}")
+        return True, ""
+
     def open_position(self, symbol: str, direction: str,
                       entry_price: float = None,
                       usd_amount: float = 500.0,
@@ -47,6 +78,10 @@ class USPaperBroker:
                      else entry_price * (1 + SL_PCT), 4)
         tp   = round(entry_price * (1 + TP_PCT) if direction == "LONG"
                      else entry_price * (1 - TP_PCT), 4)
+        ok_dup, reason_dup = self._check_duplicate_position(symbol, direction, entry_price)
+        if not ok_dup:
+            logger.warning(f"{reason_dup} -- skipping")
+            return None
         reserve_inr = reserve_for_us_order(usd_amount)
         ok, reason, _ = can_allocate("us", reserve_inr)
         if not ok:
