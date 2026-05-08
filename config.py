@@ -9,6 +9,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Absolute project root — used to anchor all file paths so they resolve
+# correctly regardless of which directory the process was launched from.
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+
 # ---------------------------------------------------------------------------
 # Helper: read from user_settings.json first, then env var, then default.
 # This lets the dashboard configure everything without touching .env or SSH.
@@ -35,7 +39,7 @@ TRADING_MODE = _S("TRADING_MODE", "TRADING_MODE", "paper")   # paper | live
 # VIRTUAL PORTFOLIO (paper mode)
 # -----------------------------------------------------------------------------
 VIRTUAL_CAPITAL = int(_S("VIRTUAL_CAPITAL", "VIRTUAL_CAPITAL", 1_000_000))
-VIRTUAL_PORTFOLIO_FILE = "logs/virtual_portfolio.json"
+VIRTUAL_PORTFOLIO_FILE = os.path.join(_ROOT, "logs", "virtual_portfolio.json")
 PAPER_MAX_ALLOC_NSE_PCT    = float(_S("PAPER_MAX_ALLOC_NSE_PCT", default=0.40))
 PAPER_MAX_ALLOC_FNO_PCT    = float(_S("PAPER_MAX_ALLOC_FNO_PCT", default=0.30))
 PAPER_MAX_ALLOC_US_PCT     = float(_S("PAPER_MAX_ALLOC_US_PCT", default=0.20))
@@ -46,7 +50,7 @@ PAPER_MAX_ALLOC_CRYPTO_PCT = float(_S("PAPER_MAX_ALLOC_CRYPTO_PCT", default=0.10
 # -----------------------------------------------------------------------------
 KITE_API_KEY    = _S("KITE_API_KEY",    "KITE_API_KEY",    "")
 KITE_API_SECRET = _S("KITE_API_SECRET", "KITE_API_SECRET", "")
-KITE_ACCESS_TOKEN_FILE = "logs/kite_access_token.txt"
+KITE_ACCESS_TOKEN_FILE = os.path.join(_ROOT, "logs", "kite_access_token.txt")
 
 # -----------------------------------------------------------------------------
 # MARKET SCANNER (M1)

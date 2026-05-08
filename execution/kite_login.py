@@ -146,12 +146,15 @@ def is_authenticated() -> bool:
 
     try:
         mtime = os.path.getmtime(KITE_ACCESS_TOKEN_FILE)
-        # Token file must have been written today (after midnight IST)
-        today_start = datetime.now().replace(hour=0, minute=0, second=0,
-                                              microsecond=0).timestamp()
-        return mtime >= today_start
+        # Use IST midnight as boundary — the Oracle VM runs UTC, so datetime.now()
+        # would compute the wrong day without an explicit timezone.
+        now_ist = datetime.now(IST)
+        today_ist_midnight = now_ist.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return mtime >= today_ist_midnight.timestamp()
     except Exception:
-        return bool(token)   # file exists but can't check mtime — assume ok
+        return bool(token)   # file exists but can't stat — assume ok
 
 
 def revoke_token() -> bool:

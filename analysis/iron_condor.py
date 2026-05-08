@@ -159,7 +159,17 @@ class IronCondorGenerator:
             # Approximate premiums using simplified Black-Scholes proxy
             # (real system would query NSE options chain)
             sigma      = vix / 100 / np.sqrt(252)   # daily vol
-            dte        = 4.0                          # assume 4 trading days to expiry
+
+            # Compute real calendar days to the next Thursday expiry — avoids
+            # grossly overestimating Wednesday premiums (1 DTE vs hardcoded 4).
+            expiry_str = self._next_expiry_str()
+            try:
+                expiry_date = datetime.strptime(expiry_str, "%d-%b-%Y")
+                dte = max(1.0, float(
+                    (expiry_date.date() - datetime.now(IST).date()).days
+                ))
+            except Exception:
+                dte = 4.0   # safe fallback
 
             sc_prem = self._approx_premium(spot, short_call, sigma, dte, "call")
             sp_prem = self._approx_premium(spot, short_put,  sigma, dte, "put")

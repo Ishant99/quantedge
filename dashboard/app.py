@@ -2772,7 +2772,10 @@ elif page == "RESEARCH":
         st.caption("Grid-search results from the walk-forward back-tester. "
                    "Runs Sunday 02:00 IST automatically, or trigger manually below.")
 
-        _OPT_FILE = "logs/optimiser_results.json"
+        _OPT_FILE = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "logs", "optimiser_results.json",
+        )
 
         # ── Load results ────────────────────────────────────────────────────
         opt_data = {}

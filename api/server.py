@@ -98,15 +98,17 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
           {"ok": true, "trade_id": <int>, "symbol": ..., "action": ...}
           or {"ok": false, "error": "..."}
         """
-        if not self._is_authorised():
-            self._send_json(401, {"ok": False, "error": "Unauthorised"})
-            return
-
         parsed = urlparse(self.path)
         path   = parsed.path.rstrip("/")
 
+        # Kite callback is a Zerodha server redirect — no auth header is sent.
+        # Handle it before the auth gate so the OAuth flow isn't blocked.
         if path == "/webhook/kite_callback":
             self._handle_kite_callback(parsed)
+            return
+
+        if not self._is_authorised():
+            self._send_json(401, {"ok": False, "error": "Unauthorised"})
             return
 
         if path != "/webhook/signal":

@@ -528,8 +528,8 @@ def run_eod_digest():
                             (f"{today}%",)
                         ).fetchone()
                         counts[key], pnls[key] = row[0], row[1]
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug(f"EOD digest: {table} not available yet — {_e}")
 
         nse_count,    nse_pnl    = counts["nse"],    pnls["nse"]
         fno_count,    fno_pnl    = counts["fno"],    pnls["fno"]
@@ -1035,10 +1035,12 @@ _DEDUP_DB: str = os.path.join(
 )
 
 def _dedup_init():
-    """Create dedup table if it doesn't exist."""
+    """Create dedup table if it doesn't exist. Enables WAL mode to prevent
+    'database is locked' errors when concurrent scheduler jobs hit the same db."""
     try:
         os.makedirs(os.path.dirname(_DEDUP_DB), exist_ok=True)
         with __import__("sqlite3").connect(_DEDUP_DB) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sent_alerts (
                     key  TEXT NOT NULL,

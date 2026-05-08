@@ -31,7 +31,8 @@ PARAM_GRID = {
 }
 
 TEST_SYMBOLS = ["BRITANNIA", "TITAN", "BAJFINANCE", "HDFCBANK", "RELIANCE"]
-OPTIMISER_RESULTS_FILE = "logs/optimiser_results.json"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OPTIMISER_RESULTS_FILE = os.path.join(_ROOT, "logs", "optimiser_results.json")
 
 
 @dataclass
@@ -51,6 +52,10 @@ class StrategyOptimiser:
     Finds the combination with best risk-adjusted returns.
     Runs weekly on Sundays.
     """
+
+    def run(self, years: int = 3) -> OptimiserResult:
+        """Alias for optimise() — called by scheduler and dashboard."""
+        return self.optimise(years=years)
 
     def optimise(self, years: int = 3) -> OptimiserResult:
         """Run full optimisation grid search."""
@@ -112,44 +117,46 @@ class StrategyOptimiser:
             orig_bb  = cfg.BB_PERIOD
             orig_rr  = cfg.REWARD_RISK_RATIO
 
-            cfg.RSI_PERIOD       = params["rsi_period"]
-            cfg.MIN_TA_SCORE     = params["min_ta_score"]
-            cfg.BB_PERIOD        = params["bb_period"]
-            cfg.REWARD_RISK_RATIO= params["reward_risk"]
+            cfg.RSI_PERIOD        = params["rsi_period"]
+            cfg.MIN_TA_SCORE      = params["min_ta_score"]
+            cfg.BB_PERIOD         = params["bb_period"]
+            cfg.REWARD_RISK_RATIO = params["reward_risk"]
 
-            engine  = BacktestEngine()
-            returns = []
-            sharpes = []
-            wr      = []
+            try:
+                engine  = BacktestEngine()
+                returns = []
+                sharpes = []
+                wr      = []
 
-            for sym in TEST_SYMBOLS:
-                r = engine.run(sym, start, end)
-                if r and r.total_trades >= 3:
-                    returns.append(r.total_return_pct)
-                    sharpes.append(r.sharpe_ratio)
-                    wr.append(r.win_rate_pct)
+                for sym in TEST_SYMBOLS:
+                    r = engine.run(sym, start, end)
+                    if r and r.total_trades >= 3:
+                        returns.append(r.total_return_pct)
+                        sharpes.append(r.sharpe_ratio)
+                        wr.append(r.win_rate_pct)
 
-            # Restore config
-            cfg.RSI_PERIOD        = orig_rsi
-            cfg.MIN_TA_SCORE      = orig_ta
-            cfg.BB_PERIOD         = orig_bb
-            cfg.REWARD_RISK_RATIO = orig_rr
+                if not returns:
+                    return None
 
-            if not returns:
-                return None
+                return {
+                    "avg_return":     np.mean(returns),
+                    "sharpe":         np.mean(sharpes),
+                    "avg_win_rate":   np.mean(wr),
+                    "symbols_tested": len(returns),
+                }
+            finally:
+                # Always restore config — even if BacktestEngine raises
+                cfg.RSI_PERIOD        = orig_rsi
+                cfg.MIN_TA_SCORE      = orig_ta
+                cfg.BB_PERIOD         = orig_bb
+                cfg.REWARD_RISK_RATIO = orig_rr
 
-            return {
-                "avg_return":   np.mean(returns),
-                "sharpe":       np.mean(sharpes),
-                "avg_win_rate": np.mean(wr),
-                "symbols_tested": len(returns),
-            }
         except Exception as e:
             logger.debug(f"Eval failed for {params}: {e}")
             return None
 
     def _save(self, result: OptimiserResult, df: pd.DataFrame):
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.dirname(OPTIMISER_RESULTS_FILE), exist_ok=True)
         data = {
             "best_params":   result.best_params,
             "best_sharpe":   result.best_sharpe,
