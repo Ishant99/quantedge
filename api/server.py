@@ -105,6 +105,10 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path   = parsed.path.rstrip("/")
 
+        if path == "/webhook/kite_callback":
+            self._handle_kite_callback(parsed)
+            return
+
         if path != "/webhook/signal":
             self._send_json(404, {"ok": False, "error": f"Unknown POST endpoint: {path}"})
             return
@@ -183,6 +187,69 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": str(exc)})
 
+    # ------------------------------------------------------------------
+    # Kite OAuth callback
+    # ------------------------------------------------------------------
+
+    def _handle_kite_callback(self, parsed):
+        """
+        POST /webhook/kite_callback — exchange Zerodha request_token for access_token.
+
+        Accepts request_token via:
+          - Query string: /webhook/kite_callback?request_token=XXX
+          - JSON body:    {"request_token": "XXX"}
+
+        On success saves token to KITE_ACCESS_TOKEN_FILE and returns:
+          {"ok": true, "message": "Kite authenticated", "token_preview": "XXXX…"}
+        """
+        # Try query string first
+        qs = parse_qs(parsed.query)
+        request_token = qs.get("request_token", [None])[0]
+
+        # Fallback: JSON body
+        if not request_token:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw    = self.rfile.read(length) if length else b"{}"
+                body   = json.loads(raw.decode("utf-8"))
+                request_token = body.get("request_token", "")
+            except Exception:
+                pass
+
+        if not request_token:
+            self._send_json(422, {
+                "ok": False,
+                "error": "Missing required field: request_token "
+                         "(pass via query string or JSON body)",
+            })
+            return
+
+        try:
+            from execution.kite_login import exchange_token
+            access_token = exchange_token(request_token)
+
+            # If called by a browser (GET redirect), return a friendly HTML page
+            accept = self.headers.get("Accept", "")
+            if "text/html" in accept:
+                html = (
+                    "<html><body style='font-family:monospace;background:#0d0d0d;"
+                    "color:#00C805;padding:40px;'>"
+                    "<h2>✓ Kite Authenticated</h2>"
+                    "<p>Access token saved. You can close this tab and return to "
+                    "the QuantEdge dashboard.</p>"
+                    f"<p style='color:#555;font-size:12px;'>Token: {access_token[:8]}…</p>"
+                    "</body></html>"
+                )
+                self._send_text(200, html, "text/html; charset=utf-8")
+            else:
+                self._send_json(200, {
+                    "ok":            True,
+                    "message":       "Kite authenticated — access_token saved",
+                    "token_preview": access_token[:8] + "…",
+                })
+        except Exception as exc:
+            self._send_json(500, {"ok": False, "error": str(exc)})
+
     def do_GET(self):
         if not self._is_authorised():
             self._send_json(401, {"ok": False, "error": "Unauthorised — provide Bearer token or X-API-Key header"})
@@ -191,6 +258,11 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         path = parsed.path.rstrip("/") or "/"
+
+        # Zerodha OAuth redirect — no auth required (browser callback)
+        if path == "/webhook/kite_callback":
+            self._handle_kite_callback(parsed)
+            return
 
         routes = {
             "/": lambda: api_meta(),
@@ -203,6 +275,7 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
             "/api/activity": lambda: activity_payload(limit=_int_query(query, "limit", 12, 1, 100)),
             "/api/analytics/summary": lambda: analytics_summary_payload(),
             "/api/review": lambda: review_payload(),
+            "/api/kite/status": lambda: self._kite_status_payload(),
         }
 
         if path == "/api/review.md":
@@ -221,6 +294,27 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
             self._send_json(200, handler())
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": str(exc), "path": path})
+
+    # ------------------------------------------------------------------
+    # Kite status helper
+    # ------------------------------------------------------------------
+
+    def _kite_status_payload(self) -> dict:
+        """Return Kite authentication status (used by dashboard)."""
+        try:
+            from execution.kite_login import is_authenticated, load_access_token
+            auth = is_authenticated()
+            token = load_access_token()
+            return {
+                "ok":              True,
+                "authenticated":   auth,
+                "token_preview":   (token[:8] + "…") if token else "",
+                "token_file":      sys.modules.get("config", None) and
+                                   __import__("config").KITE_ACCESS_TOKEN_FILE or
+                                   "logs/kite_access_token.txt",
+            }
+        except Exception as exc:
+            return {"ok": False, "authenticated": False, "error": str(exc)}
 
     def log_message(self, fmt, *args):
         sys.stdout.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), fmt % args))
