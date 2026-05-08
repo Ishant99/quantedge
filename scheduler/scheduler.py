@@ -932,6 +932,54 @@ def run_weekly_summary():
 
 
 # =============================================================================
+# Alert deduplication — prevents the same (symbol, action) from firing
+# multiple times in one trading day (e.g., intraday + daily scan overlap).
+# =============================================================================
+
+_DEDUP_DB: str = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "logs", "alert_dedup.db"
+)
+
+def _dedup_init():
+    """Create dedup table if it doesn't exist."""
+    try:
+        os.makedirs(os.path.dirname(_DEDUP_DB), exist_ok=True)
+        with __import__("sqlite3").connect(_DEDUP_DB) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sent_alerts (
+                    key  TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    PRIMARY KEY (key, date)
+                )
+            """)
+    except Exception as e:
+        logger.debug(f"Dedup init failed: {e}")
+
+def _dedup_check(symbol: str, action: str) -> bool:
+    """
+    Return True if this (symbol, action) alert was already sent today.
+    Registers the alert as sent if it wasn't.
+    """
+    try:
+        import sqlite3 as _sq
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        key   = f"{symbol}:{action}"
+        with _sq.connect(_DEDUP_DB) as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM sent_alerts WHERE key=? AND date=?", (key, today)
+            ).fetchone()
+            if existing:
+                return True   # already sent today
+            conn.execute("INSERT OR IGNORE INTO sent_alerts (key, date) VALUES (?,?)", (key, today))
+        return False
+    except Exception:
+        return False   # on error, allow through (never silently drop)
+
+_dedup_init()
+
+
+# =============================================================================
 # Telegram helper
 # =============================================================================
 
@@ -939,8 +987,19 @@ def send_telegram_alert(signals: list, stats: dict):
     """Send today's scan results — delegates to utils.telegram for consistent formatting."""
     from config import MIN_CONFIDENCE
     actionable = [s for s in signals if getattr(s, "confidence", 0) >= MIN_CONFIDENCE]
+    # Dedup: skip any (symbol, action) already alerted today
+    deduped = []
+    for sig in actionable:
+        sym    = getattr(sig, "symbol", "")
+        action = getattr(sig, "action", "")
+        if sym and action and _dedup_check(sym, action):
+            logger.debug(f"Dedup: {sym} {action} already sent today — skipping")
+        else:
+            deduped.append(sig)
+    if len(actionable) != len(deduped):
+        logger.info(f"Dedup: suppressed {len(actionable)-len(deduped)} duplicate alerts")
     from utils.telegram import send_signals
-    send_signals(actionable, stats, mode=TRADING_MODE)
+    send_signals(deduped, stats, mode=TRADING_MODE)
 
 
 def send_telegram_message(text: str):

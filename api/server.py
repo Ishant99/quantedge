@@ -50,8 +50,8 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
         self.end_headers()
         self.wfile.write(body)
 
@@ -77,7 +77,111 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         return api_key_header == required
 
     def do_OPTIONS(self):
-        self._send_json(200, {"ok": True})
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+        self.end_headers()
+
+    def do_POST(self):
+        """
+        POST /webhook/signal — accept an inbound trade signal.
+
+        Body (JSON):
+          symbol     : str   — e.g. "RELIANCE"
+          action     : str   — "BUY" | "SELL" | "HOLD"
+          price      : float — optional; fetched live if omitted
+          confidence : float — 0.0–1.0 (default 0.65)
+          source     : str   — "tradingview" | "manual" | etc.
+
+        Returns:
+          {"ok": true, "trade_id": <int>, "symbol": ..., "action": ...}
+          or {"ok": false, "error": "..."}
+        """
+        if not self._is_authorised():
+            self._send_json(401, {"ok": False, "error": "Unauthorised"})
+            return
+
+        parsed = urlparse(self.path)
+        path   = parsed.path.rstrip("/")
+
+        if path != "/webhook/signal":
+            self._send_json(404, {"ok": False, "error": f"Unknown POST endpoint: {path}"})
+            return
+
+        # Read body
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw    = self.rfile.read(length) if length else b"{}"
+            body   = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            self._send_json(400, {"ok": False, "error": f"Invalid JSON body: {exc}"})
+            return
+
+        symbol     = str(body.get("symbol", "")).upper().strip()
+        action     = str(body.get("action", "")).upper().strip()
+        price      = body.get("price")
+        confidence = float(body.get("confidence", 0.65))
+        source     = str(body.get("source", "webhook"))
+        reasoning  = body.get("reasoning", f"Webhook signal from {source}")
+
+        # Basic validation
+        if not symbol:
+            self._send_json(422, {"ok": False, "error": "Missing required field: symbol"})
+            return
+        if action not in ("BUY", "SELL", "HOLD"):
+            self._send_json(422, {"ok": False,
+                                  "error": f"action must be BUY | SELL | HOLD, got '{action}'"})
+            return
+        if not (0.0 <= confidence <= 1.0):
+            self._send_json(422, {"ok": False,
+                                  "error": "confidence must be 0.0–1.0"})
+            return
+
+        if action == "HOLD":
+            self._send_json(200, {"ok": True, "trade_id": None,
+                                  "symbol": symbol, "action": "HOLD",
+                                  "message": "HOLD — no position opened"})
+            return
+
+        # Route to paper executor
+        try:
+            import sys, os
+            sys.path.insert(0, ROOT)
+            from execution.executor import get_executor
+            from strategy.engine import TradeSignal
+
+            if price is not None:
+                price = float(price)
+
+            sig = TradeSignal(
+                symbol=symbol,
+                action=action,
+                entry_price=price or 0.0,
+                confidence=confidence,
+                p_direction=confidence,
+                reasoning=f"[{source}] {reasoning}",
+                setup_type="webhook",
+            )
+
+            executor = get_executor()
+            result   = executor.execute(sig)
+            trade_id = result.get("trade_id") if isinstance(result, dict) else None
+            status   = result.get("status", "unknown") if isinstance(result, dict) else str(result)
+
+            self._send_json(200, {
+                "ok": True,
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "action": action,
+                "price": price,
+                "confidence": confidence,
+                "source": source,
+                "status": status,
+            })
+
+        except Exception as exc:
+            self._send_json(500, {"ok": False, "error": str(exc)})
 
     def do_GET(self):
         if not self._is_authorised():

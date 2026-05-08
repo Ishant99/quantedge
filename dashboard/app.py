@@ -2100,8 +2100,8 @@ elif page == "RESEARCH":
     </div>
     """, unsafe_allow_html=True)
 
-    tab_intel, tab_heat, tab_bt, tab_screen, tab_attrib, tab_opts = st.tabs([
-        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "SCREENER", "ATTRIBUTION", "OPTIONS"
+    tab_intel, tab_heat, tab_bt, tab_charts, tab_screen, tab_attrib, tab_opts = st.tabs([
+        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "CHARTS", "SCREENER", "ATTRIBUTION", "OPTIONS"
     ])
 
     with tab_intel:
@@ -2248,7 +2248,7 @@ elif page == "RESEARCH":
                             all_r.append(json.load(f)["result"])
                     except Exception: pass
                 if all_r:
-                    btr1, btr2, btr3 = st.tabs(["RETURNS", "WIN RATE", "TABLE"])
+                    btr1, btr2, btr3, btr4 = st.tabs(["RETURNS", "WIN RATE", "TABLE", "EQUITY CURVE"])
                     df_r = pd.DataFrame(all_r).sort_values("total_return_pct", ascending=False)
 
                     with btr1:
@@ -2283,6 +2283,239 @@ elif page == "RESEARCH":
                         avail = [c for c in cols if c in df_r.columns]
                         st.dataframe(df_r[avail], use_container_width=True)
 
+                    with btr4:
+                        # Equity curves from backtest JSON files
+                        eq_sym = st.selectbox("SYMBOL", df_r["symbol"].tolist(), key="bt_eq_sym")
+                        eq_file = os.path.join(results_dir, f"{eq_sym}_backtest.json")
+                        if os.path.exists(eq_file):
+                            try:
+                                with open(eq_file) as _f:
+                                    _bt = json.load(_f)
+                                equity = _bt.get("equity_curve") or _bt.get("result", {}).get("equity_curve")
+                                if equity:
+                                    eq_df = pd.DataFrame({"value": equity})
+                                    initial = eq_df["value"].iloc[0]
+                                    eq_df["pct"] = (eq_df["value"] / initial - 1) * 100
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatter(
+                                        y=eq_df["value"],
+                                        mode="lines",
+                                        line=dict(color="#FF6B00", width=1.5),
+                                        fill="tozeroy",
+                                        fillcolor="rgba(255,107,0,0.06)",
+                                        name="Portfolio Value",
+                                    ))
+                                    # Drawdown shading
+                                    rolling_max = eq_df["value"].cummax()
+                                    drawdown = (eq_df["value"] - rolling_max) / rolling_max * 100
+                                    max_dd = drawdown.min()
+                                    fig.update_layout(
+                                        **_plotly_cfg(300),
+                                        title=dict(
+                                            text=f"{eq_sym}  |  Max DD {max_dd:.1f}%",
+                                            font=dict(color="#888", size=10), x=0
+                                        ),
+                                        yaxis_title="Portfolio ₹",
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    # Return % sub-chart
+                                    fig2 = go.Figure(go.Scatter(
+                                        y=eq_df["pct"], mode="lines",
+                                        line=dict(color="#00C805" if eq_df["pct"].iloc[-1] > 0 else "#FF3B3B", width=1),
+                                        fill="tozeroy",
+                                        fillcolor="rgba(0,200,5,0.05)" if eq_df["pct"].iloc[-1] > 0 else "rgba(255,59,59,0.05)",
+                                    ))
+                                    fig2.add_hline(y=0, line_dash="dot", line_color="#222", line_width=1)
+                                    fig2.update_layout(**_plotly_cfg(120), yaxis_title="Return %")
+                                    st.plotly_chart(fig2, use_container_width=True)
+                                else:
+                                    st.info("No equity curve data — re-run backtest to generate it")
+                            except Exception as _e:
+                                st.error(str(_e))
+                        else:
+                            st.info(f"Run backtest for {eq_sym} first")
+
+    with tab_charts:
+        st.markdown('<div class="bb-header">INTERACTIVE CHART</div>', unsafe_allow_html=True)
+        ch1, ch2, ch3, ch4 = st.columns([2, 1, 1, 1])
+        chart_sym    = ch1.text_input("SYMBOL", "RELIANCE", key="chart_sym").upper().strip()
+        chart_period = ch2.selectbox("PERIOD", ["1mo","3mo","6mo","1y","2y"], index=2, key="chart_period")
+        show_vol     = ch3.checkbox("VOLUME", value=True, key="chart_vol")
+        show_sr      = ch4.checkbox("S/R LEVELS", value=True, key="chart_sr")
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _full_chart_data(symbol: str, period: str):
+            """Cached 5 min — fetch OHLCV + compute indicators."""
+            try:
+                from data.ohlcv_store import OHLCVStore
+                store = OHLCVStore()
+                days_map = {"1mo": 35, "3mo": 100, "6mo": 200, "1y": 380, "2y": 750}
+                df = store.get_symbol(symbol, days=days_map.get(period, 200))
+                if df.empty:
+                    # Fall back to yfinance if store is empty
+                    ticker = f"{symbol}.NS"
+                    raw = yf.Ticker(ticker).history(period=period, interval="1d")
+                    if raw.empty:
+                        return None
+                    raw.columns = [c.lower() for c in raw.columns]
+                    df = raw[["open","high","low","close","volume"]]
+                close = df["close"]
+                df["EMA20"]  = close.ewm(span=20,  adjust=False).mean()
+                df["EMA50"]  = close.ewm(span=50,  adjust=False).mean()
+                df["EMA200"] = close.ewm(span=200, adjust=False).mean()
+                # RSI(14)
+                delta = close.diff()
+                gain  = delta.clip(lower=0).rolling(14).mean()
+                loss  = (-delta.clip(upper=0)).rolling(14).mean()
+                rs    = gain / loss.replace(0, float("nan"))
+                df["RSI"] = 100 - 100 / (1 + rs)
+                # Volume EMA
+                df["VolEMA20"] = df["volume"].ewm(span=20).mean()
+                return df
+            except Exception:
+                return None
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _sr_levels(symbol: str, period: str):
+            """Compute S/R levels from OHLCV store."""
+            try:
+                from data.ohlcv_store import OHLCVStore
+                from analysis.support_resistance import SupportResistanceAnalyser
+                days_map = {"1mo": 200, "3mo": 200, "6mo": 300, "1y": 380, "2y": 500}
+                df = OHLCVStore().get_symbol(symbol, days=days_map.get(period, 300))
+                if df.empty:
+                    return None, None
+                result = SupportResistanceAnalyser().analyse(symbol, df)
+                return result.supports[:3], result.resistances[:3]
+            except Exception:
+                return None, None
+
+        df_chart = _full_chart_data(chart_sym, chart_period)
+        if df_chart is None:
+            st.warning(f"No data for {chart_sym} — check the symbol or wait for OHLCV store to populate (15:45 IST)")
+        else:
+            # ── Fetch trade annotations from DB ─────────────────────────
+            @st.cache_data(ttl=60, show_spinner=False)
+            def _trade_annotations(symbol: str):
+                try:
+                    with sqlite3.connect("logs/trades.db") as conn:
+                        rows = conn.execute(
+                            "SELECT entry_date, entry_price, exit_date, exit_price, pnl "
+                            "FROM trades WHERE symbol=? ORDER BY entry_date DESC LIMIT 30",
+                            (symbol,)
+                        ).fetchall()
+                    return rows
+                except Exception:
+                    return []
+
+            annotations = _trade_annotations(chart_sym)
+
+            # ── Main candlestick chart ───────────────────────────────────
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(
+                x=df_chart.index,
+                open=df_chart["open"], high=df_chart["high"],
+                low=df_chart["low"],  close=df_chart["close"],
+                name="Price", showlegend=False,
+                increasing=dict(line=dict(color="#00C805", width=1), fillcolor="rgba(0,200,5,0.18)"),
+                decreasing=dict(line=dict(color="#FF3B3B", width=1), fillcolor="rgba(255,59,59,0.18)"),
+            ))
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart["EMA20"],
+                line=dict(color="#FF6B00", width=1.2), name="EMA20"))
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart["EMA50"],
+                line=dict(color="#888888", width=1.2), name="EMA50"))
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart["EMA200"],
+                line=dict(color="#4488ff", width=1.2, dash="dot"), name="EMA200"))
+
+            # ── S/R level lines ──────────────────────────────────────────
+            if show_sr:
+                supports, resistances = _sr_levels(chart_sym, chart_period)
+                if supports:
+                    for lvl in supports:
+                        fig.add_hline(y=lvl, line_dash="dot",
+                                      line_color="rgba(0,200,5,0.45)", line_width=1,
+                                      annotation_text=f"S {lvl:,.0f}",
+                                      annotation_font=dict(color="#00C805", size=9))
+                if resistances:
+                    for lvl in resistances:
+                        fig.add_hline(y=lvl, line_dash="dot",
+                                      line_color="rgba(255,59,59,0.45)", line_width=1,
+                                      annotation_text=f"R {lvl:,.0f}",
+                                      annotation_font=dict(color="#FF3B3B", size=9))
+
+            # ── Trade entry/exit markers ─────────────────────────────────
+            if annotations:
+                entry_dates  = [r[0] for r in annotations if r[0]]
+                entry_prices = [r[1] for r in annotations if r[0]]
+                exit_dates   = [r[2] for r in annotations if r[2]]
+                exit_prices  = [r[3] for r in annotations if r[2]]
+                pnls         = [r[4] for r in annotations if r[2]]
+                if entry_dates:
+                    fig.add_trace(go.Scatter(
+                        x=entry_dates, y=entry_prices, mode="markers",
+                        marker=dict(symbol="triangle-up", size=10, color="#FF6B00",
+                                    line=dict(color="#000", width=1)),
+                        name="Entry", hovertemplate="%{x}<br>Entry @ ₹%{y:,.0f}<extra></extra>",
+                    ))
+                if exit_dates:
+                    colors = ["#00C805" if p and p > 0 else "#FF3B3B" for p in pnls]
+                    fig.add_trace(go.Scatter(
+                        x=exit_dates, y=exit_prices, mode="markers",
+                        marker=dict(symbol="triangle-down", size=10, color=colors,
+                                    line=dict(color="#000", width=1)),
+                        name="Exit",
+                        hovertemplate="%{x}<br>Exit @ ₹%{y:,.0f}<extra></extra>",
+                    ))
+
+            fig.update_layout(
+                **_plotly_cfg(350, showlegend=True),
+                xaxis_rangeslider_visible=False,
+                xaxis_title="",
+                yaxis_title=f"{chart_sym} ₹",
+                legend=dict(orientation="h", y=1.05, font=dict(color="#666", size=9)),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ── Volume panel ─────────────────────────────────────────────
+            if show_vol and "volume" in df_chart.columns:
+                vol_colors = [
+                    "#00C805" if c >= o else "#FF3B3B"
+                    for c, o in zip(df_chart["close"], df_chart["open"])
+                ]
+                fig_vol = go.Figure()
+                fig_vol.add_trace(go.Bar(
+                    x=df_chart.index, y=df_chart["volume"],
+                    marker_color=vol_colors, name="Volume", showlegend=False,
+                ))
+                fig_vol.add_trace(go.Scatter(
+                    x=df_chart.index, y=df_chart["VolEMA20"],
+                    line=dict(color="#FF6B00", width=1), name="Vol EMA20", showlegend=False,
+                ))
+                fig_vol.update_layout(**_plotly_cfg(100), yaxis_title="Vol")
+                st.plotly_chart(fig_vol, use_container_width=True)
+
+            # ── RSI panel ────────────────────────────────────────────────
+            if "RSI" in df_chart.columns:
+                fig_rsi = go.Figure()
+                rsi_colors = df_chart["RSI"].apply(
+                    lambda v: "#FF3B3B" if v >= 70 else "#00C805" if v <= 30 else "#888888"
+                )
+                fig_rsi.add_trace(go.Scatter(
+                    x=df_chart.index, y=df_chart["RSI"],
+                    mode="lines", line=dict(color="#FF6B00", width=1.2),
+                    fill="tozeroy", fillcolor="rgba(255,107,0,0.04)",
+                    name="RSI(14)", showlegend=False,
+                ))
+                fig_rsi.add_hline(y=70, line_dash="dot", line_color="#FF3B3B",
+                                  line_width=1, annotation_text="OB 70",
+                                  annotation_font=dict(color="#FF3B3B", size=8))
+                fig_rsi.add_hline(y=30, line_dash="dot", line_color="#00C805",
+                                  line_width=1, annotation_text="OS 30",
+                                  annotation_font=dict(color="#00C805", size=8))
+                fig_rsi.update_layout(**_plotly_cfg(110), yaxis_range=[0, 100],
+                                      yaxis_title="RSI")
+                st.plotly_chart(fig_rsi, use_container_width=True)
+
     with tab_screen:
         st.markdown('<div class="bb-header">STOCK SCREENER</div>', unsafe_allow_html=True)
         f1, f2, f3 = st.columns(3)
@@ -2292,17 +2525,72 @@ elif page == "RESEARCH":
         filt_min_ta = f3.slider("MIN TA SCORE", 0.0, 10.0, 5.0, 0.5)
 
         if st.button("SCREEN NOW", type="primary"):
-            with st.spinner("Scanning..."):
+            with st.spinner("Scanning with momentum filter..."):
                 try:
+                    from analysis.momentum_filter import MomentumFilter
+                    from data.ohlcv_store import OHLCVStore
+
                     df_nse = pd.read_csv("data/nse500_symbols.csv")
                     if filt_sector != "All":
                         df_nse = df_nse[df_nse["sector"] == filt_sector]
                     if filt_index != "All":
                         df_nse = df_nse[df_nse["index_membership"].str.contains(filt_index, na=False)]
-                    st.markdown(f"""<div style="font-size:11px;color:#888;margin-bottom:8px;">
-                        {len(df_nse)} stocks match filters</div>""", unsafe_allow_html=True)
-                    st.dataframe(df_nse[["symbol","name","sector","market_cap_rank","index_membership"]],
-                                 use_container_width=True, height=400)
+
+                    # Load from OHLCV store (no API calls)
+                    store   = OHLCVStore()
+                    symbols = df_nse["symbol"].dropna().tolist()
+                    market_data = {}
+                    for sym in symbols:
+                        df_ohlcv = store.get_symbol(sym, days=200)
+                        if not df_ohlcv.empty and len(df_ohlcv) >= 50:
+                            market_data[sym] = df_ohlcv
+
+                    if not market_data:
+                        st.warning("OHLCV store is empty — run the 15:45 IST job first, or the store will fill automatically today.")
+                    else:
+                        mf = MomentumFilter()
+                        results = {}
+                        for sym, df_sym in market_data.items():
+                            results[sym] = mf.filter(sym, df_sym)
+
+                        rows = []
+                        for sym, r in results.items():
+                            sym_meta = df_nse[df_nse["symbol"] == sym]
+                            name    = sym_meta["name"].iloc[0]    if not sym_meta.empty and "name"    in sym_meta else ""
+                            sector  = sym_meta["sector"].iloc[0]  if not sym_meta.empty and "sector"  in sym_meta else ""
+                            rank    = sym_meta["market_cap_rank"].iloc[0] if not sym_meta.empty and "market_cap_rank" in sym_meta else ""
+                            rows.append({
+                                "Symbol":     sym,
+                                "Name":       name,
+                                "Sector":     sector,
+                                "MCap Rank":  rank,
+                                "Price":      r.price,
+                                "EMA50":      r.ema50,
+                                "EMA200":     r.ema200,
+                                "RSI":        r.rsi,
+                                "3M Ret%":    r.ret_3m,
+                                "Vol Trend":  r.volume_trend,
+                                "Long OK":    "✅" if r.passes else "❌",
+                                "Short OK":   "✅" if r.passes_short else "❌",
+                                "Reason":     r.reason,
+                            })
+
+                        df_screen = pd.DataFrame(rows)
+                        # Filter by min TA proxy: passes must be True, RSI ok
+                        passing  = df_screen[df_screen["Long OK"] == "✅"].copy()
+                        passing  = passing[passing["RSI"] >= filt_min_ta * 3.5]
+                        passing  = passing.sort_values("3M Ret%", ascending=False)
+
+                        st.markdown(
+                            f'<div style="font-size:11px;color:#888;margin-bottom:8px;">'
+                            f'{len(passing)}/{len(df_screen)} passed momentum filter '
+                            f'({len(market_data)} loaded from OHLCV store)</div>',
+                            unsafe_allow_html=True
+                        )
+                        disp_cols = ["Symbol","Name","Sector","Price","RSI","3M Ret%","Vol Trend","Short OK","Reason"]
+                        avail = [c for c in disp_cols if c in passing.columns]
+                        st.dataframe(passing[avail], use_container_width=True, height=420)
+
                 except Exception as e:
                     st.error(str(e))
         else:
