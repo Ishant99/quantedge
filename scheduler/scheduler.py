@@ -795,6 +795,111 @@ def run_crypto_scan():
         send_telegram_message(f"*Agent ERROR (crypto)*\n`{e}`")
 
 
+def run_morning_digest():
+    """
+    Pre-scan morning digest at 9:00 AM IST.
+    Reads from OHLCV store (no API calls) — shows regime + top momentum candidates.
+    """
+    if _is_nse_holiday():
+        return
+    _write_scheduler_status("morning_digest", "running")
+    logger.info(f"Morning digest at {datetime.now(IST).strftime('%H:%M IST')}")
+    try:
+        from analysis.market_regime import MarketRegimeFilter
+        from analysis.momentum_filter import MomentumFilter
+        from analysis.pattern_recognition import PatternRecogniser
+        from analysis.support_resistance import SupportResistanceAnalyser
+        from data.ohlcv_store import OHLCVStore
+        from data.market_scanner import MarketScanner
+
+        # 1. Market regime (quick — uses cached Nifty data)
+        regime_result = MarketRegimeFilter().get_regime()
+        regime = regime_result.regime.upper()
+        nifty_trend = getattr(regime_result, "nifty_trend", "flat")
+        regime_icon = {
+            "BULL": "🐂", "RECOVERY": "🔄", "SIDEWAYS": "↔️", "BEAR": "🐻"
+        }.get(regime, "📊")
+
+        # 2. Load OHLCV from local store (fast — no yfinance calls at open)
+        store       = OHLCVStore()
+        all_symbols = MarketScanner().get_all_symbols()[:250]   # top 250 by rank
+
+        market_data = {}
+        for sym in all_symbols:
+            df = store.get_symbol(sym, days=200)
+            if not df.empty and len(df) >= 50:
+                market_data[sym] = df
+
+        if not market_data:
+            logger.info("Morning digest: OHLCV store empty — digest skipped (store fills at 15:45)")
+            _write_scheduler_status("morning_digest", "skipped", "OHLCV store empty")
+            return
+
+        # 3. Momentum filter — long candidates only
+        momentum_results = MomentumFilter().filter_all(market_data, mode="buy")
+
+        # 4. Pattern + S/R on top 60 momentum stocks
+        top_syms = list(momentum_results.keys())[:60]
+        top_data = {s: market_data[s] for s in top_syms if s in market_data}
+        pattern_results = PatternRecogniser().analyse_all(top_data)
+        sr_results      = SupportResistanceAnalyser().analyse_all(top_data)
+
+        # 5. Score and rank candidates
+        candidates = []
+        for sym in top_syms:
+            mom = momentum_results.get(sym)
+            pat = pattern_results.get(sym)
+            sr  = sr_results.get(sym)
+            score = 5.0
+            if pat: score += (pat.pattern_score - 5.0) * 0.3
+            if sr:  score += (sr.sr_score       - 5.0) * 0.2
+            candidates.append({
+                "sym":      sym,
+                "score":    score,
+                "rsi":      mom.rsi if mom else 50,
+                "buy_zone": sr.recommendation == "buy_zone" if sr else False,
+                "pattern":  pat.primary_pattern if (pat and pat.bias == "bullish") else None,
+            })
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        top5 = candidates[:5]
+
+        # 6. Build Telegram message
+        date_str = datetime.now(IST).strftime("%d %b %Y")
+        lines = [
+            f"*🌅 Morning Digest — {date_str}*",
+            f"{regime_icon} Regime: *{regime}* | Nifty trend: {nifty_trend.upper()}",
+            "",
+            f"*Top Candidates ({len(momentum_results)}/{len(market_data)} passed momentum filter):*",
+        ]
+        for c in top5:
+            flags = []
+            if c["buy_zone"]:             flags.append("📍 buy zone")
+            if c["pattern"]:              flags.append(f"📐 {c['pattern']}")
+            if not flags:                 flags.append("trending")
+            lines.append(
+                f"• *{c['sym']}*  RSI {c['rsi']:.0f}  |  {' | '.join(flags)}"
+            )
+
+        lines += [
+            "",
+            f"_Full scan starts at 09:15 IST  |  {len(market_data)} symbols loaded_",
+        ]
+
+        send_telegram_message("\n".join(lines))
+        _write_scheduler_status(
+            "morning_digest", "ok",
+            f"Regime:{regime} | Passed:{len(momentum_results)} | Data:{len(market_data)}"
+        )
+        logger.info(
+            f"Morning digest sent — regime={regime} "
+            f"candidates={len(momentum_results)}/{len(market_data)}"
+        )
+    except Exception as e:
+        _write_scheduler_status("morning_digest", "error", str(e))
+        logger.error(f"Morning digest failed: {e}")
+
+
 def run_ohlcv_update():
     """Store daily OHLCV candles for all watched symbols after market close."""
     _write_scheduler_status("ohlcv_update", "running")
@@ -921,6 +1026,15 @@ if __name__ == "__main__":
         CronTrigger(hour=8, minute=30, day_of_week="mon-fri", timezone=IST),
         id="gift_nifty",
         name="GIFT Nifty Pre-Market Check (08:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
+    # --- Job 0b: Morning digest at 9:00 AM (reads OHLCV store — no API calls) ---
+    scheduler.add_job(
+        run_morning_digest,
+        CronTrigger(hour=9, minute=0, day_of_week="mon-fri", timezone=IST),
+        id="morning_digest",
+        name="Morning Digest (09:00 IST)",
         misfire_grace_time=_GRACE,
     )
 
@@ -1066,7 +1180,9 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  12 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  14 JOBS")
+    logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
+    logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
     logger.info(f"  NSE afternoon scan : {SCAN_TIME_2} IST (Mon-Fri)")
     logger.info("  Intraday scan      : hourly 09:30-14:30 (Mon-Fri)")
@@ -1075,9 +1191,10 @@ if __name__ == "__main__":
     logger.info("  Thesis re-eval     : 13:00 IST (Mon-Fri)")
     logger.info("  EOD close          : 15:25 IST (Mon-Fri)")
     logger.info("  Outcome tracker    : 15:30 IST (Mon-Fri)")
+    logger.info("  OHLCV store update : 15:45 IST (Mon-Fri)")
+    logger.info("  EOD digest         : 18:00 IST (Mon-Fri, all markets)")
     logger.info("  US stocks scan     : 19:00 IST (Mon-Fri)")
     logger.info("  Crypto scan        : every 4h (24/7)")
-    logger.info("  EOD digest         : 18:00 IST (Mon-Fri, all markets)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
     logger.info("  Telegram bot       : always-on (command listener)")

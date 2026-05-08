@@ -66,6 +66,10 @@ class TradingPipeline:
         self._risk_gate = None
         self._position_sizer = None
         self._executor = None
+        self._momentum_filter = None
+        self._mtf_analyser = None
+        self._pattern_recogniser = None
+        self._sr_analyser = None
 
     # ------------------------------------------------------------------
     # Lazy accessors — each import is deferred until first call
@@ -142,6 +146,30 @@ class TradingPipeline:
             from execution.executor import get_executor
             self._executor = get_executor()
         return self._executor
+
+    def _get_momentum_filter(self):
+        if self._momentum_filter is None:
+            from analysis.momentum_filter import MomentumFilter
+            self._momentum_filter = MomentumFilter()
+        return self._momentum_filter
+
+    def _get_mtf_analyser(self):
+        if self._mtf_analyser is None:
+            from analysis.multi_timeframe import MultiTimeframeAnalyser
+            self._mtf_analyser = MultiTimeframeAnalyser()
+        return self._mtf_analyser
+
+    def _get_pattern_recogniser(self):
+        if self._pattern_recogniser is None:
+            from analysis.pattern_recognition import PatternRecogniser
+            self._pattern_recogniser = PatternRecogniser()
+        return self._pattern_recogniser
+
+    def _get_sr_analyser(self):
+        if self._sr_analyser is None:
+            from analysis.support_resistance import SupportResistanceAnalyser
+            self._sr_analyser = SupportResistanceAnalyser()
+        return self._sr_analyser
 
     # ------------------------------------------------------------------
     # Stage helpers
@@ -246,7 +274,23 @@ class TradingPipeline:
         """Returns {symbol: TAResult}."""
         t0 = time.time()
         logger.info(f"[Stage 3] technical — {len(market_data)} symbols")
-        ta_results = self._get_ta_agent().analyse_all(market_data)
+
+        # Pre-filter: MomentumFilter shrinks the universe before expensive TA
+        try:
+            momentum_results = self._get_momentum_filter().filter_all(
+                market_data, mode="both"
+            )
+            filtered_data = {sym: market_data[sym] for sym in momentum_results
+                             if sym in market_data}
+            logger.info(
+                f"[Stage 3] momentum pre-filter: "
+                f"{len(filtered_data)}/{len(market_data)} passed"
+            )
+        except Exception as exc:
+            logger.warning(f"[Stage 3] momentum filter failed — full universe: {exc}")
+            filtered_data = market_data
+
+        ta_results = self._get_ta_agent().analyse_all(filtered_data)
         bear_mode = ctx.regime in ("bear",)
         if bear_mode:
             tradeable = {sym: r for sym, r in ta_results.items()
@@ -258,6 +302,90 @@ class TradingPipeline:
             f"{len(tradeable)}/{len(ta_results)} tradeable"
         )
         return tradeable
+
+    # ------------------------------------------------------------------
+    # Stage 3b — Analysis Enrichment (MTF + Patterns + S/R)
+    # ------------------------------------------------------------------
+
+    def _stage_analysis_enrichment(
+        self, tradeable_data: dict
+    ) -> tuple[dict, dict, dict]:
+        """
+        Run MultiTimeframe, PatternRecogniser, and SupportResistance analysis.
+        Results are used post-signal-generation to adjust confidence scores.
+        Returns (mtf_results, pattern_results, sr_results).
+        """
+        t0 = time.time()
+        logger.info(f"[Stage 3b] analysis_enrichment — {len(tradeable_data)} symbols")
+        mtf_results     = {}
+        pattern_results = {}
+        sr_results      = {}
+
+        try:
+            mtf_results = self._get_mtf_analyser().analyse_all(tradeable_data)
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] MTF analysis failed: {exc}")
+
+        try:
+            pattern_results = self._get_pattern_recogniser().analyse_all(tradeable_data)
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] Pattern recognition failed: {exc}")
+
+        try:
+            sr_results = self._get_sr_analyser().analyse_all(tradeable_data)
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] S/R analysis failed: {exc}")
+
+        logger.info(
+            f"[Stage 3b] done ({self._elapsed(t0)}) — "
+            f"mtf={len(mtf_results)} patterns={len(pattern_results)} sr={len(sr_results)}"
+        )
+        return mtf_results, pattern_results, sr_results
+
+    def _apply_enrichment_to_signals(
+        self,
+        signals: list,
+        mtf_results: dict,
+        pattern_results: dict,
+        sr_results: dict,
+    ) -> list:
+        """
+        Adjust signal p_direction based on MTF, pattern, and S/R analysis.
+        Higher confidence → larger position size in Stage 8.
+        Lower confidence → smaller position size (safer).
+        """
+        for sig in signals:
+            if sig.action not in ("BUY", "SELL"):
+                continue
+
+            mtf = mtf_results.get(sig.symbol)
+            pat = pattern_results.get(sig.symbol)
+            sr  = sr_results.get(sig.symbol)
+
+            # MTF penalty: counter-trend trades get confidence reduction
+            if mtf and getattr(mtf, "mtf_penalty", 0) > 0:
+                sig.p_direction = max(0.1, sig.p_direction * (1 - mtf.mtf_penalty))
+                logger.debug(
+                    f"[Enrich] {sig.symbol} MTF penalty -{mtf.mtf_penalty:.0%} "
+                    f"→ conf={sig.p_direction:.2f}"
+                )
+
+            # Pattern enrichment (BUY signals)
+            if sig.action == "BUY" and pat:
+                if pat.bias == "bearish":
+                    sig.p_direction = max(0.1, sig.p_direction * 0.85)
+                elif pat.bias == "bullish":
+                    sig.p_direction = min(0.95, sig.p_direction * 1.05)
+
+            # S/R enrichment (BUY signals)
+            if sig.action == "BUY" and sr:
+                if sr.near_resistance:
+                    sig.p_direction = max(0.1, sig.p_direction * 0.80)
+                    logger.debug(f"[Enrich] {sig.symbol} near resistance → conf={sig.p_direction:.2f}")
+                elif sr.near_support:
+                    sig.p_direction = min(0.95, sig.p_direction * 1.10)
+
+        return signals
 
     # ------------------------------------------------------------------
     # Stage 4 — Sentiment Analysis
@@ -613,6 +741,17 @@ class TradingPipeline:
         tradeable_symbols = list(ta_results.keys())
         tradeable_data = {sym: market_data[sym] for sym in tradeable_symbols if sym in market_data}
 
+        # ---- Stage 3b: Analysis Enrichment (MTF + Patterns + S/R) ---
+        mtf_results     = {}
+        pattern_results = {}
+        sr_results      = {}
+        try:
+            mtf_results, pattern_results, sr_results = self._stage_analysis_enrichment(
+                tradeable_data
+            )
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] failed — enrichment skipped: {exc}")
+
         # ---- Stage 4: Sentiment Analysis -----------------------------
         try:
             sent_results = self._stage_sentiment(
@@ -637,6 +776,14 @@ class TradingPipeline:
             logger.error(f"[Stage 5] fatal: {exc}")
             errors.append(f"stage5_signal_gen: {exc}")
             signals = []
+
+        # Apply MTF / pattern / S/R confidence adjustments
+        try:
+            signals = self._apply_enrichment_to_signals(
+                signals, mtf_results, pattern_results, sr_results
+            )
+        except Exception as exc:
+            logger.warning(f"[Enrich] signal enrichment failed — using raw signals: {exc}")
 
         # ---- Auxiliary helpers (earnings guard + F&O ban) ------------
         earnings_guard = None
