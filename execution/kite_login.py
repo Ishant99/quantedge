@@ -26,10 +26,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import pytz
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import KITE_API_KEY, KITE_API_SECRET, KITE_ACCESS_TOKEN_FILE
 from utils import get_logger
+
+IST = pytz.timezone("Asia/Kolkata")
 
 logger = get_logger("KiteLogin")
 

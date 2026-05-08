@@ -253,17 +253,18 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"ok": False, "error": str(exc)})
 
     def do_GET(self):
-        if not self._is_authorised():
-            self._send_json(401, {"ok": False, "error": "Unauthorised — provide Bearer token or X-API-Key header"})
-            return
-
         parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
-        path = parsed.path.rstrip("/") or "/"
+        query  = parse_qs(parsed.query)
+        path   = parsed.path.rstrip("/") or "/"
 
-        # Zerodha OAuth redirect — no auth required (browser callback)
+        # Zerodha OAuth redirect — MUST be before auth gate.
+        # The browser redirect from Zerodha carries no Authorization header.
         if path == "/webhook/kite_callback":
             self._handle_kite_callback(parsed)
+            return
+
+        if not self._is_authorised():
+            self._send_json(401, {"ok": False, "error": "Unauthorised — provide Bearer token or X-API-Key header"})
             return
 
         routes = {
@@ -307,13 +308,12 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
             from execution.kite_login import is_authenticated, load_access_token
             auth = is_authenticated()
             token = load_access_token()
+            from config import KITE_ACCESS_TOKEN_FILE as _KTF
             return {
-                "ok":              True,
-                "authenticated":   auth,
-                "token_preview":   (token[:8] + "…") if token else "",
-                "token_file":      sys.modules.get("config", None) and
-                                   __import__("config").KITE_ACCESS_TOKEN_FILE or
-                                   "logs/kite_access_token.txt",
+                "ok":            True,
+                "authenticated": auth,
+                "token_preview": (token[:8] + "…") if token else "",
+                "token_file":    _KTF,
             }
         except Exception as exc:
             return {"ok": False, "authenticated": False, "error": str(exc)}

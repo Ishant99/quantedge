@@ -247,6 +247,7 @@ def run_daily_scan():
             _run_options_signals()
             _run_futures_signals()
             _run_selling_signals()
+            _run_iron_condor_signals()
             _sync_state("daily_scan_retry")
             _write_scheduler_status("daily_scan", "ok", f"Recovered on retry: {len(signals)} signals")
             logger.info("Scheduled scan recovered on retry")
@@ -1343,7 +1344,7 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  15 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  17 JOBS")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")

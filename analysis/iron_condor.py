@@ -194,7 +194,7 @@ class IronCondorGenerator:
             breakeven_lower = short_put  - net_credit
             profit_zone_pct = (breakeven_upper - breakeven_lower) / spot * 100
 
-            expiry = self._next_expiry_str()
+            expiry = expiry_str   # already computed above for DTE calculation
 
             confidence = min(0.75, 0.50 + reward_risk * 0.5 + (vix - VIX_MIN) * 0.01)
             iv_note    = (
