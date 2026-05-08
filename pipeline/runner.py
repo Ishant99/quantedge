@@ -70,6 +70,8 @@ class TradingPipeline:
         self._mtf_analyser = None
         self._pattern_recogniser = None
         self._sr_analyser = None
+        self._breakout_scanner = None
+        self._rsi2_scanner = None
 
     # ------------------------------------------------------------------
     # Lazy accessors — each import is deferred until first call
@@ -170,6 +172,18 @@ class TradingPipeline:
             from analysis.support_resistance import SupportResistanceAnalyser
             self._sr_analyser = SupportResistanceAnalyser()
         return self._sr_analyser
+
+    def _get_breakout_scanner(self):
+        if self._breakout_scanner is None:
+            from analysis.breakout_52w import Breakout52WScanner
+            self._breakout_scanner = Breakout52WScanner()
+        return self._breakout_scanner
+
+    def _get_rsi2_scanner(self):
+        if self._rsi2_scanner is None:
+            from analysis.rsi2_strategy import RSI2Scanner
+            self._rsi2_scanner = RSI2Scanner()
+        return self._rsi2_scanner
 
     # ------------------------------------------------------------------
     # Stage helpers
@@ -308,18 +322,20 @@ class TradingPipeline:
     # ------------------------------------------------------------------
 
     def _stage_analysis_enrichment(
-        self, tradeable_data: dict
-    ) -> tuple[dict, dict, dict]:
+        self, tradeable_data: dict, ctx: "MarketContext" = None
+    ) -> tuple[dict, dict, dict, dict, dict]:
         """
-        Run MultiTimeframe, PatternRecogniser, and SupportResistance analysis.
+        Run MTF, Pattern, S/R, 52W Breakout, and RSI2 analysis.
         Results are used post-signal-generation to adjust confidence scores.
-        Returns (mtf_results, pattern_results, sr_results).
+        Returns (mtf_results, pattern_results, sr_results, breakout_results, rsi2_results).
         """
         t0 = time.time()
         logger.info(f"[Stage 3b] analysis_enrichment — {len(tradeable_data)} symbols")
-        mtf_results     = {}
-        pattern_results = {}
-        sr_results      = {}
+        mtf_results      = {}
+        pattern_results  = {}
+        sr_results       = {}
+        breakout_results = {}
+        rsi2_results     = {}
 
         try:
             mtf_results = self._get_mtf_analyser().analyse_all(tradeable_data)
@@ -336,11 +352,26 @@ class TradingPipeline:
         except Exception as exc:
             logger.warning(f"[Stage 3b] S/R analysis failed: {exc}")
 
+        try:
+            breakout_results = self._get_breakout_scanner().scan_all(tradeable_data)
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] 52W breakout scan failed: {exc}")
+
+        try:
+            bear_mode = (ctx.regime == "bear") if ctx else False
+            rsi2_results = self._get_rsi2_scanner().scan_all(
+                tradeable_data, allow_shorts=bear_mode
+            )
+        except Exception as exc:
+            logger.warning(f"[Stage 3b] RSI2 scan failed: {exc}")
+
         logger.info(
             f"[Stage 3b] done ({self._elapsed(t0)}) — "
-            f"mtf={len(mtf_results)} patterns={len(pattern_results)} sr={len(sr_results)}"
+            f"mtf={len(mtf_results)} patterns={len(pattern_results)} "
+            f"sr={len(sr_results)} breakouts={sum(1 for r in breakout_results.values() if r.is_breakout)} "
+            f"rsi2={len(rsi2_results)}"
         )
-        return mtf_results, pattern_results, sr_results
+        return mtf_results, pattern_results, sr_results, breakout_results, rsi2_results
 
     def _apply_enrichment_to_signals(
         self,
@@ -348,12 +379,17 @@ class TradingPipeline:
         mtf_results: dict,
         pattern_results: dict,
         sr_results: dict,
+        breakout_results: dict = None,
+        rsi2_results: dict = None,
     ) -> list:
         """
-        Adjust signal p_direction based on MTF, pattern, and S/R analysis.
+        Adjust signal p_direction based on MTF, pattern, S/R, breakout and RSI2 analysis.
         Higher confidence → larger position size in Stage 8.
         Lower confidence → smaller position size (safer).
         """
+        breakout_results = breakout_results or {}
+        rsi2_results     = rsi2_results or {}
+
         for sig in signals:
             if sig.action not in ("BUY", "SELL"):
                 continue
@@ -361,6 +397,8 @@ class TradingPipeline:
             mtf = mtf_results.get(sig.symbol)
             pat = pattern_results.get(sig.symbol)
             sr  = sr_results.get(sig.symbol)
+            bo  = breakout_results.get(sig.symbol)
+            r2  = rsi2_results.get(sig.symbol)
 
             # MTF penalty: counter-trend trades get confidence reduction
             if mtf and getattr(mtf, "mtf_penalty", 0) > 0:
@@ -384,6 +422,24 @@ class TradingPipeline:
                     logger.debug(f"[Enrich] {sig.symbol} near resistance → conf={sig.p_direction:.2f}")
                 elif sr.near_support:
                     sig.p_direction = min(0.95, sig.p_direction * 1.10)
+
+            # 52W breakout boost (BUY signals with confirmed breakout)
+            if sig.action == "BUY" and bo and bo.is_breakout:
+                sig.p_direction = min(0.95, sig.p_direction * 1.12)
+                sig.setup_type  = "breakout_52w"
+                logger.debug(
+                    f"[Enrich] {sig.symbol} 52W breakout +12% → conf={sig.p_direction:.2f}"
+                )
+
+            # RSI2 mean reversion — override setup_type when RSI2 fires
+            if r2 and r2.action == sig.action and r2.action == "BUY":
+                boost = 1.10 if r2.signal_strength == "STRONG" else 1.05
+                sig.p_direction = min(0.95, sig.p_direction * boost)
+                sig.setup_type  = "rsi2_mean_reversion"
+                logger.debug(
+                    f"[Enrich] {sig.symbol} RSI2={r2.rsi2:.0f} {r2.signal_strength} "
+                    f"→ conf={sig.p_direction:.2f}"
+                )
 
         return signals
 
@@ -741,13 +797,16 @@ class TradingPipeline:
         tradeable_symbols = list(ta_results.keys())
         tradeable_data = {sym: market_data[sym] for sym in tradeable_symbols if sym in market_data}
 
-        # ---- Stage 3b: Analysis Enrichment (MTF + Patterns + S/R) ---
-        mtf_results     = {}
-        pattern_results = {}
-        sr_results      = {}
+        # ---- Stage 3b: Analysis Enrichment (MTF + Patterns + S/R + Breakout + RSI2) ---
+        mtf_results      = {}
+        pattern_results  = {}
+        sr_results       = {}
+        breakout_results = {}
+        rsi2_results     = {}
         try:
-            mtf_results, pattern_results, sr_results = self._stage_analysis_enrichment(
-                tradeable_data
+            (mtf_results, pattern_results, sr_results,
+             breakout_results, rsi2_results) = self._stage_analysis_enrichment(
+                tradeable_data, ctx=ctx
             )
         except Exception as exc:
             logger.warning(f"[Stage 3b] failed — enrichment skipped: {exc}")
@@ -777,10 +836,11 @@ class TradingPipeline:
             errors.append(f"stage5_signal_gen: {exc}")
             signals = []
 
-        # Apply MTF / pattern / S/R confidence adjustments
+        # Apply MTF / pattern / S/R / breakout / RSI2 confidence adjustments
         try:
             signals = self._apply_enrichment_to_signals(
-                signals, mtf_results, pattern_results, sr_results
+                signals, mtf_results, pattern_results, sr_results,
+                breakout_results, rsi2_results
             )
         except Exception as exc:
             logger.warning(f"[Enrich] signal enrichment failed — using raw signals: {exc}")

@@ -229,6 +229,8 @@ def run_daily_scan():
         _run_futures_signals()
         # Options selling — straddle/strangle (Tue/Wed/Thu only)
         _run_selling_signals()
+        # Iron Condor — high-VIX spread (Mon–Wed, VIX >= threshold)
+        _run_iron_condor_signals()
         _sync_state("daily_scan")
         _write_scheduler_status("daily_scan", "ok", f"Signals processed: {len(signals)}")
 
@@ -351,6 +353,35 @@ def _run_selling_signals():
         send_telegram_message("\n".join(lines))
     except Exception as e:
         logger.warning(f"Selling signals failed: {e}")
+
+
+def _run_iron_condor_signals():
+    """
+    Generate Iron Condor signals when India VIX is elevated (>= VIX_MIN).
+    Only fires Mon–Wed (3+ days to expiry).
+    """
+    try:
+        from analysis.iron_condor import IronCondorGenerator
+        signals = IronCondorGenerator().run()
+        if not signals:
+            return
+        lines = ["*Iron Condor — High VIX Options Spread*", ""]
+        for s in signals:
+            lines += [
+                f"*{s.index} Iron Condor* | VIX {s.vix:.1f} | Expiry {s.expiry}",
+                f"Sell {s.short_put}P + Buy {s.long_put}P",
+                f"Sell {s.short_call}C + Buy {s.long_call}C",
+                f"Net Credit ≈ {s.net_credit:.0f} pts | Max Loss ≈ {s.max_loss:.0f} pts",
+                f"BE Range: {s.breakeven_lower:.0f}–{s.breakeven_upper:.0f}",
+                f"R:R = {s.reward_risk:.2f} | Conf {s.confidence:.0%}",
+                f"_{s.iv_note}_",
+                "",
+            ]
+        lines.append("_Iron Condor: max profit if index stays within short strikes at expiry_")
+        send_telegram_message("\n".join(lines))
+        logger.info(f"Iron Condor: {len(signals)} signal(s) sent")
+    except Exception as e:
+        logger.warning(f"Iron Condor signals failed: {e}")
 
 
 def _run_futures_signals():
@@ -724,6 +755,7 @@ def run_crypto_scan():
     try:
         from data.crypto_scanner import CryptoScanner
         from analysis.technical_agent import TechnicalAgent
+        from analysis.btc_dominance import BTCDominanceFilter
         from execution.brokers.crypto_paper_broker import CryptoPaperBroker
 
         scanner     = CryptoScanner()
@@ -732,6 +764,19 @@ def run_crypto_scan():
             logger.warning("Crypto scan: no data returned")
             _write_scheduler_status("crypto_scan", "skipped", "No market data returned")
             return
+
+        # BTC Dominance filter — restrict to blue chips when BTC.D > threshold
+        dominance_filter = BTCDominanceFilter()
+        dominance        = dominance_filter.get_dominance()
+        allowed_symbols  = dominance_filter.filter_symbols(list(market_data.keys()), dominance)
+        market_data      = {s: df for s, df in market_data.items() if s in allowed_symbols}
+
+        if dominance.blue_chip_only:
+            send_telegram_message(
+                f"📊 *BTC Dominance Alert*\n"
+                f"BTC.D = {dominance.btc_dominance:.1f}% — altcoins suppressed.\n"
+                f"Crypto scan restricted to BTCUSDT + ETHUSDT only."
+            )
 
         ta_results  = TechnicalAgent().analyse_all(market_data)
         broker      = CryptoPaperBroker()
