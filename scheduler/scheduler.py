@@ -10,6 +10,7 @@
 #   15:30        → Signal outcome tracker
 #   19:00        → US stocks scan (Mon-Fri)
 #   Every 4h     → Crypto scan (24/7)
+#   Sunday 02:00 → Walk-forward strategy optimizer (saves to logs/optimiser_results.json)
 #   Sunday 20:00 → Weekly performance summary to Telegram
 #
 # Run: python scheduler/scheduler.py
@@ -976,6 +977,53 @@ def run_weekly_summary():
         send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
 
 
+def run_weekly_optimizer():
+    """
+    Run the walk-forward strategy optimizer on Sunday at 02:00 IST.
+    Grid-searches RSI / momentum / confidence thresholds and saves
+    best parameters to logs/optimiser_results.json.
+    Dashboard picks up the results automatically on next load.
+    """
+    _write_scheduler_status("weekly_optimizer", "running")
+    logger.info(
+        f"Walk-forward optimizer triggered at "
+        f"{datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}"
+    )
+    try:
+        from backtest.optimiser import StrategyOptimiser
+        optimiser = StrategyOptimiser()
+        optimiser.run()
+
+        # Surface best results in Telegram
+        try:
+            import json as _json
+            _res_file = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "logs", "optimiser_results.json",
+            )
+            with open(_res_file, encoding="utf-8") as _f:
+                _res = _json.load(_f)
+            sharpe   = _res.get("best_sharpe",   0)
+            ret      = _res.get("best_return",   0)
+            win_rate = _res.get("best_win_rate", 0)
+            bp       = _res.get("best_params",   {})
+            param_str = " | ".join(f"{k}={v}" for k, v in list(bp.items())[:6])
+            msg = (
+                f"*Optimizer Complete (Sun 02:00)*\n"
+                f"Sharpe: `{sharpe:.3f}` | Return: `{ret:.1f}%` | Win: `{win_rate:.1f}%`\n"
+                f"Best params: `{param_str}`"
+            )
+            send_telegram_message(msg)
+        except Exception as _te:
+            logger.debug(f"Optimizer Telegram notify failed: {_te}")
+
+        _write_scheduler_status("weekly_optimizer", "ok", "Optimizer complete")
+    except Exception as e:
+        _write_scheduler_status("weekly_optimizer", "error", str(e))
+        logger.error(f"Walk-forward optimizer failed: {e}")
+        send_telegram_message(f"*Agent ERROR (optimizer)*\n`{e}`")
+
+
 # =============================================================================
 # Alert deduplication — prevents the same (symbol, action) from firing
 # multiple times in one trading day (e.g., intraday + daily scan overlap).
@@ -1275,6 +1323,15 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 11: Walk-forward optimizer every Sunday 2 AM ---
+    scheduler.add_job(
+        run_weekly_optimizer,
+        CronTrigger(day_of_week="sun", hour=2, minute=0, timezone=IST),
+        id="weekly_optimizer",
+        name="Walk-Forward Optimizer (Sun 02:00 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     scheduler.add_job(
         run_housekeeping,
         CronTrigger(hour=6, minute=5, timezone=IST),
@@ -1284,7 +1341,7 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  14 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  15 JOBS")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
@@ -1300,6 +1357,7 @@ if __name__ == "__main__":
     logger.info("  US stocks scan     : 19:00 IST (Mon-Fri)")
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
+    logger.info("  Walk-fwd optimizer : Sunday 02:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
     logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)

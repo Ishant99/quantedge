@@ -2100,8 +2100,8 @@ elif page == "RESEARCH":
     </div>
     """, unsafe_allow_html=True)
 
-    tab_intel, tab_heat, tab_bt, tab_charts, tab_screen, tab_attrib, tab_opts = st.tabs([
-        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "CHARTS", "SCREENER", "ATTRIBUTION", "OPTIONS"
+    tab_intel, tab_heat, tab_bt, tab_charts, tab_screen, tab_attrib, tab_opts, tab_optimizer = st.tabs([
+        "MARKET INTEL", "SECTOR MAP", "BACKTEST", "CHARTS", "SCREENER", "ATTRIBUTION", "OPTIONS", "OPTIMIZER"
     ])
 
     with tab_intel:
@@ -2764,6 +2764,233 @@ elif page == "RESEARCH":
               Always trade with defined risk using stop-loss orders.
             </div>
             """, unsafe_allow_html=True)
+
+    # ── OPTIMIZER tab ────────────────────────────────────────────────────────
+    with tab_optimizer:
+        st.markdown('<div class="bb-header">WALK-FORWARD STRATEGY OPTIMIZER</div>',
+                    unsafe_allow_html=True)
+        st.caption("Grid-search results from the walk-forward back-tester. "
+                   "Runs Sunday 02:00 IST automatically, or trigger manually below.")
+
+        _OPT_FILE = "logs/optimiser_results.json"
+
+        # ── Load results ────────────────────────────────────────────────────
+        opt_data = {}
+        try:
+            if os.path.exists(_OPT_FILE):
+                with open(_OPT_FILE, encoding="utf-8") as _f:
+                    opt_data = json.load(_f)
+        except Exception as _e:
+            st.warning(f"Could not load optimizer results: {_e}")
+
+        # ── Best-params summary ──────────────────────────────────────────────
+        if opt_data:
+            bp    = opt_data.get("best_params",   {})
+            ts    = opt_data.get("timestamp",      "")
+            sharpe   = opt_data.get("best_sharpe",   None)
+            ret      = opt_data.get("best_return",   None)
+            win_rate = opt_data.get("best_win_rate", None)
+
+            _ts_label = f"Last run: {ts[:19].replace('T',' ')}" if ts else ""
+            if _ts_label:
+                st.caption(_ts_label)
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("BEST SHARPE",   f"{sharpe:.3f}"   if sharpe   is not None else "—")
+            mc2.metric("BEST RETURN",   f"{ret:.1f}%"     if ret      is not None else "—")
+            mc3.metric("WIN RATE",      f"{win_rate:.1f}%" if win_rate is not None else "—")
+
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+
+            # Best params table
+            if bp:
+                st.markdown('<div class="bb-header" style="font-size:11px;">BEST PARAMETERS</div>',
+                            unsafe_allow_html=True)
+                bp_rows = [{"Parameter": k, "Value": v} for k, v in bp.items()]
+                st.dataframe(
+                    pd.DataFrame(bp_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Parameter": st.column_config.TextColumn("Parameter", width="medium"),
+                        "Value":     st.column_config.TextColumn("Value",     width="medium"),
+                    },
+                )
+
+            # ── Sharpe heatmap ───────────────────────────────────────────────
+            all_results = opt_data.get("all_results", [])
+            if len(all_results) >= 4:
+                st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+                st.markdown('<div class="bb-header" style="font-size:11px;">SHARPE RATIO HEATMAP</div>',
+                            unsafe_allow_html=True)
+
+                try:
+                    ar_df = pd.DataFrame(all_results)
+                    # Need at least 2 param columns + sharpe
+                    param_cols = [c for c in ar_df.columns
+                                  if c not in ("sharpe", "total_return", "win_rate",
+                                               "num_trades", "max_drawdown")]
+
+                    if len(param_cols) >= 2 and "sharpe" in ar_df.columns:
+                        x_col, y_col = param_cols[0], param_cols[1]
+
+                        pivot = ar_df.pivot_table(
+                            index=y_col, columns=x_col, values="sharpe",
+                            aggfunc="mean",
+                        )
+
+                        fig_hm = go.Figure(data=go.Heatmap(
+                            z=pivot.values.tolist(),
+                            x=[str(v) for v in pivot.columns.tolist()],
+                            y=[str(v) for v in pivot.index.tolist()],
+                            colorscale="RdYlGn",
+                            colorbar=dict(
+                                title="Sharpe",
+                                titlefont=dict(color="#888", size=10),
+                                tickfont=dict(color="#888", size=10),
+                            ),
+                            text=[[f"{v:.2f}" if v == v else ""
+                                   for v in row]
+                                  for row in pivot.values.tolist()],
+                            texttemplate="%{text}",
+                            textfont=dict(size=9),
+                        ))
+                        fig_hm.update_layout(
+                            paper_bgcolor="#0d0d0d",
+                            plot_bgcolor="#0d0d0d",
+                            font=dict(color="#888888", size=10,
+                                      family="JetBrains Mono"),
+                            margin=dict(l=10, r=10, t=30, b=10),
+                            height=320,
+                            xaxis=dict(title=x_col, tickfont=dict(color="#888",size=9),
+                                       title_font=dict(color="#888",size=10)),
+                            yaxis=dict(title=y_col, tickfont=dict(color="#888",size=9),
+                                       title_font=dict(color="#888",size=10)),
+                        )
+                        st.plotly_chart(fig_hm, use_container_width=True)
+                    else:
+                        st.info("Heatmap requires at least 2 parameter dimensions.")
+                except Exception as _he:
+                    st.warning(f"Heatmap error: {_he}")
+
+            # ── All results table ────────────────────────────────────────────
+            if all_results:
+                st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+                st.markdown('<div class="bb-header" style="font-size:11px;">ALL GRID RESULTS</div>',
+                            unsafe_allow_html=True)
+                try:
+                    ar_df = pd.DataFrame(all_results)
+                    # Sort by sharpe descending
+                    if "sharpe" in ar_df.columns:
+                        ar_df = ar_df.sort_values("sharpe", ascending=False)
+                    st.dataframe(
+                        ar_df.reset_index(drop=True),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                except Exception as _te:
+                    st.warning(f"Results table error: {_te}")
+
+        else:
+            st.info("No optimizer results yet — click RUN OPTIMIZER or wait for Sunday's "
+                    "scheduled run (02:00 IST).")
+
+        # ── Manual trigger ───────────────────────────────────────────────────
+        st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+        col_btn, col_note = st.columns([1, 4])
+        with col_btn:
+            if st.button("RUN OPTIMIZER", type="primary", use_container_width=True):
+                with st.spinner("Running walk-forward optimizer… this may take 1–3 minutes"):
+                    try:
+                        from backtest.optimiser import StrategyOptimiser
+                        StrategyOptimiser().run()
+                        st.success("Optimizer complete — results saved to logs/optimiser_results.json")
+                        st.rerun()
+                    except Exception as _oe:
+                        st.error(f"Optimizer error: {_oe}")
+        with col_note:
+            st.markdown(
+                '<div style="padding-top:8px;font-size:10px;color:#555555;'
+                'font-family:JetBrains Mono;">'
+                'Runs grid search over RSI / momentum / confidence thresholds. '
+                'Results are auto-saved and loaded on next page refresh.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Kite live-trading status card ────────────────────────────────────
+        st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="bb-header">ZERODHA KITE — LIVE TRADING</div>',
+                    unsafe_allow_html=True)
+
+        try:
+            from execution.kite_login import (
+                generate_login_url, is_authenticated, load_access_token,
+            )
+            from config import KITE_API_KEY, TRADING_MODE
+
+            kite_auth    = is_authenticated()
+            kite_token   = load_access_token()
+            kite_preview = (kite_token[:8] + "…") if kite_token else "—"
+            kite_mode    = TRADING_MODE.upper()
+            has_api_key  = bool(KITE_API_KEY)
+
+            status_color = "#00C805" if kite_auth else "#FF6B00"
+            status_label = "AUTHENTICATED" if kite_auth else ("NOT AUTHENTICATED")
+            mode_color   = "#FF3B3B" if kite_mode == "LIVE" else "#FF6B00"
+
+            st.markdown(f"""
+            <div style="background:#111111;border:1px solid #1e1e1e;
+                        border-left:3px solid {status_color};
+                        padding:14px 18px;margin-bottom:12px;font-family:JetBrains Mono;">
+              <div style="display:flex;align-items:center;gap:20px;margin-bottom:10px;">
+                <span style="color:#eeeeee;font-size:13px;font-weight:700;">Kite Connect</span>
+                <span style="color:{status_color};font-size:12px;font-weight:700;">
+                  ● {status_label}
+                </span>
+                <span style="color:{mode_color};font-size:11px;margin-left:auto;">
+                  MODE: {kite_mode}
+                </span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);
+                          gap:10px;font-size:11px;color:#888;">
+                <div><span style="color:#555;display:block;">API KEY</span>
+                     <span style="color:#cccccc;">
+                       {'configured' if has_api_key else '⚠ not set'}
+                     </span></div>
+                <div><span style="color:#555;display:block;">TOKEN</span>
+                     <span style="color:#cccccc;">{kite_preview}</span></div>
+                <div><span style="color:#555;display:block;">TOKEN TODAY</span>
+                     <span style="color:#cccccc;">{'yes' if kite_auth else 'no'}</span></div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if not kite_auth and has_api_key:
+                try:
+                    login_url = generate_login_url()
+                    st.markdown(
+                        f'<a href="{login_url}" target="_blank" '
+                        'style="display:inline-block;background:#FF6B00;color:#000;'
+                        'font-family:JetBrains Mono;font-size:11px;font-weight:700;'
+                        'padding:8px 16px;text-decoration:none;margin-bottom:8px;">'
+                        '⚡ LOGIN TO ZERODHA (opens new tab)</a>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        "After login, Zerodha redirects to your callback URL with "
+                        "?request_token=XXX. The API server handles /webhook/kite_callback "
+                        "automatically to exchange it for an access token."
+                    )
+                except Exception:
+                    st.info("Set KITE_API_KEY in settings to enable login link.")
+            elif not has_api_key:
+                st.info("Configure KITE_API_KEY and KITE_API_SECRET in Settings to enable live trading.")
+            else:
+                st.success("Kite token is valid for today. Live orders will route via Kite Connect.")
+
+        except Exception as _ke:
+            st.warning(f"Kite status unavailable: {_ke}")
 
 
 # =============================================================================
