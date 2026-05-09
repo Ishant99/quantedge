@@ -110,9 +110,10 @@ class MomentumFilter:
             rsi_ok       = rsi > 30
 
             buy_gates = {
-                "ema50_ok": ema50_ok,
-                "ret3m_ok": ret3m_ok,
-                "rsi_ok":   rsi_ok,
+                "ema50_ok":           ema50_ok,
+                "ret3m_ok":           ret3m_ok,
+                "rsi_ok":             rsi_ok,
+                "not_declining_volume": volume_trend != "down",
             }
             passes_buy = all(buy_gates.values())
 

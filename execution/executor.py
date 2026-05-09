@@ -47,7 +47,7 @@ class PaperExecutor:
         # Reload portfolio from disk to pick up changes from other scheduler jobs
         # (price_monitor, trailing_stop, EOD close) that may have run concurrently.
         fresh = self._load_portfolio()
-        if fresh:
+        if fresh is not None:
             self.portfolio = fresh
 
         result = {}
@@ -115,6 +115,7 @@ class PaperExecutor:
                 "entry_confidence": signal.confidence,
                 "trade_type":       getattr(signal, "trade_type", "swing"),
                 "timestamp":        datetime.now().isoformat(),
+                "entry_friction":   round(slippage_buy + brokerage_buy, 2),
             }
             result = {
                 "status":    "filled",
@@ -146,7 +147,8 @@ class PaperExecutor:
             slippage_sell  = round(sell_price * pos["qty"] * 0.001, 2)
             brokerage_sell = 20.0
             proceeds = sell_price * pos["qty"] - slippage_sell - brokerage_sell
-            pnl      = proceeds - (pos["entry"] * pos["qty"])
+            # Deduct entry friction so PnL reflects total round-trip cost
+            pnl      = proceeds - (pos["entry"] * pos["qty"]) - pos.get("entry_friction", 0.0)
             self.portfolio["cash"] += proceeds
             del self.portfolio["positions"][signal.symbol]
             self.portfolio["total_trades"] += 1

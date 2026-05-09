@@ -41,6 +41,8 @@ class CircuitBreaker:
             self._reset(today, current_portfolio_value)
 
         opening_value   = self.state.get("opening_value", current_portfolio_value)
+        if opening_value <= 0:
+            opening_value = current_portfolio_value or 1.0
         daily_loss_pct  = (opening_value - current_portfolio_value) / opening_value * 100
         weekly_loss_pct = self._weekly_loss(current_portfolio_value)
 

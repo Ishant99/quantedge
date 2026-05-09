@@ -297,10 +297,10 @@ class TechnicalAgent:
                     reasons.append(
                         f"Tradeability blocked: ADX {adx_val:.1f} below trend gate {TA_MIN_TREND_ADX:.1f}"
                     )
-                elif stoch_k >= TA_MAX_BUY_STOCH and stoch_k <= stoch_d:
+                elif stoch_k >= TA_MAX_BUY_STOCH:
                     tradeable = False
                     reasons.append(
-                        f"Tradeability blocked: Stochastic too stretched ({stoch_k:.1f}) without bullish turn"
+                        f"Tradeability blocked: Stochastic overbought ({stoch_k:.1f} ≥ {TA_MAX_BUY_STOCH})"
                     )
             elif signal == "bearish" and adx_val < (TA_MIN_TREND_ADX - 2):
                 reasons.append(
@@ -372,11 +372,11 @@ class TechnicalAgent:
             (low  - close.shift()).abs(),
         ], axis=1).max(axis=1)
 
-        plus_dm  = high.diff().clip(lower=0)
-        minus_dm = (-low.diff()).clip(lower=0)
-        # Zero out cases where the opposite DM is larger
-        plus_dm  = plus_dm.where(plus_dm > minus_dm, 0.0)
-        minus_dm = minus_dm.where(minus_dm > plus_dm.where(plus_dm > minus_dm, 0.0), 0.0)
+        raw_plus_dm  = high.diff().clip(lower=0)
+        raw_minus_dm = (-low.diff()).clip(lower=0)
+        # Zero out cases where the opposite DM is larger (use raw values for comparison)
+        plus_dm  = raw_plus_dm.where(raw_plus_dm > raw_minus_dm, 0.0)
+        minus_dm = raw_minus_dm.where(raw_minus_dm > raw_plus_dm, 0.0)
 
         atr   = tr.ewm(alpha=1/period, adjust=False).mean()
         p_di  = 100 * plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr.replace(0, np.nan)
@@ -407,11 +407,14 @@ class TechnicalAgent:
     def _obv_bullish(
         self, close: pd.Series, volume: pd.Series, lookback: int
     ) -> bool:
-        """True if OBV is above its rolling mean — indicates accumulation."""
+        """True if OBV has a positive slope over the lookback window — indicates active accumulation."""
         direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
         obv = (volume * direction).cumsum()
-        obv_mean = obv.rolling(lookback).mean()
-        return bool(obv.iloc[-1] > obv_mean.iloc[-1])
+        if len(obv) < lookback:
+            return False
+        # Slope: compare recent half vs earlier half within the lookback window
+        recent = obv.iloc[-lookback:]
+        return bool(recent.iloc[-1] > recent.iloc[0])
 
 
 # =============================================================================

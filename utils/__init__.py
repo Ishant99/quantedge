@@ -25,10 +25,13 @@ def get_logger(name: str) -> logging.Logger:
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    # File handler
+    # Rotating file handler — 50 MB per file, 7 backups kept
+    from logging.handlers import RotatingFileHandler
     from datetime import datetime
     log_file = f"logs/agent_{datetime.now().strftime('%Y%m%d')}.log"
-    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh = RotatingFileHandler(
+        log_file, maxBytes=50 * 1024 * 1024, backupCount=7, encoding="utf-8"
+    )
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 

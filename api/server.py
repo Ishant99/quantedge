@@ -323,6 +323,13 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
 
 
 def run():
+    import logging
+    _log = logging.getLogger("APIServer")
+    if not _get_api_key():
+        _log.warning(
+            "API_SECRET_KEY is not set — all endpoints are unauthenticated. "
+            "Set API_SECRET_KEY in .env or user_settings.json for production use."
+        )
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8000"))
     server = ThreadingHTTPServer((host, port), QuantEdgeAPIHandler)

@@ -175,7 +175,12 @@ SQLITE_DB_FILE      = os.path.join(_ROOT, "logs", "trades.db")
 # BACKTESTING (M8)
 # -----------------------------------------------------------------------------
 BACKTEST_START_DATE = "2020-01-01"
-BACKTEST_END_DATE   = "2024-12-31"
+# Rolling end date: 30 days before today so backtest always uses recent data
+try:
+    from datetime import date as _date, timedelta as _td
+    BACKTEST_END_DATE = (_date.today() - _td(days=30)).strftime("%Y-%m-%d")
+except Exception:
+    BACKTEST_END_DATE = "2024-12-31"
 BACKTEST_CAPITAL    = 1_000_000
 BACKTEST_RESULTS_DIR = os.path.join(_ROOT, "logs", "backtest_results") + os.sep
 
@@ -342,6 +347,14 @@ def _validate_config():
          f"MAX_POSITION_RISK_PCT={MAX_POSITION_RISK_PCT} out of range (0.01–0.10)")
     _chk(0.20 <= IV_RANK_MIN <= 0.95,
          f"IV_RANK_MIN={IV_RANK_MIN} out of range (0.20–0.95)")
+    _chk(INR_PER_USD > 0,
+         f"INR_PER_USD={INR_PER_USD} must be > 0 (used as divisor in P&L)")
+    _chk(INR_PER_USDT > 0,
+         f"INR_PER_USDT={INR_PER_USDT} must be > 0 (used as divisor in P&L)")
+    _chk(0.5 <= FNO_TP_MULT <= 10.0,
+         f"FNO_TP_MULT={FNO_TP_MULT} out of range (0.5–10.0)")
+    _chk(0.1 <= FNO_SL_MULT <= 1.0,
+         f"FNO_SL_MULT={FNO_SL_MULT} out of range (0.1–1.0)")
 
     if errors:
         raise ValueError(

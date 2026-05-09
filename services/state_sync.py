@@ -604,11 +604,13 @@ def sync_unified_state() -> dict:
     except sqlite3.Error as exc:
         logger.warning(f"Unified state could not write SQLite sync tables: {exc}")
 
-    with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=2)
+    # Populate treasury before writing — avoids a second write and eliminates
+    # the race window where readers see an incomplete state between the two writes.
     state["treasury"] = write_treasury_snapshot(state)
-    with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
+    tmp = UNIFIED_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2)
+    os.replace(tmp, UNIFIED_STATE_FILE)
     write_review_report(state)
     logger.info(
         "Unified state synced | positions=%s trades=%s signals=%s",
