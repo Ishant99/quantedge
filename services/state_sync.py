@@ -12,7 +12,8 @@ from utils import get_logger
 
 
 logger = get_logger("StateSync")
-UNIFIED_STATE_FILE = os.path.join("logs", "unified_state.json")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UNIFIED_STATE_FILE = os.path.join(_PROJECT_ROOT, "logs", "unified_state.json")
 
 
 def _load_json(path: str, default):
@@ -492,6 +493,7 @@ def sync_unified_state() -> dict:
     synced_at = state["synced_at"]
     try:
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             _ensure_sync_tables(conn)
             conn.execute("DELETE FROM unified_positions")
             conn.execute("DELETE FROM unified_trades")

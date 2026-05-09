@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import json
+import pandas as pd
 from dataclasses import dataclass
 from utils import get_logger
 
@@ -76,7 +77,25 @@ class MarketBreadthAnalyser:
                 auto_adjust=True,
                 progress=False,
             )
-            closes = hist["Close"] if "Close" in hist.columns else hist.xs("Close", axis=1, level=0)
+            if isinstance(hist.columns, pd.MultiIndex):
+                price_fields = {"open", "high", "low", "close", "volume"}
+                lv0 = {str(v).lower() for v in hist.columns.get_level_values(0)}
+                if lv0 & price_fields:
+                    match = next(v for v in hist.columns.get_level_values(0)
+                                 if str(v).lower() == "close")
+                    closes = hist.xs(match, axis=1, level=0)
+                else:
+                    match = next((v for v in hist.columns.get_level_values(1)
+                                  if str(v).lower() == "close"), None)
+                    if match is None:
+                        return self._neutral("Close column not found in MultiIndex")
+                    closes = hist.xs(match, axis=1, level=1)
+            elif "Close" in hist.columns:
+                closes = hist["Close"]
+            elif "close" in hist.columns:
+                closes = hist["close"]
+            else:
+                return self._neutral("Close column not found")
 
             if closes.empty or len(closes) < 2:
                 return self._neutral("Insufficient data")

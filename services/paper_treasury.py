@@ -10,7 +10,8 @@ from utils import get_logger
 
 
 logger = get_logger("PaperTreasury")
-TREASURY_FILE = os.path.join("logs", "paper_treasury.json")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TREASURY_FILE = os.path.join(_PROJECT_ROOT, "logs", "paper_treasury.json")
 
 # Serialises concurrent can_allocate() calls so two scheduler jobs can't both
 # see available capacity and both proceed to allocate against the same budget.
@@ -178,10 +179,12 @@ def build_treasury_snapshot(state: dict | None = None) -> dict:
 
 
 def write_treasury_snapshot(state: dict | None = None) -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(os.path.dirname(TREASURY_FILE), exist_ok=True)
     snapshot = build_treasury_snapshot(state=state)
-    with open(TREASURY_FILE, "w", encoding="utf-8") as handle:
+    tmp = TREASURY_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, indent=2)
+    os.replace(tmp, TREASURY_FILE)
     try:
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
             conn.execute(

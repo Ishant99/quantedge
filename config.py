@@ -28,6 +28,16 @@ def _S(key: str, env_key: str = None, default=None):
         pass
     return os.getenv(env_key or key, default)
 
+
+def _bool(key: str, default: bool = False) -> bool:
+    """Boolean-safe _S(): handles 'False'/'True' strings from env vars correctly."""
+    v = _S(key, default=default)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
 # -----------------------------------------------------------------------------
 # TRADING MODE — the single flag that controls everything
 # "paper" → no real orders, virtual portfolio, yfinance data
@@ -127,7 +137,7 @@ STRATEGY_QUALITY_SETUP_WEIGHT = float(_S("STRATEGY_QUALITY_SETUP_WEIGHT", defaul
 STRATEGY_QUALITY_SYMBOL_WEIGHT = float(_S("STRATEGY_QUALITY_SYMBOL_WEIGHT", default=0.20))
 STRATEGY_QUALITY_CONF_BUCKET_WEIGHT = float(_S("STRATEGY_QUALITY_CONF_BUCKET_WEIGHT", default=0.10))
 STRATEGY_QUALITY_REGIME_WEIGHT = float(_S("STRATEGY_QUALITY_REGIME_WEIGHT", default=0.10))
-STRATEGY_QUALITY_BLOCK_WEAK_SYMBOLS = bool(_S("STRATEGY_QUALITY_BLOCK_WEAK_SYMBOLS", default=True))
+STRATEGY_QUALITY_BLOCK_WEAK_SYMBOLS = _bool("STRATEGY_QUALITY_BLOCK_WEAK_SYMBOLS", default=True)
 STRATEGY_QUALITY_MAX_PENALTY = float(_S("STRATEGY_QUALITY_MAX_PENALTY", default=0.20))
 STRATEGY_QUALITY_MAX_BOOST = float(_S("STRATEGY_QUALITY_MAX_BOOST", default=0.12))
 
@@ -232,7 +242,7 @@ FNO_SELL_RESERVE_MULT  = float(_S("FNO_SELL_RESERVE_MULT",  default=2.5))
 FNO_MAX_STRUCTURES_PER_UNDERLYING = int(_S("FNO_MAX_STRUCTURES_PER_UNDERLYING", default=2))
 FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_NIFTY_PCT", default=0.15))
 FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT = float(_S("FNO_MAX_UNDERLYING_EXPOSURE_BANKNIFTY_PCT", default=0.15))
-FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE = bool(_S("FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE", default=True))
+FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE = _bool("FNO_BLOCK_DUPLICATE_FUT_SHORT_WITH_STRADDLE", default=True)
 
 # F&O volatility circuit breaker
 FNO_HV_CIRCUIT_BREAKER_PCT = float(_S("FNO_HV_CIRCUIT_BREAKER_PCT", default=35.0))
@@ -248,6 +258,10 @@ FNO_SELL_SL_HV_THRESHOLD   = float(_S("FNO_SELL_SL_HV_THRESHOLD",  default=20.0)
 # US stocks deduplication
 US_DEDUP_HOURS     = int(  _S("US_DEDUP_HOURS",     default=24))
 US_DEDUP_PRICE_PCT = float(_S("US_DEDUP_PRICE_PCT", default=0.03))
+
+# Crypto deduplication
+CRYPTO_DEDUP_HOURS     = int(  _S("CRYPTO_DEDUP_HOURS",     default=24))
+CRYPTO_DEDUP_PRICE_PCT = float(_S("CRYPTO_DEDUP_PRICE_PCT", default=0.03))
 
 # INR conversion rate for combined P&L display
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))

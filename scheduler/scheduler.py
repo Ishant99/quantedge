@@ -87,22 +87,28 @@ def _is_nse_holiday(dt: datetime | None = None) -> bool:
 # =============================================================================
 # Scan lock — prevents price_monitor / F&O monitor from running while a
 # full scan is active (avoids portfolio lock contention and double signals).
+# Uses a threading.Lock (not Event) so that check+set is atomic.
 # =============================================================================
-_SCAN_LOCK = threading.Event()   # set = scan running, clear = idle
-_SCAN_LOCK.clear()
+_SCAN_LOCK = threading.Lock()
+_SCAN_ACTIVE = False
+_SCAN_STATE_LOCK = threading.Lock()
 
 
 def _acquire_scan_lock(job_name: str) -> bool:
-    """Try to mark scan as running. Returns False if already locked."""
-    if _SCAN_LOCK.is_set():
-        logger.warning(f"{job_name}: scan lock held — skipping to avoid overlap")
-        return False
-    _SCAN_LOCK.set()
-    return True
+    """Try to mark scan as running. Returns False if already locked (non-blocking)."""
+    global _SCAN_ACTIVE
+    with _SCAN_STATE_LOCK:
+        if _SCAN_ACTIVE:
+            logger.warning(f"{job_name}: scan lock held — skipping to avoid overlap")
+            return False
+        _SCAN_ACTIVE = True
+        return True
 
 
 def _release_scan_lock():
-    _SCAN_LOCK.clear()
+    global _SCAN_ACTIVE
+    with _SCAN_STATE_LOCK:
+        _SCAN_ACTIVE = False
 
 
 def _release_pid_file():
@@ -305,6 +311,8 @@ def _run_options_signals():
 
 def run_fno_monitor():
     """Check all open F&O paper positions (options + futures) for TP/SL/expiry."""
+    if _is_nse_holiday():
+        return
     _write_scheduler_status("fno_monitor", "running")
     try:
         from execution.brokers.fno_paper_broker import FNOPaperBroker
@@ -431,7 +439,9 @@ def run_price_monitor():
     if _is_nse_holiday():
         return
     # Skip if a full scan is currently running to avoid portfolio lock contention
-    if _SCAN_LOCK.is_set():
+    with _SCAN_STATE_LOCK:
+        scan_running = _SCAN_ACTIVE
+    if scan_running:
         logger.debug("Price monitor: scan lock held — skipping this tick")
         return
     _write_scheduler_status("price_monitor", "running")
@@ -472,6 +482,8 @@ def run_price_monitor():
 
 def run_eod_close():
     """Force-close all intraday positions at 3:25 PM."""
+    if _is_nse_holiday():
+        return
     _write_scheduler_status("eod_close", "running")
     logger.info(f"EOD close triggered at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
@@ -564,6 +576,8 @@ def run_eod_digest():
 
 def run_thesis_check():
     """Re-evaluate held positions — sell if thesis has degraded significantly."""
+    if _is_nse_holiday():
+        return
     _write_scheduler_status("thesis_check", "running")
     logger.info(f"Thesis check at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
@@ -637,6 +651,8 @@ def run_thesis_check():
 
 def run_intraday_scan():
     """15-min EMA/VWAP intraday signals on top swing candidates."""
+    if _is_nse_holiday():
+        return
     _write_scheduler_status("intraday_scan", "running")
     logger.info(f"Intraday scan at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
@@ -661,6 +677,8 @@ def run_intraday_scan():
 
 def run_outcome_tracker():
     """Check all open signals — mark TP_HIT / SL_HIT / EXPIRED outcomes."""
+    if _is_nse_holiday():
+        return
     _write_scheduler_status("outcome_tracker", "running")
     logger.info(f"Outcome tracker triggered at {datetime.now(IST).strftime('%H:%M IST')}")
     try:
@@ -1213,16 +1231,32 @@ if __name__ == "__main__":
 
     # --- Job 3: Price monitor every 15 min, 9:20 AM – 3:20 PM ---
     # Offset by 5 min from :15/:00 scan jobs to avoid portfolio lock contention.
+    # hour="9-14" + minute 20 covers 15:20 via the 15:05/15:20 ticks from hour=15 below.
+    # Explicitly stop at 15:20 (market closes 15:30) to avoid stale post-close fetches.
     scheduler.add_job(
         run_price_monitor,
         CronTrigger(
             day_of_week="mon-fri",
-            hour="9-15",
+            hour="9-14",
             minute="20,35,50,5",
             timezone=IST,
         ),
         id="price_monitor",
-        name="Price Monitor (every 15 min, offset)",
+        name="Price Monitor (every 15 min, 09:05-14:50)",
+        misfire_grace_time=_GRACE,
+    )
+    scheduler.add_job(
+        run_price_monitor,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone=IST),
+        id="price_monitor_1505",
+        name="Price Monitor (15:05 IST)",
+        misfire_grace_time=_GRACE,
+    )
+    scheduler.add_job(
+        run_price_monitor,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=20, timezone=IST),
+        id="price_monitor_1520",
+        name="Price Monitor (15:20 IST — last pre-close tick)",
         misfire_grace_time=_GRACE,
     )
 
@@ -1231,12 +1265,26 @@ if __name__ == "__main__":
         run_fno_monitor,
         CronTrigger(
             day_of_week="mon-fri",
-            hour="9-15",
+            hour="9-14",
             minute="20,35,50,5",
             timezone=IST,
         ),
         id="fno_monitor",
-        name="F&O Paper Monitor (every 15 min, offset)",
+        name="F&O Paper Monitor (every 15 min, 09:05-14:50)",
+        misfire_grace_time=_GRACE,
+    )
+    scheduler.add_job(
+        run_fno_monitor,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone=IST),
+        id="fno_monitor_1505",
+        name="F&O Monitor (15:05 IST)",
+        misfire_grace_time=_GRACE,
+    )
+    scheduler.add_job(
+        run_fno_monitor,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=20, timezone=IST),
+        id="fno_monitor_1520",
+        name="F&O Monitor (15:20 IST — last pre-close tick)",
         misfire_grace_time=_GRACE,
     )
 

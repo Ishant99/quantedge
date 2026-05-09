@@ -340,11 +340,15 @@ class TechnicalAgent:
 
     def _rsi(self, series: pd.Series, period: int) -> float:
         delta = series.diff()
-        gain  = delta.clip(lower=0).rolling(period).mean()
-        loss  = (-delta.clip(upper=0)).rolling(period).mean()
-        rs    = gain / loss.replace(0, np.nan)
-        rsi   = 100 - (100 / (1 + rs))
-        return float(rsi.iloc[-1])
+        gain  = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+        loss  = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+        last_loss = float(loss.iloc[-1])
+        if last_loss == 0:
+            return 100.0
+        rs  = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        val = float(rsi.iloc[-1])
+        return val if not np.isnan(val) else 50.0
 
     def _macd(
         self,

@@ -9,6 +9,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from config import SQLITE_DB_FILE, US_DEDUP_HOURS, US_DEDUP_PRICE_PCT, US_MAX_POSITIONS
 from data.us_scanner import USScanner
@@ -231,8 +232,17 @@ class USPaperBroker:
             "open_positions": open_count,
         }
 
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db)
+        conn = sqlite3.connect(self.db)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_table(self):
         with self._conn() as conn:

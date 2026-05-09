@@ -11,6 +11,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from config import (SQLITE_DB_FILE, FNO_LOT_SIZES, FNO_TP_MULT, FNO_SL_MULT, FNO_MAX_POSITIONS,
     FNO_HV_CIRCUIT_BREAKER_PCT, FNO_SL_COOLDOWN_HOURS,
@@ -812,8 +813,17 @@ class FNOPaperBroker:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db)
+        conn = sqlite3.connect(self.db)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_table(self):
         with self._conn() as conn:

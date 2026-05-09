@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sqlite3
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from dataclasses import asdict
 from typing import Optional
@@ -636,8 +637,17 @@ class PortfolioMemory:
     # Helpers
     # ------------------------------------------------------------------
 
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _calc_drawdown(self, values: list) -> float:
         if len(values) < 2:

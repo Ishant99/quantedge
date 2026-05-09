@@ -87,7 +87,10 @@ class SentimentAgent:
     }
 
     # File used to persist sentiment scores between scans for momentum tracking
-    _MOMENTUM_CACHE = "logs/sentiment_momentum.json"
+    _MOMENTUM_CACHE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "logs", "sentiment_momentum.json"
+    )
 
     def __init__(self):
         self.ollama_available = self._check_ollama()

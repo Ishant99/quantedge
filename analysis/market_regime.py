@@ -23,7 +23,8 @@ from utils import get_logger
 
 logger = get_logger("MarketRegime")
 
-_REGIME_STATE_FILE = "logs/regime_state.json"
+_PROJECT_ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REGIME_STATE_FILE = os.path.join(_PROJECT_ROOT, "logs", "regime_state.json")
 _STABILITY_REQUIRED = 2   # consecutive scans before committing a regime change
 
 
@@ -111,7 +112,7 @@ class MarketRegimeFilter:
                 logger.warning("Could not fetch Nifty data — assuming bull regime")
                 return self._default_bull()
 
-            close = df["Close"]
+            close = df["Close"] if "Close" in df.columns else df["close"]
             last  = float(close.iloc[-1])
 
             # EMA 200
@@ -119,11 +120,15 @@ class MarketRegimeFilter:
             ema50  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1])
             ema20  = float(close.ewm(span=20,  adjust=False).mean().iloc[-1])
 
-            # RSI
-            delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi   = float(100 - (100 / (1 + gain / loss.replace(0, np.nan))).iloc[-1])
+            # RSI — Wilder's RMA
+            delta     = close.diff()
+            gain      = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+            loss      = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+            last_loss = float(loss.iloc[-1])
+            if last_loss == 0:
+                rsi = 100.0
+            else:
+                rsi = float(100 - (100 / (1 + gain / loss)).iloc[-1])
 
             # Returns
             ret_1m = float((last / close.iloc[-22] - 1) * 100) if len(close) >= 22 else 0
