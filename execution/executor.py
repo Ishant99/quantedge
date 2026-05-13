@@ -10,6 +10,10 @@
 
 import json, os, csv, sqlite3
 from datetime import datetime
+
+_PROJECT_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR      = os.path.join(_PROJECT_ROOT, "logs")
+_TRADES_CSV    = os.path.join(_LOGS_DIR, "paper_trades.csv")
 from dataclasses import asdict
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -208,7 +212,7 @@ class PaperExecutor:
     # ------------------------------------------------------------------
 
     def _load_portfolio(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
         data = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
         if data:
             return data
@@ -235,7 +239,7 @@ class PaperExecutor:
         return None
 
     def _log_trade(self, signal: TradeSignal, result: dict):
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
 
         # --- SQLite (primary — needed for stats, dashboard, history) ---
         try:
@@ -303,7 +307,7 @@ class PaperExecutor:
             logger.warning(f"SQLite trade log failed ({signal.symbol}): {e}")
 
         # --- CSV (audit log) ---
-        log_file = "logs/paper_trades.csv"
+        log_file = _TRADES_CSV
         fieldnames = [
             "timestamp","symbol","action","qty","price","confidence",
             "ta_score","sentiment","stop_loss","take_profit",
