@@ -223,12 +223,12 @@ def run_daily_scan():
         send_telegram_message("*Pre-flight FAILED* — skipping scan (network issue?)")
         return
     try:
-        from main import run_agent
+        from pipeline.legacy import run_pipeline
         from memory.portfolio_memory import PortfolioMemory
 
         # dry_run=False: paper mode simulates trades virtually (correct behavior)
         # dry_run=True is only for: python main.py --dry-run (manual override)
-        signals = run_agent(dry_run=False)  # main.py saves signals + sends Telegram internally
+        signals = run_pipeline(dry_run=False)  # tries TradingPipeline, falls back to run_agent
 
         # Options signals — Nifty/BankNifty weekly CE/PE ideas
         _run_options_signals()
@@ -248,8 +248,8 @@ def run_daily_scan():
         import time as _time
         _time.sleep(60)
         try:
-            from main import run_agent
-            signals = run_agent(dry_run=False)
+            from pipeline.legacy import run_pipeline
+            signals = run_pipeline(dry_run=False)
             _run_options_signals()
             _run_futures_signals()
             _run_selling_signals()
