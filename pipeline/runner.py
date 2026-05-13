@@ -202,6 +202,14 @@ class TradingPipeline:
             self._rsi2_scanner = RSI2Scanner()
         return self._rsi2_scanner
 
+    def _get_narrator(self):
+        if not hasattr(self, "_narrator"):
+            self._narrator = None
+        if self._narrator is None:
+            from analysis.signal_narrator import SignalNarrator
+            self._narrator = SignalNarrator(use_llm=False)
+        return self._narrator
+
     # ------------------------------------------------------------------
     # Stage helpers
     # ------------------------------------------------------------------
@@ -723,6 +731,9 @@ class TradingPipeline:
                 if self._memory is not None:
                     try:
                         sig_id = self._memory.save_signal(alloc.signal)
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None and sig_id:
+                            self._memory.save_journal(journal, signal_id=sig_id)
                         if result.get("status") == "filled" and sig_id:
                             self._memory.mark_signal_executed(sig_id)
                     except Exception as mem_exc:
@@ -857,6 +868,15 @@ class TradingPipeline:
             )
         except Exception as exc:
             logger.warning(f"[Enrich] signal enrichment failed — using raw signals: {exc}")
+
+        # Narrate BUY/SELL signals — update signal.reasoning with human-readable story
+        try:
+            narrator = self._get_narrator()
+            for sig in signals:
+                if sig.action in ("BUY", "SELL"):
+                    sig.reasoning = narrator.narrate(sig)
+        except Exception as exc:
+            logger.warning(f"[Narrate] signal narration failed — reasoning unchanged: {exc}")
 
         # ---- Auxiliary helpers (earnings guard + F&O ban) ------------
         earnings_guard = None
