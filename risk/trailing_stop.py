@@ -106,8 +106,12 @@ class TrailingStopMonitor:
             exit_price = updates[sym].get("current_price", positions[sym]["stop_loss"])
             entry      = positions[sym]["entry"]
             qty        = positions[sym]["qty"]
-            pnl        = (exit_price - entry) * qty
-            portfolio["cash"] += exit_price * qty
+            # Deduct sell-side friction (slippage 0.1% + ₹20 brokerage) and entry friction
+            slippage_sell  = round(exit_price * qty * 0.001, 2)
+            brokerage_sell = 20.0
+            proceeds  = exit_price * qty - slippage_sell - brokerage_sell
+            pnl       = proceeds - (entry * qty) - positions[sym].get("entry_friction", 0.0)
+            portfolio["cash"] += proceeds
             portfolio["total_trades"] = portfolio.get("total_trades", 0) + 1
             if pnl > 0:
                 portfolio["wins"] = portfolio.get("wins", 0) + 1
@@ -220,6 +224,8 @@ class TrailingStopMonitor:
                 pass
 
             # --- Breakeven trailing: move SL to entry when gain ≥ 2% ---
+            if entry <= 0:
+                return None
             gain_pct = (current - entry) / entry * 100
             if gain_pct >= 2.0 and sl < entry:
                 logger.info(f"{symbol}: breakeven SL triggered (+{gain_pct:.1f}%) — moving SL to entry ₹{entry}")

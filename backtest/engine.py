@@ -26,6 +26,7 @@ from config import (
     BACKTEST_RESULTS_DIR, RISK_PER_TRADE_PCT, REWARD_RISK_RATIO,
     RSI_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     SMA_SHORT, SMA_MID, SMA_LONG, MIN_TA_SCORE, SQLITE_DB_FILE,
+    MIN_CONFIDENCE,
 )
 from analysis.technical_agent import TechnicalAgent
 from utils import get_logger
@@ -349,8 +350,8 @@ class BacktestEngine:
 
             # Look for entry (only if no open position)
             if position is None:
-                tradeable, bullish = self._generate_signal(window, disabled)
-                if tradeable and bullish:
+                tradeable, bullish, ta_score = self._generate_signal(window, disabled)
+                if tradeable and bullish and not self._production_filtered(window, ta_score, date):
                     raw_entry = today["close"]
                     entry     = raw_entry * cost_factor   # include slippage on entry
                     atr       = self._atr(window)
@@ -408,24 +409,45 @@ class BacktestEngine:
     # Phase 5 — Signal generation with ablation support
     # ------------------------------------------------------------------
 
+    def _production_filtered(self, window: pd.DataFrame, ta_score: float, date) -> bool:
+        """
+        Mirror the live pipeline's entry filters that are NOT captured by TA alone.
+        Returns True if the trade should be skipped (i.e. filtered out).
+
+        Checks applied:
+          1. Minimum confidence: TA score / 10 proxies p_direction.
+          2. Bear regime abstention: no new longs when price is in a bear regime.
+          3. Friday abstention: no new entries on Fridays (mirrors calendar_risk rule).
+        """
+        if ta_score / 10.0 < MIN_CONFIDENCE:
+            return True
+        if self._infer_regime(window) == "bear":
+            return True
+        try:
+            if hasattr(date, "dayofweek") and date.dayofweek == 4:
+                return True
+        except Exception:
+            pass
+        return False
+
     def _generate_signal(self, window: pd.DataFrame, disabled: set) -> tuple:
         """
-        Generate a (tradeable, bullish) signal from the TA agent,
+        Generate a (tradeable, bullish, ta_score) signal from the TA agent,
         with ablation overrides applied for any disabled modules.
 
         disabled is a set of module name strings; when a module is in
         this set its score contribution is zeroed / neutralised so the
         ablation run measures the marginal edge of that module.
 
-        Returns (tradeable: bool, bullish: bool).
+        Returns (tradeable: bool, bullish: bool, ta_score: float).
         """
         ta = self.ta.analyse("BT", window)
         if ta is None:
-            return False, False
+            return False, False, 0.0
 
         # If no ablation is active, return the raw TA result unchanged.
         if not disabled:
-            return ta.tradeable, (ta.signal == "bullish")
+            return ta.tradeable, (ta.signal == "bullish"), ta.score
 
         # Re-score with disabled modules neutralised.
         # We fetch indicator values from ta.indicators and rebuild score.
@@ -559,7 +581,7 @@ class BacktestEngine:
             if adx < TA_MIN_TREND_ADX:
                 tradeable = False
 
-        return tradeable, bullish
+        return tradeable, bullish, score
 
     # ------------------------------------------------------------------
     # Phase 5 — Replay mode simulation

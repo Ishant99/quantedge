@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from utils import get_logger
 
 logger = get_logger("FIIDIITracker")
-CACHE_FILE = "logs/fii_dii_cache.json"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE_FILE = os.path.join(_PROJECT_ROOT, "logs", "fii_dii_cache.json")
 
 @dataclass
 class FlowData:
@@ -144,7 +145,7 @@ class FIIDIITracker:
                     except Exception:
                         pass
                 if data:
-                    os.makedirs("logs", exist_ok=True)
+                    os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
                     with open(CACHE_FILE, "w") as f:
                         json.dump({"cached_at": datetime.now().isoformat(),
                                    "data": data}, f, indent=2)

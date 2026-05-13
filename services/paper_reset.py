@@ -10,17 +10,19 @@ from utils import get_logger
 
 
 logger = get_logger("PaperReset")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR     = os.path.join(_PROJECT_ROOT, "logs")
 
 
 def _archive_dir() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join("logs", "archive", f"reset_{stamp}")
+    path = os.path.join(_LOGS_DIR, "archive", f"reset_{stamp}")
     os.makedirs(path, exist_ok=True)
     return path
 
 
 def archive_and_reset_paper_state() -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(_LOGS_DIR, exist_ok=True)
     archive_dir = _archive_dir()
     moved = []
 
@@ -33,7 +35,7 @@ def archive_and_reset_paper_state() -> dict:
         "agent_review_report.md",
         "paper_treasury.json",
     ]:
-        src = os.path.join("logs", rel_path)
+        src = os.path.join(_LOGS_DIR, rel_path)
         if os.path.exists(src):
             dst = os.path.join(archive_dir, rel_path)
             shutil.move(src, dst)
@@ -52,7 +54,7 @@ def archive_and_reset_paper_state() -> dict:
             indent=2,
         )
 
-    with open(os.path.join("logs", "paper_trades.csv"), "w", newline="", encoding="utf-8") as handle:
+    with open(os.path.join(_LOGS_DIR, "paper_trades.csv"), "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["timestamp", "symbol", "trade_type", "action", "qty", "entry_price", "exit_price", "pnl", "pnl_pct"])
 

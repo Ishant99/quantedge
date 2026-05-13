@@ -17,7 +17,8 @@ from utils.telegram import send
 
 logger = get_logger("CircuitBreaker")
 
-CIRCUIT_BREAKER_FILE = "logs/circuit_breaker.json"
+_PROJECT_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CIRCUIT_BREAKER_FILE = os.path.join(_PROJECT_ROOT, "logs", "circuit_breaker.json")
 
 
 class CircuitBreaker:
@@ -41,6 +42,8 @@ class CircuitBreaker:
             self._reset(today, current_portfolio_value)
 
         opening_value   = self.state.get("opening_value", current_portfolio_value)
+        if opening_value <= 0:
+            opening_value = current_portfolio_value or 1.0
         daily_loss_pct  = (opening_value - current_portfolio_value) / opening_value * 100
         weekly_loss_pct = self._weekly_loss(current_portfolio_value)
 
@@ -165,7 +168,7 @@ class CircuitBreaker:
         return 0.0
 
     def _load_state(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         if os.path.exists(CIRCUIT_BREAKER_FILE):
             try:
                 with open(CIRCUIT_BREAKER_FILE) as f:

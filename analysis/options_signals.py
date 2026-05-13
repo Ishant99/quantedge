@@ -97,9 +97,14 @@ class OptionsSignalGenerator:
 
             # RSI(14)
             delta  = close.diff()
-            gain   = delta.clip(lower=0).rolling(14).mean()
-            loss   = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi    = float(100 - 100 / (1 + gain / loss.replace(0, np.nan)).iloc[-1])
+            gain   = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss   = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            last_loss_rsi = float(loss.iloc[-1])
+            if last_loss_rsi == 0:
+                rsi = 100.0
+            else:
+                rsi = float(100 - 100 / (1 + gain / loss).iloc[-1])
+                rsi = rsi if not np.isnan(rsi) else 50.0
 
             # Historical volatility (20-day annualised)
             log_ret = np.log(close / close.shift(1)).dropna()

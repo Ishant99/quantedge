@@ -289,9 +289,15 @@ class MarketScanner:
         df.index = pd.to_datetime(df.index)
         df.index.name = "date"
 
-        # Flatten MultiIndex columns (new yfinance returns (Price, Ticker) tuples)
+        # Flatten MultiIndex columns — yfinance may return (Price, Ticker) or
+        # (Ticker, Price) depending on version and group_by setting.
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] for c in df.columns]
+            price_fields = {"open", "high", "low", "close", "volume"}
+            lv0 = {str(v).lower() for v in df.columns.get_level_values(0)}
+            if lv0 & price_fields:
+                df.columns = [str(c[0]) for c in df.columns]
+            else:
+                df.columns = [str(c[1]) for c in df.columns]
 
         df.columns = [c.lower() if isinstance(c, str) else str(c).lower()
                       for c in df.columns]
@@ -391,8 +397,8 @@ class MarketScanner:
                 "index_membership": info.get("index_membership", "NIFTY500"),
                 "last_close":       round(latest["close"], 2),
                 "daily_return_pct": round(latest.get("daily_return", 0) * 100, 2),
-                "volume":           int(latest.get("volume", 0)),
-                "vol_avg_20":       int(latest.get("vol_avg_20", 0) or 0),
+                "volume":           int(latest.get("volume") or 0),
+                "vol_avg_20":       int(latest.get("vol_avg_20") or 0),
                 "data_points":      len(df),
                 "last_updated":     df.index[-1].strftime("%Y-%m-%d"),
             })

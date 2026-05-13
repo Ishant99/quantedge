@@ -12,6 +12,11 @@ import json
 import sqlite3
 import csv
 from datetime import datetime, date
+
+_PROJECT_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR           = os.path.join(_PROJECT_ROOT, "logs")
+_TRADES_CSV         = os.path.join(_LOGS_DIR, "paper_trades.csv")
+_READINESS_REPORT   = os.path.join(_LOGS_DIR, "readiness_report.json")
 import pytz
 from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE, SQLITE_DB_FILE, INR_PER_USD, INR_PER_USDT
 from memory.portfolio_memory import PortfolioMemory
@@ -105,7 +110,7 @@ class DailyReporter:
                         cr_today_pnl * INR_PER_USDT + us_today_pnl * INR_PER_USD)
 
         # ── Readiness ───────────────────────────────────────────────────
-        r = self._load_json("logs/readiness_report.json")
+        r = self._load_json(_READINESS_REPORT)
         gates_str = f"{r.get('passed',0)}/{r.get('total',8)}" if r else "N/A"
 
         # ── Build message ───────────────────────────────────────────────
@@ -164,7 +169,7 @@ class DailyReporter:
 
     def _get_today_trades_csv(self) -> list[dict]:
         """Read today's trades from paper_trades.csv."""
-        log_file = "logs/paper_trades.csv"
+        log_file = _TRADES_CSV
         if not os.path.exists(log_file):
             return []
         today = date.today().strftime("%Y-%m-%d")

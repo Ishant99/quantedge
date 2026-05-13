@@ -32,6 +32,9 @@ from utils.telegram import send
 
 logger = get_logger("AutonomousScheduler")
 IST = pytz.timezone("Asia/Kolkata")
+_PROJECT_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REGIME_JSON     = os.path.join(_PROJECT_ROOT, "logs", "market_regime.json")
+_REGIME_JSON_TMP = _REGIME_JSON + ".tmp"
 
 
 # ===========================================================================
@@ -52,7 +55,7 @@ def job_premarket():
 
         # Save regime for dashboard
         import json, tempfile, shutil
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         regime_data = {
             "regime":      regime.regime,
             "rsi":         regime.nifty_rsi,
@@ -61,10 +64,9 @@ def job_premarket():
             "updated":     datetime.now(IST).isoformat(),
         }
         # Write atomically to avoid partial reads
-        tmp = "logs/market_regime.json.tmp"
-        with open(tmp, "w") as f:
+        with open(_REGIME_JSON_TMP, "w") as f:
             json.dump(regime_data, f)
-        shutil.move(tmp, "logs/market_regime.json")
+        shutil.move(_REGIME_JSON_TMP, _REGIME_JSON)
 
         lines = [
             f"*Pre-Market Check — {datetime.now(IST).strftime('%d %b')}*",
@@ -99,7 +101,7 @@ def job_intraday_scan():
         import json
         reg = {}
         try:
-            with open("logs/market_regime.json") as f:
+            with open(_REGIME_JSON) as f:
                 reg = json.load(f)
         except Exception:
             pass

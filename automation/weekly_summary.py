@@ -14,6 +14,8 @@ from utils import get_logger
 from utils.telegram import send
 
 logger = get_logger("WeeklySummary")
+_PROJECT_ROOT     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_READINESS_REPORT = os.path.join(_PROJECT_ROOT, "logs", "readiness_report.json")
 
 
 def _fetch_live_prices(symbols):
@@ -202,7 +204,7 @@ def _send():
 
     # ── Readiness gates ──────────────────────────────────────────────────
     gates_passed = gates_total = 0
-    readiness_file = "logs/readiness_report.json"
+    readiness_file = _READINESS_REPORT
     if os.path.exists(readiness_file):
         with open(readiness_file) as f:
             r = json.load(f)

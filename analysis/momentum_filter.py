@@ -67,12 +67,17 @@ class MomentumFilter:
             # 3-month return (≈63 trading days)
             ret_3m = float((last / close.iloc[-63] - 1) * 100) if len(close) >= 63 else 0.0
 
-            # RSI(14)
+            # RSI(14) — Wilder's RMA (ewm alpha=1/14)
             delta  = close.diff()
-            gain   = delta.clip(lower=0).rolling(14).mean()
-            loss   = (-delta.clip(upper=0)).rolling(14).mean()
-            rs     = gain / loss.replace(0, np.nan)
-            rsi    = float(100 - 100 / (1 + rs.iloc[-1]))
+            gain   = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+            loss   = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+            last_loss = float(loss.iloc[-1])
+            if last_loss == 0:
+                rsi = 100.0
+            else:
+                rs  = gain / loss
+                val = float(100 - 100 / (1 + rs.iloc[-1]))
+                rsi = val if not np.isnan(val) else 50.0
 
             # Volume trend — 10-day avg vs 30-day avg
             vol10  = float(volume.rolling(10).mean().iloc[-1])
@@ -110,9 +115,10 @@ class MomentumFilter:
             rsi_ok       = rsi > 30
 
             buy_gates = {
-                "ema50_ok": ema50_ok,
-                "ret3m_ok": ret3m_ok,
-                "rsi_ok":   rsi_ok,
+                "ema50_ok":           ema50_ok,
+                "ret3m_ok":           ret3m_ok,
+                "rsi_ok":             rsi_ok,
+                "not_declining_volume": volume_trend != "down",
             }
             passes_buy = all(buy_gates.values())
 

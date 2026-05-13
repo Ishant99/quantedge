@@ -10,10 +10,15 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
+import settings.manager as S
 from dataclasses import dataclass
 from utils import get_logger
 
 logger = get_logger("PCRSignal")
+
+
+def _cfg(key: str, default):
+    return S.get(key, default)
 
 NSE_OPTION_CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
 HEADERS = {
@@ -89,13 +94,17 @@ class PCRAnalyser:
             return self._default()
 
     def _classify(self, pcr: float) -> tuple[str, float, str]:
-        if pcr > 1.5:
+        t_strong_buy  = float(_cfg("PCR_STRONG_BUY_THRESHOLD",  1.5))
+        t_buy         = float(_cfg("PCR_BUY_THRESHOLD",         1.2))
+        t_sell        = float(_cfg("PCR_SELL_THRESHOLD",        0.8))
+        t_strong_sell = float(_cfg("PCR_STRONG_SELL_THRESHOLD", 0.6))
+        if pcr > t_strong_buy:
             return "strong_buy", 9.0, f"PCR {pcr:.2f} — extreme fear, contrarian buy"
-        elif pcr > 1.2:
+        elif pcr > t_buy:
             return "buy", 7.5, f"PCR {pcr:.2f} — put heavy, market oversold"
-        elif pcr > 0.8:
+        elif pcr > t_sell:
             return "neutral", 5.0, f"PCR {pcr:.2f} — balanced options market"
-        elif pcr > 0.6:
+        elif pcr > t_strong_sell:
             return "sell", 3.5, f"PCR {pcr:.2f} — call heavy, market overbought"
         else:
             return "strong_sell", 2.0, f"PCR {pcr:.2f} — extreme greed, caution"

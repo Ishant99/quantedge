@@ -10,6 +10,10 @@
 
 import json, os, csv, sqlite3
 from datetime import datetime
+
+_PROJECT_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR      = os.path.join(_PROJECT_ROOT, "logs")
+_TRADES_CSV    = os.path.join(_LOGS_DIR, "paper_trades.csv")
 from dataclasses import asdict
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,7 +51,7 @@ class PaperExecutor:
         # Reload portfolio from disk to pick up changes from other scheduler jobs
         # (price_monitor, trailing_stop, EOD close) that may have run concurrently.
         fresh = self._load_portfolio()
-        if fresh:
+        if fresh is not None:
             self.portfolio = fresh
 
         result = {}
@@ -115,6 +119,7 @@ class PaperExecutor:
                 "entry_confidence": signal.confidence,
                 "trade_type":       getattr(signal, "trade_type", "swing"),
                 "timestamp":        datetime.now().isoformat(),
+                "entry_friction":   round(slippage_buy + brokerage_buy, 2),
             }
             result = {
                 "status":    "filled",
@@ -146,7 +151,8 @@ class PaperExecutor:
             slippage_sell  = round(sell_price * pos["qty"] * 0.001, 2)
             brokerage_sell = 20.0
             proceeds = sell_price * pos["qty"] - slippage_sell - brokerage_sell
-            pnl      = proceeds - (pos["entry"] * pos["qty"])
+            # Deduct entry friction so PnL reflects total round-trip cost
+            pnl      = proceeds - (pos["entry"] * pos["qty"]) - pos.get("entry_friction", 0.0)
             self.portfolio["cash"] += proceeds
             del self.portfolio["positions"][signal.symbol]
             self.portfolio["total_trades"] += 1
@@ -206,7 +212,7 @@ class PaperExecutor:
     # ------------------------------------------------------------------
 
     def _load_portfolio(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
         data = load_portfolio_locked(VIRTUAL_PORTFOLIO_FILE)
         if data:
             return data
@@ -233,7 +239,7 @@ class PaperExecutor:
         return None
 
     def _log_trade(self, signal: TradeSignal, result: dict):
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
 
         # --- SQLite (primary — needed for stats, dashboard, history) ---
         try:
@@ -301,7 +307,7 @@ class PaperExecutor:
             logger.warning(f"SQLite trade log failed ({signal.symbol}): {e}")
 
         # --- CSV (audit log) ---
-        log_file = "logs/paper_trades.csv"
+        log_file = _TRADES_CSV
         fieldnames = [
             "timestamp","symbol","action","qty","price","confidence",
             "ta_score","sentiment","stop_loss","take_profit",

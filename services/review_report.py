@@ -2,9 +2,10 @@ import json
 import os
 from datetime import datetime
 
-
-REVIEW_REPORT_JSON = os.path.join("logs", "agent_review_report.json")
-REVIEW_REPORT_MD = os.path.join("logs", "agent_review_report.md")
+_PROJECT_ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR          = os.path.join(_PROJECT_ROOT, "logs")
+REVIEW_REPORT_JSON = os.path.join(_LOGS_DIR, "agent_review_report.json")
+REVIEW_REPORT_MD   = os.path.join(_LOGS_DIR, "agent_review_report.md")
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -288,7 +289,7 @@ def render_review_markdown(report: dict) -> str:
 
 
 def write_review_report(state: dict) -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(_LOGS_DIR, exist_ok=True)
     report = build_review_report(state)
     with open(REVIEW_REPORT_JSON, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)

@@ -12,7 +12,8 @@ from utils import get_logger
 
 
 logger = get_logger("StateSync")
-UNIFIED_STATE_FILE = os.path.join("logs", "unified_state.json")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UNIFIED_STATE_FILE = os.path.join(_PROJECT_ROOT, "logs", "unified_state.json")
 
 
 def _load_json(path: str, default):
@@ -412,7 +413,7 @@ def _ensure_sync_tables(conn: sqlite3.Connection):
 
 
 def compose_unified_state() -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
     memory = PortfolioMemory()
     portfolio = _load_json(
         VIRTUAL_PORTFOLIO_FILE,
@@ -492,6 +493,7 @@ def sync_unified_state() -> dict:
     synced_at = state["synced_at"]
     try:
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             _ensure_sync_tables(conn)
             conn.execute("DELETE FROM unified_positions")
             conn.execute("DELETE FROM unified_trades")
@@ -604,11 +606,13 @@ def sync_unified_state() -> dict:
     except sqlite3.Error as exc:
         logger.warning(f"Unified state could not write SQLite sync tables: {exc}")
 
-    with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=2)
+    # Populate treasury before writing — avoids a second write and eliminates
+    # the race window where readers see an incomplete state between the two writes.
     state["treasury"] = write_treasury_snapshot(state)
-    with open(UNIFIED_STATE_FILE, "w", encoding="utf-8") as handle:
+    tmp = UNIFIED_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2)
+    os.replace(tmp, UNIFIED_STATE_FILE)
     write_review_report(state)
     logger.info(
         "Unified state synced | positions=%s trades=%s signals=%s",

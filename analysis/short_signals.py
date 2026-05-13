@@ -95,9 +95,14 @@ class ShortSignalGenerator:
 
             # RSI
             delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi   = float(100 - 100 / (1 + gain / loss.replace(0, np.nan)).iloc[-1])
+            gain  = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss  = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            last_loss_s = float(loss.iloc[-1])
+            if last_loss_s == 0:
+                rsi = 100.0
+            else:
+                rsi = float(100 - 100 / (1 + gain / loss).iloc[-1])
+                rsi = rsi if not np.isnan(rsi) else 50.0
 
             # Volume trend — declining on bounces = distribution
             vol5  = float(volume.rolling(5).mean().iloc[-1])

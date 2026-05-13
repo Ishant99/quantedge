@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sqlite3
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from dataclasses import asdict
 from typing import Optional
@@ -102,22 +103,25 @@ class PortfolioMemory:
                 );
 
                 CREATE TABLE IF NOT EXISTS fno_trades (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp   TEXT NOT NULL,
-                    symbol      TEXT NOT NULL,
-                    action      TEXT,
-                    instrument  TEXT,
-                    strike      REAL,
-                    expiry      TEXT,
-                    qty         INTEGER,
-                    entry_price REAL,
-                    exit_price  REAL,
-                    entry_time  TEXT,
-                    exit_time   TEXT,
-                    pnl         REAL DEFAULT 0,
-                    pnl_pct     REAL DEFAULT 0,
-                    status      TEXT DEFAULT 'open',
-                    mode        TEXT DEFAULT 'paper'
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TEXT NOT NULL,
+                    symbol          TEXT NOT NULL,
+                    action          TEXT,
+                    instrument      TEXT,
+                    strike          REAL,
+                    expiry          TEXT,
+                    qty             INTEGER,
+                    entry_price     REAL,
+                    exit_price      REAL,
+                    entry_time      TEXT,
+                    exit_time       TEXT,
+                    pnl             REAL DEFAULT 0,
+                    pnl_pct         REAL DEFAULT 0,
+                    status          TEXT DEFAULT 'open',
+                    mode            TEXT DEFAULT 'paper',
+                    option_type     TEXT DEFAULT '',
+                    current_premium REAL DEFAULT 0,
+                    reasoning       TEXT DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS crypto_trades (
@@ -168,16 +172,26 @@ class PortfolioMemory:
             """)
             cols = [r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()]
             alter_statements = {
-                "setup_type": "ALTER TABLE signals ADD COLUMN setup_type TEXT DEFAULT ''",
-                "regime_tag": "ALTER TABLE signals ADD COLUMN regime_tag TEXT DEFAULT ''",
-                "quality_score": "ALTER TABLE signals ADD COLUMN quality_score REAL DEFAULT 0",
-                "expectancy_score": "ALTER TABLE signals ADD COLUMN expectancy_score REAL DEFAULT 0",
-                "symbol_edge": "ALTER TABLE signals ADD COLUMN symbol_edge REAL DEFAULT 0",
-                "setup_edge": "ALTER TABLE signals ADD COLUMN setup_edge REAL DEFAULT 0",
-                "quality_flags": "ALTER TABLE signals ADD COLUMN quality_flags TEXT DEFAULT ''",
+                "setup_type":      "ALTER TABLE signals ADD COLUMN setup_type TEXT DEFAULT ''",
+                "regime_tag":      "ALTER TABLE signals ADD COLUMN regime_tag TEXT DEFAULT ''",
+                "quality_score":   "ALTER TABLE signals ADD COLUMN quality_score REAL DEFAULT 0",
+                "expectancy_score":"ALTER TABLE signals ADD COLUMN expectancy_score REAL DEFAULT 0",
+                "symbol_edge":     "ALTER TABLE signals ADD COLUMN symbol_edge REAL DEFAULT 0",
+                "setup_edge":      "ALTER TABLE signals ADD COLUMN setup_edge REAL DEFAULT 0",
+                "quality_flags":   "ALTER TABLE signals ADD COLUMN quality_flags TEXT DEFAULT ''",
             }
             for col, stmt in alter_statements.items():
                 if col not in cols:
+                    conn.execute(stmt)
+
+            fno_cols = [r[1] for r in conn.execute("PRAGMA table_info(fno_trades)").fetchall()]
+            fno_alters = {
+                "option_type":     "ALTER TABLE fno_trades ADD COLUMN option_type TEXT DEFAULT ''",
+                "current_premium": "ALTER TABLE fno_trades ADD COLUMN current_premium REAL DEFAULT 0",
+                "reasoning":       "ALTER TABLE fno_trades ADD COLUMN reasoning TEXT DEFAULT ''",
+            }
+            for col, stmt in fno_alters.items():
+                if col not in fno_cols:
                     conn.execute(stmt)
 
     # ------------------------------------------------------------------
@@ -623,8 +637,17 @@ class PortfolioMemory:
     # Helpers
     # ------------------------------------------------------------------
 
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _calc_drawdown(self, values: list) -> float:
         if len(values) < 2:

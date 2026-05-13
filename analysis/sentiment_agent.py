@@ -87,7 +87,10 @@ class SentimentAgent:
     }
 
     # File used to persist sentiment scores between scans for momentum tracking
-    _MOMENTUM_CACHE = "logs/sentiment_momentum.json"
+    _MOMENTUM_CACHE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "logs", "sentiment_momentum.json"
+    )
 
     def __init__(self):
         self.ollama_available = self._check_ollama()
@@ -104,12 +107,12 @@ class SentimentAgent:
         # Fetch stock-specific headlines with freshness weights
         stock_headlines, stock_weights = self._fetch_headlines(symbol, company_name)
 
-        # Add sector headlines (flat weight — sector news is always "now")
+        # Add sector headlines (full weight — sector news is current market context)
         sector_headlines = self._fetch_sector_headlines(sector)
 
         # Combine — stock news first, then up to 3 sector headlines
         all_headlines = stock_headlines + sector_headlines[:3]
-        all_weights   = stock_weights   + [0.6] * len(sector_headlines[:3])
+        all_weights   = stock_weights   + [1.0] * len(sector_headlines[:3])
 
         if not all_headlines:
             # No news = truly neutral; do not inflate confidence on absence of data
@@ -126,26 +129,34 @@ class SentimentAgent:
         # Boost confidence when we have more headlines
         confidence = min(0.95, confidence + len(stock_headlines) * 0.05)
 
-        # Sentiment momentum: if score is accelerating positively vs. last scan,
-        # slightly boost score and confidence to reward improving setups.
-        prev = self._prev_scores.get(symbol)
-        if prev is not None:
-            delta = score - prev
-            if delta >= 0.20:       # strong positive acceleration
-                score      = min(1.0, score + 0.08)
-                confidence = min(0.95, confidence + 0.05)
-                logger.debug(f"{symbol}: sentiment momentum +{delta:.2f} → boosted")
-            elif delta <= -0.20:    # strong negative acceleration — penalise
-                score      = max(-1.0, score - 0.08)
-                confidence = min(0.95, confidence + 0.03)
-                logger.debug(f"{symbol}: sentiment momentum {delta:.2f} → penalised")
-        self._prev_scores[symbol] = round(score, 3)
+        # Sentiment momentum: only apply if prior score is fresh (< 24h old)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prev_entry = self._prev_scores.get(symbol)
+        if isinstance(prev_entry, dict):
+            prev_score = prev_entry.get("score")
+            prev_ts    = prev_entry.get("ts", "")
+            try:
+                age_h = (datetime.now(timezone.utc) -
+                         datetime.fromisoformat(prev_ts)).total_seconds() / 3600
+                stale = age_h > 24
+            except Exception:
+                stale = True
+            if prev_score is not None and not stale:
+                delta = score - prev_score
+                if delta >= 0.20:
+                    score      = min(1.0, score + 0.08)
+                    confidence = min(0.95, confidence + 0.05)
+                    logger.debug(f"{symbol}: sentiment momentum +{delta:.2f} → boosted")
+                elif delta <= -0.20:
+                    score      = max(-1.0, score - 0.08)
+                    confidence = min(0.95, confidence + 0.03)
+                    logger.debug(f"{symbol}: sentiment momentum {delta:.2f} → penalised")
+        self._prev_scores[symbol] = {"score": round(score, 3), "ts": now_iso}
         self._save_momentum_cache()
 
-        # Lower neutral threshold — be decisive
-        if score > 0.1:
+        if score > 0.25:
             label = "positive"
-        elif score < -0.1:
+        elif score < -0.25:
             label = "negative"
         else:
             label = "neutral"
@@ -206,7 +217,7 @@ class SentimentAgent:
             freshness = "fresh" if weight >= 0.99 else "recent" if weight >= 0.5 else "stale"
             weighted_lines.append(f"- [{freshness} | weight {weight:.2f}] {headline}")
         headlines_text = "\n".join(weighted_lines)
-        llm_score, llm_conf = 0.1, 0.6
+        llm_score, llm_conf = None, None
         prompt = f"""You are an expert Indian stock market analyst.
 
 Analyse these news headlines about {company or symbol} and give a sentiment score.
@@ -235,12 +246,16 @@ Return ONLY a JSON object, nothing else:
             match = re.search(r'\{.*?\}', text, re.DOTALL)
             if match:
                 data  = json.loads(match.group())
-                llm_score = max(-1.0, min(1.0, float(data.get("score", 0.1))))
-                llm_conf = max(0.0, min(1.0, float(data.get("confidence", 0.6))))
+                llm_score = max(-1.0, min(1.0, float(data.get("score", 0.0))))
+                llm_conf  = max(0.0,  min(1.0, float(data.get("confidence", 0.5))))
         except Exception as e:
             logger.debug(f"LLM sentiment error: {e}")
 
         kw_score, kw_conf = self._keyword_sentiment(headlines, weights)
+        # Fall back to keyword-only if LLM call failed or returned nothing
+        if llm_score is None:
+            return kw_score, kw_conf
+
         avg_weight = sum(weights[:len(headlines[:8])]) / max(1, len(headlines[:8])) if weights else 1.0
         blended_score = round((llm_score * 0.7) + (kw_score * 0.3 * max(avg_weight, 0.25)), 3)
         blended_conf = round(min(0.95, llm_conf * max(avg_weight, 0.35) + kw_conf * 0.25), 2)
@@ -389,7 +404,7 @@ Return ONLY a JSON object, nothing else:
     def _load_momentum_cache(self) -> dict:
         try:
             import json as _json
-            os.makedirs("logs", exist_ok=True)
+            os.makedirs(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"), exist_ok=True)
             if os.path.exists(self._MOMENTUM_CACHE):
                 with open(self._MOMENTUM_CACHE) as f:
                     return _json.load(f)

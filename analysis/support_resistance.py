@@ -113,7 +113,11 @@ class SupportResistanceAnalyser:
 
         except Exception as e:
             logger.debug(f"{symbol} S/R failed: {e}")
-            return self._default(symbol, float(df["close"].iloc[-1]))
+            try:
+                price = float(df["close"].dropna().iloc[-1])
+            except Exception:
+                price = 0.0
+            return self._default(symbol, price)
 
     def analyse_all(self, market_data: dict) -> dict[str, SRResult]:
         results = {}

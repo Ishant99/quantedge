@@ -32,7 +32,10 @@ def _get_india_vix() -> float:
         return _vix_cache["value"]
     try:
         hist = yf.Ticker("^INDIAVIX").history(period="2d", interval="1d")
-        vix  = float(hist["Close"].iloc[-1]) if not hist.empty else 15.0
+        if hist.empty:
+            return 15.0
+        col = "Close" if "Close" in hist.columns else "close"
+        vix = float(hist[col].iloc[-1])
         _vix_cache["value"] = vix
         _vix_cache["ts"]    = time.time()
         logger.debug(f"India VIX: {vix:.1f}")

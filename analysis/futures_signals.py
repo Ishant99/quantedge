@@ -61,9 +61,14 @@ class FuturesSignalGenerator:
             ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
 
             delta = close.diff()
-            gain  = delta.clip(lower=0).rolling(14).mean()
-            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi   = float(100 - 100 / (1 + gain / loss.replace(0, np.nan)).iloc[-1])
+            gain  = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss  = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            last_loss_f = float(loss.iloc[-1])
+            if last_loss_f == 0:
+                rsi = 100.0
+            else:
+                rsi = float(100 - 100 / (1 + gain / loss).iloc[-1])
+                rsi = rsi if not np.isnan(rsi) else 50.0
 
             ret_1w = float((spot / close.iloc[-6]  - 1) * 100) if len(close) >= 6  else 0
             ret_1m = float((spot / close.iloc[-22] - 1) * 100) if len(close) >= 22 else 0

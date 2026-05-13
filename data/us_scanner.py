@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import yfinance as yf
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from utils import get_logger
 
 logger = get_logger("USScanner")
@@ -58,8 +59,14 @@ class USScanner:
 
     def _fetch(self, symbol: str, lookback_days: int) -> pd.DataFrame | None:
         try:
-            period = f"{lookback_days}d"
-            df = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=True)
+            end_dt   = datetime.today()
+            start_dt = end_dt - timedelta(days=lookback_days)
+            df = yf.Ticker(symbol).history(
+                start=start_dt.strftime("%Y-%m-%d"),
+                end=end_dt.strftime("%Y-%m-%d"),
+                interval="1d",
+                auto_adjust=True,
+            )
             if df.empty:
                 return None
             df.columns = [c.lower() for c in df.columns]
@@ -75,7 +82,8 @@ class USScanner:
         try:
             hist = yf.Ticker(symbol).history(period="2d")
             if not hist.empty:
-                return float(hist["Close"].iloc[-1])
+                col = "Close" if "Close" in hist.columns else "close"
+                return float(hist[col].iloc[-1])
         except Exception:
             pass
         return None

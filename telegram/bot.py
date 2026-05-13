@@ -29,6 +29,7 @@ from datetime import datetime
 from utils import get_logger
 
 logger = get_logger("TelegramBot")
+_LOGS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -83,7 +84,7 @@ def _cmd_status(token, chat_id):
         vc = _cfg("VIRTUAL_CAPITAL", 1_000_000)
         portfolio_value = exec_.get_portfolio_value()
         open_positions = exec_.get_open_positions_count()
-        pf = _load_json("logs/virtual_portfolio.json")
+        pf = _load_json(os.path.join(_LOGS, "virtual_portfolio.json"))
         cash = pf.get("cash", portfolio_value)
         deployed = max(0, portfolio_value - cash)
         nse_pnl = portfolio_value - vc
@@ -202,7 +203,7 @@ def _cmd_signals(token, chat_id):
 
 def _cmd_positions(token, chat_id):
     try:
-        pf  = _load_json("logs/virtual_portfolio.json")
+        pf  = _load_json(os.path.join(_LOGS, "virtual_portfolio.json"))
         pos = pf.get("positions", {})
         if not pos:
             _send(token, chat_id, "No open NSE positions. Agent is fully in cash.")
@@ -317,9 +318,9 @@ def _cmd_fno(token, chat_id):
 
 def _cmd_regime(token, chat_id):
     try:
-        reg = _load_json("logs/market_regime.json")
-        pcr = _load_json("logs/pcr_signal.json")
-        fii = _load_json("logs/fii_signal.json")
+        reg = _load_json(os.path.join(_LOGS, "market_regime.json"))
+        pcr = _load_json(os.path.join(_LOGS, "pcr_signal.json"))
+        fii = _load_json(os.path.join(_LOGS, "fii_signal.json"))
 
         rg      = reg.get("regime", "unknown").upper() if reg else "---"
         rsi     = reg.get("rsi", 0) if reg else 0

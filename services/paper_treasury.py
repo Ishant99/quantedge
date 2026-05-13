@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 
 import settings.manager as S
@@ -9,7 +10,12 @@ from utils import get_logger
 
 
 logger = get_logger("PaperTreasury")
-TREASURY_FILE = os.path.join("logs", "paper_treasury.json")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TREASURY_FILE = os.path.join(_PROJECT_ROOT, "logs", "paper_treasury.json")
+
+# Serialises concurrent can_allocate() calls so two scheduler jobs can't both
+# see available capacity and both proceed to allocate against the same budget.
+_ALLOCATION_LOCK = threading.Lock()
 
 
 def _cfg(key: str, default=None):
@@ -173,10 +179,12 @@ def build_treasury_snapshot(state: dict | None = None) -> dict:
 
 
 def write_treasury_snapshot(state: dict | None = None) -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(os.path.dirname(TREASURY_FILE), exist_ok=True)
     snapshot = build_treasury_snapshot(state=state)
-    with open(TREASURY_FILE, "w", encoding="utf-8") as handle:
+    tmp = TREASURY_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, indent=2)
+    os.replace(tmp, TREASURY_FILE)
     try:
         with sqlite3.connect(SQLITE_DB_FILE) as conn:
             conn.execute(
@@ -220,18 +228,19 @@ def load_treasury_snapshot(state: dict | None = None, refresh: bool = False) -> 
 
 
 def can_allocate(market: str, reserve_inr: float, state: dict | None = None) -> tuple[bool, str, dict]:
-    treasury = build_treasury_snapshot(state=state)
-    market_key = str(market or "other").lower()
-    available = _safe_float(treasury.get("available_cash_inr"))
-    if reserve_inr > available:
-        return False, f"insufficient unified treasury cash (need Rs.{reserve_inr:,.0f}, have Rs.{available:,.0f})", treasury
-    limits = treasury.get("market_allocation_limits_inr", {}) or {}
-    deployed = treasury.get("market_deployed_inr", {}) or {}
-    limit = _safe_float(limits.get(market_key), 0.0)
-    current = _safe_float(deployed.get(market_key), 0.0)
-    if limit and current + reserve_inr > limit:
-        return False, f"{market_key.upper()} allocation cap exceeded (limit Rs.{limit:,.0f})", treasury
-    return True, "", treasury
+    with _ALLOCATION_LOCK:
+        treasury = build_treasury_snapshot(state=state)
+        market_key = str(market or "other").lower()
+        available = _safe_float(treasury.get("available_cash_inr"))
+        if reserve_inr > available:
+            return False, f"insufficient unified treasury cash (need Rs.{reserve_inr:,.0f}, have Rs.{available:,.0f})", treasury
+        limits = treasury.get("market_allocation_limits_inr", {}) or {}
+        deployed = treasury.get("market_deployed_inr", {}) or {}
+        limit = _safe_float(limits.get(market_key), 0.0)
+        current = _safe_float(deployed.get(market_key), 0.0)
+        if limit and current + reserve_inr > limit:
+            return False, f"{market_key.upper()} allocation cap exceeded (limit Rs.{limit:,.0f})", treasury
+        return True, "", treasury
 
 
 def log_treasury_event(event_type: str, market: str, reserve_inr: float, detail: str = "", metadata: dict | None = None):

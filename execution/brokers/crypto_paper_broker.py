@@ -10,8 +10,9 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
-from config import SQLITE_DB_FILE, CRYPTO_MAX_POSITIONS
+from config import SQLITE_DB_FILE, CRYPTO_MAX_POSITIONS, CRYPTO_DEDUP_HOURS, CRYPTO_DEDUP_PRICE_PCT
 from data.crypto_scanner import CryptoScanner
 from services.paper_treasury import (
     can_allocate,
@@ -32,6 +33,31 @@ class CryptoPaperBroker:
         self.db      = SQLITE_DB_FILE
         self.scanner = CryptoScanner()
         self._init_table()
+
+    def _check_duplicate_position(self, symbol: str, direction: str, entry_price: float):
+        """Block re-entry if the same symbol+direction was opened within CRYPTO_DEDUP_HOURS
+        at a price within ±CRYPTO_DEDUP_PRICE_PCT of the current entry price."""
+        try:
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=int(CRYPTO_DEDUP_HOURS))).isoformat()
+            pct    = float(CRYPTO_DEDUP_PRICE_PCT)
+            lo, hi = entry_price * (1 - pct), entry_price * (1 + pct)
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, entry_price, entry_time FROM crypto_trades "
+                    "WHERE symbol=? AND direction=? AND entry_time >= ? "
+                    "AND status IN ('open','closed')",
+                    (symbol.upper(), direction.upper(), cutoff),
+                ).fetchall()
+            for (tid, ep, et) in rows:
+                if ep is not None and lo <= float(ep) <= hi:
+                    return False, (
+                        f"Crypto dedup: {symbol} {direction} already entered at "
+                        f"${ep:.4f} (within {pct*100:.0f}% of ${entry_price:.4f}) at {et}"
+                    )
+        except Exception as e:
+            logger.warning(f"Crypto dedup check failed ({symbol}), allowing: {e}")
+        return True, ""
 
     def open_position(self, symbol: str, direction: str,
                       entry_price: float = None,
@@ -56,6 +82,10 @@ class CryptoPaperBroker:
         open_count = len(self.get_open_positions())
         if open_count >= CRYPTO_MAX_POSITIONS:
             logger.warning(f"Crypto position cap reached ({CRYPTO_MAX_POSITIONS}) — skipping {symbol}")
+            return None
+        ok_dup, reason_dup = self._check_duplicate_position(symbol, direction, entry_price)
+        if not ok_dup:
+            logger.warning(f"{reason_dup} — skipping")
             return None
         reserve_inr = reserve_for_crypto_order(usdt_amount)
         ok, reason, _ = can_allocate("crypto", reserve_inr)
@@ -210,8 +240,17 @@ class CryptoPaperBroker:
             "open_positions": open_count,
         }
 
+    @contextmanager
     def _conn(self):
-        return sqlite3.connect(self.db)
+        conn = sqlite3.connect(self.db)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_table(self):
         with self._conn() as conn:

@@ -229,9 +229,10 @@ class StrategyEngine:
             (capital_at_risk / portfolio_value * 100) if portfolio_value > 0 else 0, 2
         )
 
-        # expected_value (simple: p × reward − (1−p) × risk)
-        avg_win_pct  = REWARD_RISK_RATIO * 2.0   # approximate
-        avg_loss_pct = 2.0
+        # EV = P(win) × avg_reward_pct − P(loss) × avg_risk_pct
+        # Both expressed as % of capital using the 2%-risk-per-trade baseline.
+        avg_loss_pct  = RISK_PER_TRADE_PCT * 100          # e.g. 2.0%
+        avg_win_pct   = REWARD_RISK_RATIO * avg_loss_pct  # e.g. 4.0% for RRR=2
         expected_value = round(
             p_direction * avg_win_pct - (1 - p_direction) * avg_loss_pct, 2
         )
