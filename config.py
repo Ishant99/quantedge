@@ -263,6 +263,9 @@ US_DEDUP_PRICE_PCT = float(_S("US_DEDUP_PRICE_PCT", default=0.03))
 CRYPTO_DEDUP_HOURS     = int(  _S("CRYPTO_DEDUP_HOURS",     default=24))
 CRYPTO_DEDUP_PRICE_PCT = float(_S("CRYPTO_DEDUP_PRICE_PCT", default=0.03))
 
+# VIX cache TTL — how long (seconds) the cached VIX reading is reused
+VIX_CACHE_TTL = int(_S("PCR_VIX_CACHE_TTL", default=900))
+
 # INR conversion rate for combined P&L display
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))
 INR_PER_USDT = float(_S("INR_PER_USDT", default=83.0))

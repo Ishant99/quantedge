@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,22 @@ from utils import get_logger
 from pipeline.contracts import MarketContext, FeatureSet, Allocation, PipelineResult
 
 logger = get_logger("Pipeline")
+
+_STAGE1_TIMEOUT = 30   # seconds before a Stage 1 network call is abandoned
+
+
+def _call_with_timeout(fn, timeout: int = _STAGE1_TIMEOUT, fallback=None, label: str = ""):
+    """Run fn() in a thread; return fallback if it exceeds timeout or raises."""
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except _FutureTimeout:
+            logger.warning(f"[Stage 1] {label or fn.__name__} timed out after {timeout}s — using fallback")
+            return fallback
+        except Exception as exc:
+            logger.warning(f"[Stage 1] {label or fn.__name__} failed: {exc} — using fallback")
+            return fallback
 
 
 class TradingPipeline:
@@ -205,26 +222,24 @@ class TradingPipeline:
         stability = getattr(regime_result, "stability_count", 0)
         nifty_trend = regime_result.nifty_trend
 
-        # PCR
-        try:
-            pcr = self._get_pcr_analyser().get_signal()
-            pcr_signal = pcr.signal
-        except Exception as exc:
-            logger.warning(f"[Stage 1] PCR fetch failed — defaulting to neutral: {exc}")
-            pcr_signal = "neutral"
+        # PCR — timeout-guarded: NSE endpoint can hang on bad network days
+        pcr = _call_with_timeout(
+            self._get_pcr_analyser().get_signal, label="PCR"
+        )
+        pcr_signal = pcr.signal if pcr is not None else "neutral"
 
-        # FII/DII
-        try:
-            fii = self._get_fii_tracker().get_signal()
-            fii_signal = fii.signal
-        except Exception as exc:
-            logger.warning(f"[Stage 1] FII fetch failed — defaulting to neutral: {exc}")
-            fii_signal = "neutral"
+        # FII/DII — timeout-guarded: scrapes live NSE data
+        fii = _call_with_timeout(
+            self._get_fii_tracker().get_signal, label="FII"
+        )
+        fii_signal = fii.signal if fii is not None else "neutral"
 
-        # Market breadth
-        try:
-            breadth = self._get_breadth_analyser().get_breadth()
-            raw_breadth = breadth.breadth_signal  # e.g. strong_bull | bull | neutral | bear
+        # Market breadth — timeout-guarded: batch yfinance download
+        breadth = _call_with_timeout(
+            self._get_breadth_analyser().get_breadth, label="Breadth"
+        )
+        if breadth is not None:
+            raw_breadth = breadth.breadth_signal
             if "strong" in raw_breadth and "bull" in raw_breadth:
                 breadth_signal = "strong"
             elif "bull" in raw_breadth:
@@ -235,18 +250,16 @@ class TradingPipeline:
                 breadth_signal = "weak"
             else:
                 breadth_signal = "moderate"
-        except Exception as exc:
-            logger.warning(f"[Stage 1] Breadth fetch failed — defaulting to moderate: {exc}")
+        else:
             breadth_signal = "moderate"
 
-        # Sector scores
+        # Sector scores — timeout-guarded
         sector_scores: dict = {}
-        try:
-            sector_result = self._get_sector_analyser().analyse()
-            if hasattr(sector_result, "sector_scores"):
-                sector_scores = sector_result.sector_scores
-        except Exception as exc:
-            logger.warning(f"[Stage 1] Sector fetch failed: {exc}")
+        sector_result = _call_with_timeout(
+            self._get_sector_analyser().analyse, label="Sector"
+        )
+        if sector_result is not None and hasattr(sector_result, "sector_scores"):
+            sector_scores = sector_result.sector_scores
 
         ctx = MarketContext(
             regime=regime,

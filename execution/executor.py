@@ -8,12 +8,16 @@
 # Both modes use identical interfaces so switching is one config change.
 # =============================================================================
 
-import json, os, csv, sqlite3
+import json, os, csv, sqlite3, threading
 from datetime import datetime
 
 _PROJECT_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGS_DIR      = os.path.join(_PROJECT_ROOT, "logs")
 _TRADES_CSV    = os.path.join(_LOGS_DIR, "paper_trades.csv")
+
+# Serialises concurrent execute() calls so two scheduler jobs can't both
+# see an empty position slot and both open a position for the same symbol.
+_EXECUTE_LOCK  = threading.Lock()
 from dataclasses import asdict
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,17 +52,24 @@ class PaperExecutor:
         if signal.position_size <= 0:
             return {"status": "skipped", "reason": "position size is 0"}
 
-        # Reload portfolio from disk to pick up changes from other scheduler jobs
-        # (price_monitor, trailing_stop, EOD close) that may have run concurrently.
-        fresh = self._load_portfolio()
-        if fresh is not None:
-            self.portfolio = fresh
+        result = {}
 
+        with _EXECUTE_LOCK:
+            # Reload under the lock so two concurrent calls both see the latest state
+            # before either one proceeds to allocate. Prevents duplicate positions.
+            fresh = self._load_portfolio()
+            if fresh is not None:
+                self.portfolio = fresh
+
+            result = self._execute_locked(signal)
+
+        return result
+
+    def _execute_locked(self, signal: "TradeSignal") -> dict:
+        """Called only while _EXECUTE_LOCK is held."""
         result = {}
 
         if signal.action == "BUY":
-            # Re-check after reload — trailing stop or scheduler may have opened/closed
-            # a position between the caller's check and now.
             if signal.symbol in self.portfolio["positions"]:
                 return {"status": "skipped", "reason": "position already open"}
 
