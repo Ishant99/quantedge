@@ -740,6 +740,21 @@ class TradingPipeline:
                         logger.warning(f"[Stage 9] memory save failed for {alloc.signal.symbol}: {mem_exc}")
             except Exception as exc:
                 logger.error(f"[Stage 9] execution error for {alloc.signal.symbol}: {exc}")
+        # Persist blocked/abstained signals so the dashboard risk-gate log can display them
+        if self._memory is not None:
+            for alloc in allocations:
+                if alloc.signal.action in ("BLOCKED", "ABSTAIN") or alloc.abstained:
+                    try:
+                        sig_id = self._memory.save_signal(alloc.signal)
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None and sig_id and sig_id > 0:
+                            self._memory.save_journal(journal, signal_id=sig_id)
+                    except Exception as _mem_exc:
+                        logger.warning(
+                            f"[Stage 9] blocked/abstained save failed for "
+                            f"{alloc.signal.symbol}: {_mem_exc}"
+                        )
+
         logger.info(f"[Stage 9] done ({self._elapsed(t0)})")
         return allocations
 

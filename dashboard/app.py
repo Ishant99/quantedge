@@ -653,6 +653,78 @@ def _get_recent_signals(limit=100):
     return PortfolioMemory().get_recent_signals(limit=limit)
 
 @st.cache_data(ttl=60, show_spinner=False)
+def _get_risk_gate_log(limit=50):
+    """Today's BLOCKED signals from the signals table."""
+    try:
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            return []
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            rows = conn.execute("""
+                SELECT s.symbol, s.action, s.timestamp, s.reasoning,
+                       dj.json_blob
+                FROM signals s
+                LEFT JOIN decision_journals dj ON dj.signal_id = s.id
+                WHERE s.action IN ('BLOCKED', 'ABSTAIN')
+                  AND DATE(s.timestamp) = DATE('now', 'localtime')
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        result = []
+        for sym, action, ts, reasoning, json_blob in rows:
+            blocks = []
+            if json_blob:
+                try:
+                    jdata = json.loads(json_blob)
+                    blocks = [b.get("reason", b.get("check", "")) for b in
+                              (jdata.get("risk_gate_blocks") or [])]
+                except Exception:
+                    pass
+            result.append({
+                "Symbol": sym, "Action": action,
+                "Time": ts[:16] if ts else "",
+                "Blocks / Reason": "; ".join(blocks) if blocks else (reasoning or "")[:80],
+            })
+        return result
+    except Exception:
+        return []
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_abstention_log(limit=50):
+    """Today's ABSTAIN signals and session abstention rate."""
+    try:
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            return [], 0.0
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            today_rows = conn.execute("""
+                SELECT action FROM signals
+                WHERE DATE(timestamp) = DATE('now', 'localtime')
+            """).fetchall()
+            abstain_rows = [r for r in today_rows if r[0] in ("ABSTAIN",)]
+            executed_rows = [r for r in today_rows if r[0] in ("BUY", "SELL")]
+            denom = len(executed_rows) + len(abstain_rows)
+            rate = len(abstain_rows) / denom if denom else 0.0
+
+            rows = conn.execute("""
+                SELECT s.symbol, s.timestamp, s.reasoning,
+                       COALESCE(s.confidence, 0) as conf,
+                       COALESCE(s.quality_score, 0) as qscore
+                FROM signals s
+                WHERE s.action = 'ABSTAIN'
+                  AND DATE(s.timestamp) = DATE('now', 'localtime')
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        result = [{"Symbol": sym, "Time": ts[:16] if ts else "",
+                   "Confidence": f"{conf:.0%}", "Quality": f"{qscore:.2f}",
+                   "Reason": (reasoning or "")[:80]}
+                  for sym, ts, reasoning, conf, qscore in rows]
+        return result, rate
+    except Exception:
+        return [], 0.0
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _load_review_report_json():
     if os.path.exists(REVIEW_REPORT_JSON):
         try:
@@ -1592,6 +1664,35 @@ if page == "TODAY":
                 st.dataframe(latest_outcomes, use_container_width=True, hide_index=True, height=220)
             else:
                 st.info("No resolved outcomes yet.")
+
+        # ── Risk Gate Log + Abstention Log ────────────────────────────────────
+        gate_left, gate_right = st.columns(2)
+        with gate_left:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">RISK GATE — BLOCKED TODAY</div>',
+                        unsafe_allow_html=True)
+            rg_rows = _get_risk_gate_log(limit=30)
+            if rg_rows:
+                rg_df = pd.DataFrame(rg_rows)
+                st.dataframe(rg_df, use_container_width=True, hide_index=True, height=240)
+            else:
+                st.info("No signals blocked today.")
+
+        with gate_right:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">ABSTENTION LOG — TODAY</div>',
+                        unsafe_allow_html=True)
+            ab_rows, ab_rate = _get_abstention_log(limit=30)
+            if ab_rate > 0.70:
+                st.warning(
+                    f"Abstention rate {ab_rate:.0%} — system may be over-cautious. "
+                    "Review thresholds in Settings."
+                )
+            elif ab_rows:
+                st.caption(f"Session abstention rate: {ab_rate:.0%}")
+            if ab_rows:
+                ab_df = pd.DataFrame(ab_rows)
+                st.dataframe(ab_df, use_container_width=True, hide_index=True, height=240)
+            else:
+                st.info("No abstentions today.")
 
     with tab_health:
         st.markdown('<div class="bb-header">SYSTEM HEALTH</div>', unsafe_allow_html=True)

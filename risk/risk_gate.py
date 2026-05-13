@@ -3,7 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dataclasses import dataclass, field
-from config import _S, MAX_OPEN_POSITIONS
+from config import _S, MAX_OPEN_POSITIONS, MAX_EXECUTION_RISK
 from utils import get_logger
 
 logger = get_logger("RiskGate")
@@ -79,8 +79,8 @@ class RiskGate:
                 journal.add_block("min_confidence", reason, signal.p_direction)
             logger.warning("RiskGate BLOCK min_confidence: %s", reason)
 
-        if getattr(signal, "execution_risk", 0) > 0.85:
-            warn = f"execution_risk {signal.execution_risk:.3f} > 0.85 — high slippage/spread risk"
+        if getattr(signal, "execution_risk", 0) > MAX_EXECUTION_RISK:
+            warn = f"execution_risk {signal.execution_risk:.3f} > {MAX_EXECUTION_RISK} — high slippage/spread risk"
             warnings.append(warn)
             logger.warning("RiskGate WARN execution_risk_high: %s", warn)
 

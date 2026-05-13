@@ -28,6 +28,7 @@ from memory.portfolio_memory import PortfolioMemory
 from risk.trailing_stop import TrailingStopMonitor
 from risk.circuit_breaker import CircuitBreaker
 from risk.correlation_filter import CorrelationFilter
+from risk.risk_gate import RiskGate
 from risk.dynamic_sizing import DynamicPositionSizer
 from utils import get_logger
 from utils.telegram import send_signals, send
@@ -431,17 +432,6 @@ def run_agent(dry_run: bool = False) -> list:
     logger.info("[CORR] Correlation filter...")
     buy_signals = CorrelationFilter().filter(buy_signals, market_data, symbol_sectors)
 
-    # Regime-aware minimum confidence threshold:
-    # Recovery/sideways = lower bar (more signals needed), bull = standard
-    from config import MIN_CONFIDENCE
-    if regime.regime in ("recovery", "sideways"):
-        effective_min_conf = MIN_CONFIDENCE * 0.85   # 15% lower bar
-    else:
-        effective_min_conf = MIN_CONFIDENCE
-    buy_signals = [s for s in buy_signals if s.confidence >= effective_min_conf]
-    if regime.regime in ("recovery", "sideways"):
-        logger.info(f"[REGIME] {regime.regime} — min confidence lowered to {effective_min_conf:.0%}")
-
     # Final sort / Phase 6.2: Use ExecutionPlanner for candidate competition ranking
     logger.info(f"Final: {len(buy_signals)} BUY signals after all filters")
 
@@ -468,10 +458,22 @@ def run_agent(dry_run: bool = False) -> list:
             reverse=True,
         )
 
-    actionable_signals = buy_signals
-    if remaining_slots <= 0:
-        logger.info(f"[M7] Max open positions reached ({MAX_OPEN_POSITIONS}) -- skipping new BUY executions")
-        actionable_signals = []
+    # Unified risk gate — single source of truth for per-signal safety checks
+    _risk_gate = RiskGate()
+    _portfolio_state = {"portfolio_value": portfolio_value, "open_positions": open_positions}
+    _gate_passed, _gate_blocked = [], []
+    for _sig in buy_signals:
+        _rg = _risk_gate.check(_sig, _portfolio_state, open_positions)
+        if _rg.passed:
+            _gate_passed.append(_sig)
+        else:
+            _reasons = "; ".join(b.get("reason", "") for b in _rg.blocks)
+            logger.info(f"[RISK_GATE] BLOCK {_sig.symbol}: {_reasons}")
+            _gate_blocked.append(_sig)
+    if _gate_blocked:
+        logger.info(f"[RISK_GATE] {len(_gate_blocked)} blocked, {len(_gate_passed)} passed")
+
+    actionable_signals = _gate_passed
 
     _print_signals(actionable_signals, regime)
 

@@ -169,6 +169,13 @@ VIX_EXTREME_THRESHOLD = float(_S("VIX_EXTREME_THRESHOLD", default=30.0))  # redu
 RISK_GATE_MIN_CONFIDENCE     = float(_S("RISK_GATE_MIN_CONFIDENCE",     default=0.55))
 ABSTENTION_MIN_P_DIRECTION   = float(_S("ABSTENTION_MIN_P_DIRECTION",   default=0.60))
 ABSTENTION_MIN_SETUP_QUALITY = float(_S("ABSTENTION_MIN_SETUP_QUALITY", default=0.55))
+MIN_EDGE_THRESHOLD           = float(_S("MIN_EDGE_THRESHOLD",           default=0.0))
+MAX_PORTFOLIO_HEAT           = float(_S("MAX_PORTFOLIO_HEAT",           default=0.08))
+REGIME_STABILITY_GATE        = int(_S("REGIME_STABILITY_GATE",          default=2))
+MAX_EXECUTION_RISK           = float(_S("MAX_EXECUTION_RISK",           default=0.85))
+MIN_DIRECTIONAL_CONVICTION   = float(_S("MIN_DIRECTIONAL_CONVICTION",   default=0.54))
+MIN_RISK_REWARD              = float(_S("MIN_RISK_REWARD",              default=1.5))
+MIN_SETUP_QUALITY            = float(_S("MIN_SETUP_QUALITY",            default=0.45))
 
 # GIFT Nifty gap thresholds for pre-market signal
 GIFT_NIFTY_GAP_STRONG = float(_S("GIFT_NIFTY_GAP_STRONG", default=0.5))   # ±0.5% = strong
