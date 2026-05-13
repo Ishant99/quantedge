@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 from utils import get_logger
 
 logger = get_logger("EarningsGuard")
-EARNINGS_CACHE = "logs/earnings_calendar.json"
+_PROJECT_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EARNINGS_CACHE = os.path.join(_PROJECT_ROOT, "logs", "earnings_calendar.json")
 BLOCK_DAYS     = 5   # block trades N days before results
 
 class EarningsGuard:

@@ -64,10 +64,15 @@ class MultiTimeframeAnalyser:
 
             # Weekly RSI
             delta   = close_w.diff()
-            gain    = delta.clip(lower=0).rolling(14).mean()
-            loss    = (-delta.clip(upper=0)).rolling(14).mean()
-            rs      = gain / loss.replace(0, np.nan)
-            rsi_w   = float((100 - 100/(1+rs)).iloc[-1])
+            gain    = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss    = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            last_loss_w = float(loss.iloc[-1])
+            if last_loss_w == 0:
+                rsi_w = 100.0
+            else:
+                rs    = gain / loss
+                rsi_w = float(100 - 100 / (1 + rs).iloc[-1])
+                rsi_w = rsi_w if not np.isnan(rsi_w) else 50.0
 
             # Weekly MACD
             macd_w  = (close_w.ewm(span=12).mean() -

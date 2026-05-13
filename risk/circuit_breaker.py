@@ -17,7 +17,8 @@ from utils.telegram import send
 
 logger = get_logger("CircuitBreaker")
 
-CIRCUIT_BREAKER_FILE = "logs/circuit_breaker.json"
+_PROJECT_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CIRCUIT_BREAKER_FILE = os.path.join(_PROJECT_ROOT, "logs", "circuit_breaker.json")
 
 
 class CircuitBreaker:

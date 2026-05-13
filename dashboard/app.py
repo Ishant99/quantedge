@@ -2363,12 +2363,11 @@ elif page == "RESEARCH":
                 df["EMA20"]  = close.ewm(span=20,  adjust=False).mean()
                 df["EMA50"]  = close.ewm(span=50,  adjust=False).mean()
                 df["EMA200"] = close.ewm(span=200, adjust=False).mean()
-                # RSI(14)
+                # RSI(14) — Wilder's EMA
                 delta = close.diff()
-                gain  = delta.clip(lower=0).rolling(14).mean()
-                loss  = (-delta.clip(upper=0)).rolling(14).mean()
-                rs    = gain / loss.replace(0, float("nan"))
-                df["RSI"] = 100 - 100 / (1 + rs)
+                gain  = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+                loss  = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+                df["RSI"] = 100 - 100 / (1 + gain / loss.replace(0, float("nan")))
                 # Volume EMA
                 df["VolEMA20"] = df["volume"].ewm(span=20).mean()
                 return df

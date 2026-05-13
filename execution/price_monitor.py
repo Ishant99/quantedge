@@ -309,8 +309,9 @@ class PriceMonitor:
 
         # --- CSV (fallback / audit log) ---
         import csv
-        os.makedirs("logs", exist_ok=True)
-        log_file   = "logs/paper_trades.csv"
+        _logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+        os.makedirs(_logs_dir, exist_ok=True)
+        log_file   = os.path.join(_logs_dir, "paper_trades.csv")
         fieldnames = ["timestamp","symbol","trade_type","action","qty",
                       "entry_price","exit_price","pnl","pnl_pct"]
         row = {

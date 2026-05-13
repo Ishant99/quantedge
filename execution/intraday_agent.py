@@ -199,10 +199,14 @@ class IntradayAgent:
             # Criterion 3: RSI(14) in neutral-bullish zone
             # ----------------------------------------------------------
             delta  = close.diff()
-            gain   = delta.clip(lower=0).rolling(14).mean()
-            loss   = (-delta.clip(upper=0)).rolling(14).mean()
-            rsi_s  = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
-            rsi    = float(rsi_s.iloc[-1]) if not np.isnan(rsi_s.iloc[-1]) else 50.0
+            gain   = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss   = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            last_loss_i = float(loss.iloc[-1])
+            if last_loss_i == 0:
+                rsi = 100.0
+            else:
+                rsi_s = 100 - 100 / (1 + gain / loss)
+                rsi   = float(rsi_s.iloc[-1]) if not np.isnan(rsi_s.iloc[-1]) else 50.0
             rsi_ok = INTRADAY_RSI_LO <= rsi <= INTRADAY_RSI_HI
 
             # ----------------------------------------------------------
