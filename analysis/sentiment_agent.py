@@ -404,7 +404,7 @@ Return ONLY a JSON object, nothing else:
     def _load_momentum_cache(self) -> dict:
         try:
             import json as _json
-            os.makedirs("logs", exist_ok=True)
+            os.makedirs(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"), exist_ok=True)
             if os.path.exists(self._MOMENTUM_CACHE):
                 with open(self._MOMENTUM_CACHE) as f:
                     return _json.load(f)

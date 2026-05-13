@@ -24,7 +24,7 @@ class EarningsGuard:
     """
 
     def __init__(self):
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         self.calendar = self._load_or_fetch()
 
     def is_safe(self, symbol: str) -> tuple[bool, str]:

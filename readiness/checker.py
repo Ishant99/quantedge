@@ -36,6 +36,9 @@ from config import (
 from utils import get_logger
 
 logger = get_logger("ReadinessChecker")
+_PROJECT_ROOT     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOGS_DIR         = os.path.join(_PROJECT_ROOT, "logs")
+_READINESS_REPORT = os.path.join(_LOGS_DIR, "readiness_report.json")
 
 
 # ------------------------------------------------------------------
@@ -443,7 +446,7 @@ class ReadinessChecker:
 
     def _save_report(self, report: ReadinessReport):
         """Save report as JSON for dashboard to read."""
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(_LOGS_DIR, exist_ok=True)
         data = {
             "timestamp":     report.timestamp,
             "is_ready":      report.is_ready,
@@ -463,7 +466,7 @@ class ReadinessChecker:
                 for g in report.gates
             ],
         }
-        with open("logs/readiness_report.json", "w") as f:
+        with open(_READINESS_REPORT, "w") as f:
             json.dump(data, f, indent=2)
 
 

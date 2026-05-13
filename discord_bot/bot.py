@@ -28,6 +28,7 @@ from datetime import datetime
 from utils import get_logger
 
 logger = get_logger("DiscordBot")
+_LOGS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 
 
 def _cfg(key, default=None):
@@ -47,7 +48,7 @@ def _load_json(path, default=None):
 # ── Response builders (shared logic with Telegram bot) ───────────────────────
 
 def _build_status() -> str:
-    pf   = _load_json("logs/virtual_portfolio.json")
+    pf   = _load_json(os.path.join(_LOGS, "virtual_portfolio.json"))
     cash = pf.get("cash", _cfg("VIRTUAL_CAPITAL", 1_000_000))
     vc   = _cfg("VIRTUAL_CAPITAL", 1_000_000)
     nse_pnl = cash - vc
@@ -156,7 +157,7 @@ def _build_signals() -> str:
 
 
 def _build_positions() -> str:
-    pf  = _load_json("logs/virtual_portfolio.json")
+    pf  = _load_json(os.path.join(_LOGS, "virtual_portfolio.json"))
     pos = pf.get("positions", {})
     if not pos:
         return "No open NSE positions. Agent is fully in cash."
@@ -248,9 +249,9 @@ def _build_fno() -> str:
 
 
 def _build_regime() -> str:
-    reg = _load_json("logs/market_regime.json")
-    pcr = _load_json("logs/pcr_signal.json")
-    fii = _load_json("logs/fii_signal.json")
+    reg = _load_json(os.path.join(_LOGS, "market_regime.json"))
+    pcr = _load_json(os.path.join(_LOGS, "pcr_signal.json"))
+    fii = _load_json(os.path.join(_LOGS, "fii_signal.json"))
     rg      = reg.get("regime", "unknown").upper() if reg else "---"
     rsi     = reg.get("rsi", 0) if reg else 0
     ret_1m  = reg.get("ret_1m", 0) if reg else 0

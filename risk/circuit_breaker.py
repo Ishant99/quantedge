@@ -168,7 +168,7 @@ class CircuitBreaker:
         return 0.0
 
     def _load_state(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         if os.path.exists(CIRCUIT_BREAKER_FILE):
             try:
                 with open(CIRCUIT_BREAKER_FILE) as f:

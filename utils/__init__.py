@@ -2,7 +2,8 @@ import logging
 import os
 import sys
 
-os.makedirs("logs", exist_ok=True)
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(_LOGS_DIR, exist_ok=True)
 
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
@@ -28,7 +29,7 @@ def get_logger(name: str) -> logging.Logger:
     # Rotating file handler — 50 MB per file, 7 backups kept
     from logging.handlers import RotatingFileHandler
     from datetime import datetime
-    log_file = f"logs/agent_{datetime.now().strftime('%Y%m%d')}.log"
+    log_file = os.path.join(_LOGS_DIR, f"agent_{datetime.now().strftime('%Y%m%d')}.log")
     fh = RotatingFileHandler(
         log_file, maxBytes=50 * 1024 * 1024, backupCount=7, encoding="utf-8"
     )

@@ -145,7 +145,7 @@ class FIIDIITracker:
                     except Exception:
                         pass
                 if data:
-                    os.makedirs("logs", exist_ok=True)
+                    os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
                     with open(CACHE_FILE, "w") as f:
                         json.dump({"cached_at": datetime.now().isoformat(),
                                    "data": data}, f, indent=2)

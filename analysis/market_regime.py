@@ -56,7 +56,7 @@ class MarketRegimeFilter:
         self._state = self._load_state()
 
     def _load_state(self) -> dict:
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         if os.path.exists(_REGIME_STATE_FILE):
             try:
                 with open(_REGIME_STATE_FILE) as f:

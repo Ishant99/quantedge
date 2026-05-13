@@ -413,7 +413,7 @@ def _ensure_sync_tables(conn: sqlite3.Connection):
 
 
 def compose_unified_state() -> dict:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
     memory = PortfolioMemory()
     portfolio = _load_json(
         VIRTUAL_PORTFOLIO_FILE,
