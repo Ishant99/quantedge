@@ -472,6 +472,32 @@ class ConfidenceCalibrator:
             return -1
 
     @staticmethod
+    def get_correction_factor(p_direction: float) -> "float | None":
+        """
+        Return the correction factor for *p_direction* from the latest saved
+        CalibrationReport.  Returns None when no report exists or the band
+        has fewer than 10 trades (insufficient to trust).
+
+        The corrected p_direction is: p_direction × correction_factor.
+        A factor < 1.0 means the system is overconfident in that band.
+        """
+        report = ConfidenceCalibrator.load_latest_report()
+        if not report or not report.confidence_bands:
+            return None
+        BANDS = [
+            ("0.50-0.59", 0.50, 0.60),
+            ("0.60-0.69", 0.60, 0.70),
+            ("0.70-0.79", 0.70, 0.80),
+            ("0.80+",     0.80, 1.01),
+        ]
+        for label, lo, hi in BANDS:
+            if lo <= p_direction < hi:
+                band = report.confidence_bands.get(label, {})
+                if band.get("n_trades", 0) >= 10:
+                    return band.get("correction_factor")
+        return None
+
+    @staticmethod
     def load_latest_report() -> "CalibrationReport | None":
         """Load the most recently saved CalibrationReport from DB."""
         if not os.path.exists(SQLITE_DB_FILE):

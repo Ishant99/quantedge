@@ -3620,6 +3620,133 @@ elif page == "HISTORY":
         except Exception as _be:
             st.info(f"Confidence calibration by band not available: {_be}")
 
+        # ── Section 6: Regime Weight Viewer ──────────────────────────────────
+        st.markdown("---")
+        st.subheader("Regime Weight Viewer")
+        try:
+            from strategy.regime_weights import REGIME_WEIGHTS, RegimeWeightManager
+            _rwm = RegimeWeightManager()
+            _regimes_view = ["bull", "bear", "sideways", "recovery"]
+            _col_regime = st.selectbox("Regime", _regimes_view, key="rw_regime_sel")
+            _weights_prior  = REGIME_WEIGHTS.get(_col_regime, {})
+            _weights_cal    = _rwm.get_weights(_col_regime)
+            _using_cal = _weights_cal != _weights_prior
+
+            if _using_cal:
+                st.success("Using calibration-derived weights (≥ 50 resolved trades per module)")
+            else:
+                st.info("Using prior weights — calibration data insufficient (< 50 trades per module)")
+
+            _all_modules = sorted(set(list(_weights_prior.keys()) + list(_weights_cal.keys())))
+            _layer_tags  = {
+                "technical": "L1", "trend_strength": "L1", "momentum": "L1",
+                "pattern": "L1", "volume_profile": "L1",
+                "market_regime": "L2", "fii_dii": "L2", "market_breadth": "L2",
+                "sector_rotation": "L2", "earnings_guard": "L2",
+                "confidence": "L3", "kelly": "L3", "vix": "L3",
+                "regime": "L3", "sector": "L3", "sentiment": "L3",
+            }
+            _rw_rows = []
+            for _m in _all_modules:
+                _pw = _weights_prior.get(_m, 0.0)
+                _cw = _weights_cal.get(_m, 0.0)
+                _rw_rows.append({
+                    "Layer": _layer_tags.get(_m, "—"),
+                    "Module": _m,
+                    "Prior Weight": f"{_pw:.4f}",
+                    "Active Weight": f"{_cw:.4f}" if _using_cal else f"{_pw:.4f}",
+                    "Zero?": "⚠ zero" if ((_cw if _using_cal else _pw) == 0.0) else "",
+                })
+            import pandas as _pd_rw
+            st.dataframe(
+                _pd_rw.DataFrame(_rw_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+        except Exception as _rwe:
+            st.info(f"Regime weight viewer unavailable: {_rwe}")
+
+        # ── Section 7: Redundancy Monitor ────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Module Redundancy Monitor")
+        try:
+            from strategy.regime_weights import RedundancyDetector
+            _rd = RedundancyDetector()
+            _agreements = _rd.compute(days=90)
+            if _agreements:
+                import pandas as _pd_rd
+                _rd_rows = [
+                    {
+                        "Module A": ma,
+                        "Module B": mb,
+                        "Agreement Rate": f"{rate:.1%}",
+                        "Redundant?": "⚠ YES" if rate >= RedundancyDetector.REDUNDANCY_THRESHOLD else "",
+                    }
+                    for (ma, mb), rate in list(_agreements.items())[:20]
+                ]
+                st.dataframe(_pd_rd.DataFrame(_rd_rows), use_container_width=True, hide_index=True)
+                _redundant = _rd.get_redundant_pairs(days=90)
+                if _redundant:
+                    st.warning(
+                        f"**{len(_redundant)} redundant pair(s)** with agreement > "
+                        f"{RedundancyDetector.REDUNDANCY_THRESHOLD:.0%}: "
+                        + ", ".join(f"{a}↔{b}" for a, b in _redundant[:5])
+                    )
+                else:
+                    st.success("No redundant module pairs detected (last 90 days)")
+            else:
+                st.info("Redundancy monitor needs ≥ 10 signals per module pair (last 90 days).")
+        except Exception as _rde:
+            st.info(f"Redundancy monitor unavailable: {_rde}")
+
+        # ── Section 8: Candidate Competition Table ────────────────────────────
+        st.markdown("---")
+        st.subheader("Candidate Competition (Latest Run)")
+        try:
+            import sqlite3 as _sq8
+            from config import SQLITE_DB_FILE as _DB8
+            import pandas as _pd8
+            import os as _os8
+            if _os8.path.exists(_DB8):
+                with _sq8.connect(_DB8) as _conn8:
+                    _comp_rows = _conn8.execute("""
+                        SELECT s.symbol, s.action, s.confidence,
+                               dj.final_action,
+                               json_extract(dj.json_blob, '$.layer3_votes') AS l3
+                        FROM signals s
+                        JOIN decision_journals dj ON dj.signal_id = s.id
+                        WHERE s.timestamp >= datetime('now', '-1 day')
+                        ORDER BY s.id DESC
+                        LIMIT 50
+                    """).fetchall()
+                if _comp_rows:
+                    _comp_data = []
+                    for _sym, _act, _conf, _final, _l3_raw in _comp_rows:
+                        import json as _json8
+                        _opp_note = ""
+                        try:
+                            _l3 = _json8.loads(_l3_raw or "[]")
+                            for _v in _l3:
+                                if isinstance(_v, dict) and "execution_planner" in str(_v.get("module", "")):
+                                    _opp_note = _v.get("note", "")
+                                    break
+                        except Exception:
+                            pass
+                        _comp_data.append({
+                            "Symbol": _sym,
+                            "Signal": _act,
+                            "p_direction": f"{(_conf or 0):.2%}",
+                            "Final": _final or _act,
+                            "Competition Result": _opp_note if _opp_note else ("✓ allocated" if _act == "BUY" else "—"),
+                        })
+                    st.dataframe(_pd8.DataFrame(_comp_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No signals from the last 24 hours yet.")
+            else:
+                st.info("Database not initialised.")
+        except Exception as _ce8:
+            st.info(f"Candidate competition table unavailable: {_ce8}")
+
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
             with st.spinner("Checking gates..."):

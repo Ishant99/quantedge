@@ -210,6 +210,14 @@ class TradingPipeline:
             self._narrator = SignalNarrator(use_llm=False)
         return self._narrator
 
+    def _get_execution_planner(self):
+        if not hasattr(self, "_execution_planner"):
+            self._execution_planner = None
+        if self._execution_planner is None:
+            from strategy.execution_planner import ExecutionPlanner
+            self._execution_planner = ExecutionPlanner()
+        return self._execution_planner
+
     # ------------------------------------------------------------------
     # Stage helpers
     # ------------------------------------------------------------------
@@ -714,6 +722,95 @@ class TradingPipeline:
         return allocations
 
     # ------------------------------------------------------------------
+    # Stage 8b — Execution Planning (candidate competition)
+    # ------------------------------------------------------------------
+
+    def _stage_execution_planning(
+        self,
+        allocations: list,
+        market_data: dict,
+        open_position_sectors: set = None,
+        portfolio_deployed_pct: float = 0.0,
+    ) -> list:
+        """
+        Rank BUY allocations by composite score and prune to MAX_OPEN_POSITIONS
+        available slots via ExecutionPlanner.  Rejected candidates are marked
+        abstained with reason "opportunity_cost: rank N".
+
+        Non-BUY allocations (SELL/HOLD/BLOCKED/ABSTAIN) are passed through unchanged.
+        """
+        t0 = time.time()
+        buy_allocs     = [a for a in allocations if a.signal.action == "BUY" and not a.abstained]
+        non_buy_allocs = [a for a in allocations if not (a.signal.action == "BUY" and not a.abstained)]
+
+        if not buy_allocs:
+            logger.info(f"[Stage 8b] no BUY candidates — skipping ({self._elapsed(t0)})")
+            return allocations
+
+        try:
+            planner = self._get_execution_planner()
+        except Exception as exc:
+            logger.warning(f"[Stage 8b] ExecutionPlanner unavailable: {exc} — skipping")
+            return allocations
+
+        # Executor already opened positions count; remaining slots = cap − open
+        try:
+            executor = self._get_executor()
+            already_open = executor.get_open_positions_count()
+        except Exception:
+            already_open = 0
+        max_slots = max(0, MAX_OPEN_POSITIONS - already_open)
+
+        buy_signals = [a.signal for a in buy_allocs]
+        try:
+            ranked = planner.rank_and_allocate(
+                signals=buy_signals,
+                max_slots=max_slots,
+                open_position_sectors=open_position_sectors or set(),
+                market_data=market_data,
+                portfolio_deployed_pct=portfolio_deployed_pct,
+            )
+        except Exception as exc:
+            logger.warning(f"[Stage 8b] rank_and_allocate failed: {exc} — using original order")
+            return allocations
+
+        # Build a lookup: symbol → (rank_index, slot_allocated, rejection_reason)
+        rank_map: dict[str, tuple[int, bool, str]] = {}
+        for rank_idx, candidate in enumerate(ranked, start=1):
+            sym = getattr(candidate.signal, "symbol", "")
+            rank_map[sym] = (rank_idx, candidate.slot_allocated, candidate.rejection_reason)
+
+        updated_buy: list = []
+        for alloc in buy_allocs:
+            sym = getattr(alloc.signal, "symbol", "")
+            if sym in rank_map:
+                rank_idx, allocated, rejection = rank_map[sym]
+                if not allocated:
+                    alloc.signal.action = "ABSTAIN"
+                    alloc.abstained = True
+                    alloc.abstention_reason = f"opportunity_cost: rank {rank_idx}"
+                    # Persist opportunity cost to decision journal for Task 6.6 tracking
+                    try:
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None:
+                            journal.add_vote(
+                                3, "execution_planner", "ABSTAIN",
+                                raw_score=0.0,
+                                note=f"opportunity_cost: rank {rank_idx} — {rejection}",
+                            )
+                    except Exception:
+                        pass
+            updated_buy.append(alloc)
+
+        allocated_count = sum(1 for a in updated_buy if not a.abstained)
+        rejected_count  = sum(1 for a in updated_buy if a.abstained)
+        logger.info(
+            f"[Stage 8b] done ({self._elapsed(t0)}) — "
+            f"{allocated_count} allocated, {rejected_count} opportunity-cost rejected"
+        )
+        return non_buy_allocs + updated_buy
+
+    # ------------------------------------------------------------------
     # Stage 9 — Execution
     # ------------------------------------------------------------------
 
@@ -951,6 +1048,29 @@ class TradingPipeline:
                            risk_passed=rg.passed if rg else False)
                 for sig, perm, rg in risk_gate_results
             ]
+
+        # ---- Stage 8b: Execution Planning (candidate competition) -------
+        try:
+            # Determine sectors already held in open positions
+            open_secs: set[str] = set()
+            try:
+                executor = self._get_executor()
+                open_syms = list(executor.portfolio.get("positions", {}).keys())
+                if symbol_sectors:
+                    open_secs = {symbol_sectors[s] for s in open_syms if s in symbol_sectors}
+            except Exception:
+                pass
+            # Deployed fraction = open_positions * avg_position_size / portfolio_value
+            deployed_pct = min(1.0, (open_positions * 0.02)) if portfolio_value else 0.0
+            allocations = self._stage_execution_planning(
+                allocations=allocations,
+                market_data=tradeable_data,
+                open_position_sectors=open_secs,
+                portfolio_deployed_pct=deployed_pct,
+            )
+        except Exception as exc:
+            logger.error(f"[Stage 8b] fatal: {exc}")
+            errors.append(f"stage8b_execution_planning: {exc}")
 
         # ---- Stage 9: Execution --------------------------------------
         try:

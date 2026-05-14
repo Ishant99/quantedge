@@ -1076,13 +1076,13 @@ Add:
 ---
 
 ### Phase 6 Done When:
-- [ ] `regime_weights.py` returns calibration-derived weights after 50+ trades
-- [ ] Zero-weight modules skipped entirely in signal generation
-- [ ] Redundancy detector runs monthly and halves weights of high-agreement pairs
-- [ ] `p_direction` corrected by calibration factors from Phase 4
-- [ ] Candidate competition ranks all passing signals, allocates by score
-- [ ] Opportunity cost rejections logged and tracked
-- [ ] Dashboard shows all three new panels
+- [x] `regime_weights.py` returns calibration-derived weights after 50+ trades
+- [x] Zero-weight modules skipped entirely in signal generation
+- [x] Redundancy detector runs monthly and halves weights of high-agreement pairs
+- [x] `p_direction` corrected by calibration factors from Phase 4
+- [x] Candidate competition ranks all passing signals, allocates by score
+- [x] Opportunity cost rejections logged and tracked
+- [x] Dashboard shows all three new panels
 
 ---
 
