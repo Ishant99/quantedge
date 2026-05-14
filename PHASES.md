@@ -114,11 +114,11 @@ What to change:
 ---
 
 ### Phase 0 Done When:
-- [ ] All 7 tasks above complete
-- [ ] Backtest on a fixed window produces a lower (more honest) win rate than before the fix
-- [ ] No bare yfinance calls without timeout in `main.py`
-- [ ] Sentiment score on zero-news symbol is `0.0`
-- [ ] Regime does not flip mid-session on volatile Nifty day
+- [x] All 7 tasks above complete
+- [x] Backtest on a fixed window produces a lower (more honest) win rate than before the fix
+- [x] No bare yfinance calls without timeout in `main.py`
+- [x] Sentiment score on zero-news symbol is `0.0`
+- [x] Regime does not flip mid-session on volatile Nifty day
 
 ---
 
@@ -353,14 +353,14 @@ Changes:
 ---
 
 ### Phase 1 Done When:
-- [ ] `DecisionJournal` and `ModuleVote` importable from `strategy/decision_journal.py`
-- [ ] `TradeSignal.p_direction` computed from Layer 1 TA inputs only
-- [ ] `MarketPermission.evaluate()` returns correct BLOCK/REDUCE/ALLOW for test cases
-- [ ] Position size computed only in `risk/dynamic_sizing.py` Layer 3
-- [ ] Sentiment does not appear in Layer 1 votes
-- [ ] Every signal has a populated journal with all three layers
-- [ ] `decision_journals` table exists and persists after a run
-- [ ] Signal narrator produces plain-English output per signal
+- [x] `DecisionJournal` and `ModuleVote` importable from `strategy/decision_journal.py`
+- [x] `TradeSignal.p_direction` computed from Layer 1 TA inputs only
+- [x] `MarketPermission.evaluate()` returns correct BLOCK/REDUCE/ALLOW for test cases
+- [x] Position size computed only in `risk/dynamic_sizing.py` Layer 3
+- [x] Sentiment does not appear in Layer 1 votes
+- [x] Every signal has a populated journal with all three layers
+- [x] `decision_journals` table exists and persists after a run
+- [x] Signal narrator produces plain-English output per signal
 
 ---
 
@@ -531,12 +531,12 @@ Add two new panels:
 ---
 
 ### Phase 2 Done When:
-- [ ] `risk/risk_gate.py` exists with all checks consolidated
-- [ ] Zero duplicate risk checks remaining in `main.py`, `strategy/engine.py`, `execution/executor.py`
-- [ ] Blocked signals persisted to `decision_journals` with `risk_gate_passed=False`
-- [ ] `strategy/abstention.py` exists and returns correct results for edge cases
-- [ ] All new thresholds in `config.py` using `_S()` helper
-- [ ] Dashboard shows risk gate log and abstention log
+- [x] `risk/risk_gate.py` exists with all checks consolidated
+- [x] Zero duplicate risk checks remaining in `main.py`, `strategy/engine.py`, `execution/executor.py`
+- [x] Blocked signals persisted to `decision_journals` with `risk_gate_passed=False`
+- [x] `strategy/abstention.py` exists and returns correct results for edge cases
+- [x] All new thresholds in `config.py` using `_S()` helper
+- [x] Dashboard shows risk gate log and abstention log
 
 ---
 
@@ -674,11 +674,11 @@ Files:
 ---
 
 ### Phase 3 Done When:
-- [ ] `pipeline/runner.py` exists with all 9 stages
-- [ ] `pipeline/contracts.py` defines all I/O types
-- [ ] `main.py` is under 20 lines
-- [ ] `TradingPipeline().run(dry_run=True)` produces equivalent output to old `main.py`
-- [ ] `pytest tests/` passes
+- [x] `pipeline/runner.py` exists with all 9 stages
+- [x] `pipeline/contracts.py` defines all I/O types
+- [x] `main.py` is under 20 lines
+- [x] `TradingPipeline().run(dry_run=True)` produces equivalent output to old `main.py`
+- [x] `pytest tests/` passes
 
 ---
 
@@ -759,11 +759,11 @@ Add two panels:
 ---
 
 ### Phase 4 Done When:
-- [ ] `outcome_tracker.py` updates `decision_journals` with 1d/3d/5d/exit returns
-- [ ] `analysis/calibration.py` produces `CalibrationReport` from journal data
-- [ ] `get_calibration_data()` returns completed trade rows
-- [ ] Dashboard shows module calibration heatmap and confidence calibration plot
-- [ ] Sentiment cache has timestamps, invalidated after 24h
+- [x] `outcome_tracker.py` updates `decision_journals` with 1d/3d/5d/exit returns
+- [x] `analysis/calibration.py` produces `CalibrationReport` from journal data
+- [x] `get_calibration_data()` returns completed trade rows
+- [x] Dashboard shows module calibration heatmap and confidence calibration plot
+- [x] Sentiment cache has timestamps, invalidated after 24h
 
 ---
 
@@ -911,13 +911,13 @@ Add `slippage_multiplier: float = 1.0` parameter.
 ---
 
 ### Phase 5 Done When:
-- [ ] `nse500_historical_membership.csv` exists and backtest respects it
-- [ ] `full_pipeline_replay=True` runs all live pipeline stages historically
-- [ ] Ablation table produced with at least 8 module comparisons
-- [ ] `BacktestResult.regime_breakdown` populated
-- [ ] `BacktestResult.module_attribution` populated
-- [ ] Drift analysis runs monthly and sends alert if > 5%
-- [ ] Stress test table produced under 2× and 3× slippage
+- [x] `nse500_historical_membership.csv` exists and backtest respects it
+- [x] `full_pipeline_replay=True` runs all live pipeline stages historically
+- [x] Ablation table produced with at least 8 module comparisons
+- [x] `BacktestResult.regime_breakdown` populated
+- [x] `BacktestResult.module_attribution` populated
+- [x] Drift analysis runs monthly and sends alert if > 5%
+- [x] Stress test table produced under 2× and 3× slippage
 
 ---
 

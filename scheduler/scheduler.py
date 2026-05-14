@@ -996,6 +996,31 @@ def run_weekly_summary():
         send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
 
 
+def run_drift_analysis():
+    """
+    Monthly drift analysis: compare live paper outcomes to backtest predictions.
+    Sends Telegram alert if drift_score >= 0.40 (HALT) or >= 0.20 (RECALIBRATE).
+    Scheduled for the first Sunday of each month at 21:00 IST.
+    """
+    _write_scheduler_status("drift_analysis", "running")
+    logger.info(
+        f"Drift analysis triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}"
+    )
+    try:
+        from backtest.drift_analysis import DriftAnalyser
+        report = DriftAnalyser().analyse(lookback_days=90)
+        status = report.get("recommendation", "OK")
+        score  = report.get("drift_score", 0.0)
+        _write_scheduler_status(
+            "drift_analysis", "ok",
+            f"drift={score:.3f} recommendation={status}"
+        )
+        logger.info(f"Drift analysis complete: drift={score:.3f} → {status}")
+    except Exception as e:
+        _write_scheduler_status("drift_analysis", "error", str(e))
+        logger.error(f"Drift analysis failed: {e}")
+
+
 def run_weekly_optimizer():
     """
     Run the walk-forward strategy optimizer on Sunday at 02:00 IST.
@@ -1383,6 +1408,15 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 12: Monthly drift analysis (first Sunday of month, 21:00 IST) ---
+    scheduler.add_job(
+        run_drift_analysis,
+        CronTrigger(day_of_week="sun", day="1-7", hour=21, minute=0, timezone=IST),
+        id="drift_analysis",
+        name="Drift Analysis (1st Sun/month 21:00 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     scheduler.add_job(
         run_housekeeping,
         CronTrigger(hour=6, minute=5, timezone=IST),
@@ -1392,7 +1426,7 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  17 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  18 JOBS")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
@@ -1409,6 +1443,7 @@ if __name__ == "__main__":
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
     logger.info("  Walk-fwd optimizer : Sunday 02:00 IST")
+    logger.info("  Drift analysis     : 1st Sunday/month 21:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
     logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)
