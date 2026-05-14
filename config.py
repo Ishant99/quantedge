@@ -312,6 +312,18 @@ MTF_COUNTER_PENALTY    = float(_S("MTF_COUNTER_PENALTY",    default=0.08))  # pe
 SR_SELL_ZONE_PENALTY   = float(_S("SR_SELL_ZONE_PENALTY",   default=0.10))  # penalty for S/R sell zone
 
 # -----------------------------------------------------------------------------
+# ASSET CLASS GATES (Phase 7 — research vs production separation)
+# F&O, crypto, and US equities are gated until NSE spot completes Phase 6.
+# Set the "enabled" flag to True in user_settings.json once Phase 6 is done.
+# -----------------------------------------------------------------------------
+ASSET_CLASS_GATES: dict = {
+    "nse_spot":    {"enabled": bool(_S("ASSET_NSE_SPOT_ENABLED",  default="true")  != "false"), "phase_required": 0},
+    "fno":         {"enabled": bool(_S("ASSET_FNO_ENABLED",       default="false") != "false"), "phase_required": 6},
+    "crypto":      {"enabled": bool(_S("ASSET_CRYPTO_ENABLED",    default="false") != "false"), "phase_required": 6},
+    "us_equities": {"enabled": bool(_S("ASSET_US_ENABLED",        default="false") != "false"), "phase_required": 6},
+}
+
+# -----------------------------------------------------------------------------
 # ALERTS — Telegram
 # -----------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN  = _S("TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "")

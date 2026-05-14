@@ -3785,6 +3785,70 @@ elif page == "HISTORY":
                 """, unsafe_allow_html=True)
             st.info(r.get("recommendation",""))
 
+        # ── System Status (Phase 7) ───────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("System Status")
+
+        try:
+            from config import ASSET_CLASS_GATES as _ACG
+            import os as _os7
+
+            # Production vs Research activity
+            _col_prod, _col_res = st.columns(2)
+
+            with _col_prod:
+                st.markdown("**Production**")
+                _active_classes = [c for c, g in _ACG.items() if g.get("enabled")]
+                st.markdown(f"Active asset classes: `{', '.join(_active_classes)}`")
+                st.markdown("Current phase: **Phase 6** (Meta-Decision Engine — complete)")
+                _rd_file = "logs/readiness_report.json"
+                if _os7.path.exists(_rd_file):
+                    _rd = _load_json(_rd_file)
+                    _rd_ts = _rd.get("timestamp", "never") if _rd else "never"
+                    st.markdown(f"Last readiness check: `{_rd_ts}`")
+                else:
+                    st.markdown("Last readiness check: `never`")
+
+            with _col_res:
+                st.markdown("**Research**")
+                _res_dir = "research"
+                _exp_dir = os.path.join(_res_dir, "experiments")
+                _abl_dir = os.path.join(_res_dir, "ablations")
+                _exp_count = len([f for f in os.listdir(_exp_dir) if not f.startswith("__")]) if os.path.exists(_exp_dir) else 0
+                _abl_count = len([f for f in os.listdir(_abl_dir) if f.endswith(".json")]) if os.path.exists(_abl_dir) else 0
+                st.markdown(f"Experiments in `research/experiments/`: **{_exp_count}**")
+                st.markdown(f"Ablation results in `research/ablations/`: **{_abl_count}**")
+                _approvals_file = os.path.join(_res_dir, "approvals.json")
+                if _os7.path.exists(_approvals_file):
+                    import json as _json7
+                    try:
+                        _approvals = _json7.load(open(_approvals_file))
+                        _pending = [m for m in _approvals if not _approvals[m].get("promoted")]
+                        st.markdown(f"Modules awaiting promotion: **{len(_pending)}**")
+                    except Exception:
+                        st.markdown("Approvals file unreadable")
+                else:
+                    st.markdown("Modules awaiting promotion: **0**")
+
+            # Asset class gate table
+            st.markdown("**Asset Class Gates**")
+            import pandas as _pd7
+            _gate_rows = []
+            for _cls, _gate in _ACG.items():
+                _enabled  = _gate.get("enabled", False)
+                _phase_r  = _gate.get("phase_required", 0)
+                _status   = "ENABLED" if _enabled else "GATED"
+                _gate_rows.append({
+                    "Asset Class":      _cls,
+                    "Status":           _status,
+                    "Phase Required":   _phase_r,
+                    "Phase Complete?":  "Yes" if _phase_r <= 6 else "No",
+                })
+            st.dataframe(_pd7.DataFrame(_gate_rows), use_container_width=True, hide_index=True)
+
+        except Exception as _sys_exc:
+            st.info(f"System status unavailable: {_sys_exc}")
+
 
 # =============================================================================
 # PAGE: CONFIG

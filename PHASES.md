@@ -1175,11 +1175,11 @@ Add panel: **System Status**
 ---
 
 ### Phase 7 Done When:
-- [ ] `research/` directory with sandbox pipeline and separate DB
-- [ ] `PromotionChecker.evaluate()` returns correct pass/fail per requirement
-- [ ] F&O, crypto, US gated in `ASSET_CLASS_GATES`
-- [ ] `readiness/checker.py` enforces asset class gates
-- [ ] Dashboard shows system status with production vs research separation
+- [x] `research/` directory with sandbox pipeline and separate DB
+- [x] `PromotionChecker.evaluate()` returns correct pass/fail per requirement
+- [x] F&O, crypto, US gated in `ASSET_CLASS_GATES`
+- [x] `readiness/checker.py` enforces asset class gates
+- [x] Dashboard shows system status with production vs research separation
 
 ---
 
