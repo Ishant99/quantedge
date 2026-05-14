@@ -3497,6 +3497,129 @@ elif page == "HISTORY":
         except Exception as _ae:
             st.info(f"Module attribution not available: {_ae}")
 
+        # ── Section 4: Module Calibration Heatmap ────────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:18px;">MODULE CALIBRATION HEATMAP</div>',
+                    unsafe_allow_html=True)
+        st.caption("Regime × module win-rate grid. Green > 50%, Red < 45%, Yellow = insufficient data (< 30 trades).")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            _cal = ConfidenceCalibrator()
+            _report = _cal.compute_module_calibration(min_trades=30)
+            if _report and _report.module_stats:
+                # Collect all regimes and modules across the report
+                _all_regimes = sorted(_report.module_stats.keys())
+                _all_modules = sorted({
+                    m for reg_data in _report.module_stats.values()
+                    for m in reg_data.keys()
+                })
+                if _all_regimes and _all_modules:
+                    z_vals, text_vals = [], []
+                    for module in _all_modules:
+                        z_row, t_row = [], []
+                        for regime in _all_regimes:
+                            cell = _report.module_stats.get(regime, {}).get(module)
+                            if cell:
+                                wr = cell["win_rate"]
+                                n  = cell["n_trades"]
+                                z_row.append(round(wr * 100, 1))
+                                t_row.append(f"{wr*100:.1f}%<br>n={n}")
+                            else:
+                                z_row.append(None)
+                                t_row.append("< 30 trades")
+                        z_vals.append(z_row)
+                        text_vals.append(t_row)
+
+                    fig_hm = go.Figure(go.Heatmap(
+                        z=z_vals,
+                        x=[r.upper() for r in _all_regimes],
+                        y=_all_modules,
+                        text=text_vals,
+                        texttemplate="%{text}",
+                        textfont=dict(size=9, family="JetBrains Mono"),
+                        colorscale=[
+                            [0.0,  "#FF3B3B"],   # red  — underperforming
+                            [0.45, "#FF3B3B"],
+                            [0.45, "#FFB800"],   # yellow — borderline
+                            [0.50, "#FFB800"],
+                            [0.50, "#00C805"],   # green — well-calibrated
+                            [1.0,  "#00C805"],
+                        ],
+                        zmin=30, zmax=80,
+                        showscale=True,
+                        colorbar=dict(
+                            title="Win %",
+                            tickfont=dict(color="#555", size=9, family="JetBrains Mono"),
+                            titlefont=dict(color="#555", size=9),
+                        ),
+                    ))
+                    fig_hm.update_layout(**_plotly_cfg(
+                        max(220, len(_all_modules) * 28),
+                        xaxis=dict(color="#555", side="top"),
+                        yaxis=dict(color="#555", autorange="reversed"),
+                        margin=dict(l=120, r=20, t=40, b=10),
+                    ))
+                    st.plotly_chart(fig_hm, use_container_width=True)
+
+                    # Overconfident pairs warning
+                    if _report.overconfident_pairs:
+                        _oc_lines = [f"• {r.upper()} / {s}" for r, s in _report.overconfident_pairs[:5]]
+                        st.warning(
+                            "**Overconfident segments** (stated confidence > actual win rate by > 10%):\n"
+                            + "\n".join(_oc_lines)
+                        )
+            else:
+                st.info("Module calibration heatmap needs ≥ 30 resolved trades per module. Check back later.")
+        except Exception as _hm_e:
+            st.info(f"Module calibration heatmap not available: {_hm_e}")
+
+        # ── Section 5: Confidence Calibration by Band ────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:14px;">CONFIDENCE CALIBRATION BY BAND</div>',
+                    unsafe_allow_html=True)
+        st.caption("Stated p_direction band vs actual win rate from realized exit returns. Well-calibrated = bars on the diagonal.")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            _bands = ConfidenceCalibrator().compute_confidence_calibration()
+            _band_rows = [
+                (band, d) for band, d in _bands.items()
+                if d.get("n_trades", 0) > 0
+            ]
+            if _band_rows:
+                fig_band = go.Figure()
+                fig_band.add_trace(go.Bar(
+                    x=[b for b, _ in _band_rows],
+                    y=[round(d["actual_win_rate"] * 100, 1) if d["actual_win_rate"] is not None else 0
+                       for _, d in _band_rows],
+                    name="Actual Win Rate",
+                    marker_color=[
+                        "#00C805" if (d["actual_win_rate"] or 0) >= d["stated_p"]
+                        else "#FF6B00"
+                        for _, d in _band_rows
+                    ],
+                    text=[f"n={d['n_trades']}" for _, d in _band_rows],
+                    textposition="outside",
+                    textfont=dict(family="JetBrains Mono", size=9, color="#888"),
+                ))
+                fig_band.add_trace(go.Scatter(
+                    x=[b for b, _ in _band_rows],
+                    y=[round(d["stated_p"] * 100, 1) for _, d in _band_rows],
+                    mode="lines+markers",
+                    name="Stated Confidence",
+                    line=dict(color="#FF3B3B", width=2, dash="dot"),
+                    marker=dict(size=7),
+                ))
+                fig_band.update_layout(**_plotly_cfg(
+                    220,
+                    yaxis=dict(title="Win Rate %", range=[0, 110], color="#555", gridcolor="#1a1a1a"),
+                    xaxis=dict(color="#555"),
+                    showlegend=True,
+                    legend=dict(orientation="h", font=dict(color="#666", size=9, family="JetBrains Mono")),
+                ))
+                st.plotly_chart(fig_band, use_container_width=True)
+            else:
+                st.info("Confidence band calibration needs resolved trades with journal exit outcomes.")
+        except Exception as _be:
+            st.info(f"Confidence calibration by band not available: {_be}")
+
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
             with st.spinner("Checking gates..."):

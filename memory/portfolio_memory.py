@@ -169,6 +169,12 @@ class PortfolioMemory:
                     outcome_exit REAL,
                     FOREIGN KEY (signal_id) REFERENCES signals(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS calibration_reports (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generated_at TEXT NOT NULL,
+                    json_blob    TEXT NOT NULL
+                );
             """)
             cols = [r[1] for r in conn.execute("PRAGMA table_info(signals)").fetchall()]
             alter_statements = {
@@ -615,6 +621,37 @@ class PortfolioMemory:
             return []
         return [{"timestamp": r[0], "portfolio_value": r[1],
                  "pnl_pct": r[2], "win_rate": r[3]} for r in rows]
+
+    def get_calibration_data(self) -> list[dict]:
+        """
+        Returns rows with (signal_id, p_direction, outcome_exit, regime, setup_type)
+        for all signals that have a decision_journals entry with outcome_exit or outcome_5d set.
+        Used by ConfidenceCalibrator to compute calibration curves and overconfidence detection.
+        """
+        if not self.db_available:
+            return []
+        try:
+            with self._conn() as conn:
+                rows = conn.execute("""
+                    SELECT
+                        s.id            AS signal_id,
+                        s.confidence    AS p_direction,
+                        COALESCE(dj.outcome_exit, dj.outcome_5d) AS outcome_exit,
+                        s.regime_tag    AS regime,
+                        s.setup_type    AS setup_type
+                    FROM signals s
+                    JOIN decision_journals dj ON dj.signal_id = s.id
+                    WHERE s.action = 'BUY'
+                      AND s.confidence IS NOT NULL
+                      AND (dj.outcome_exit IS NOT NULL OR dj.outcome_5d IS NOT NULL)
+                    ORDER BY s.id DESC
+                """).fetchall()
+        except sqlite3.Error as e:
+            logger.warning(f"get_calibration_data failed: {e}")
+            return []
+
+        cols = ["signal_id", "p_direction", "outcome_exit", "regime", "setup_type"]
+        return [dict(zip(cols, r)) for r in rows]
 
     def search_similar_trades(self, query: str, n: int = 5) -> list[dict]:
         """Semantic search of past trade reasoning using ChromaDB."""
