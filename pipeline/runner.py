@@ -297,13 +297,13 @@ class TradingPipeline:
     # Stage 2 — Data Fetch
     # ------------------------------------------------------------------
 
-    def _stage_data_fetch(self, symbols: list[str]) -> dict:
+    def _stage_data_fetch(self, symbols: list[str], regime: str = "bull") -> dict:
         """Returns {symbol: pd.DataFrame} with OHLCV data."""
         t0 = time.time()
         logger.info(f"[Stage 2] data_fetch — {len(symbols)} symbols")
         from data.market_scanner import MarketScanner
         scanner = MarketScanner(lookback_days=400)
-        market_data = scanner.run(max_workers=10, regime="bull")
+        market_data = scanner.run(max_workers=10, regime=regime)
         # Only keep requested symbols that were actually fetched
         result = {sym: df for sym, df in market_data.items() if sym in symbols}
         logger.info(f"[Stage 2] done ({self._elapsed(t0)}) — {len(result)}/{len(symbols)} fetched")
@@ -877,6 +877,22 @@ class TradingPipeline:
         logger.info(f"  mode={self.mode}  symbols={len(symbols)}")
         logger.info("=" * 60)
 
+        # ---- Asset class gate (Phase 7) — nse_spot must be enabled ----
+        try:
+            from config import ASSET_CLASS_GATES
+            if not ASSET_CLASS_GATES.get("nse_spot", {}).get("enabled", True):
+                logger.error("Pipeline blocked: nse_spot is disabled in ASSET_CLASS_GATES")
+                return PipelineResult(
+                    timestamp=run_ts, regime="unknown",
+                    total_symbols=len(symbols), signals_generated=0,
+                    buys=0, sells=0, holds=0, blocked=0, abstained=0,
+                    allocations=[], market_context=None,
+                    duration_seconds=0.0,
+                    errors=["nse_spot disabled in ASSET_CLASS_GATES"],
+                )
+        except Exception:
+            pass
+
         # ---- Stage 1: Market Context ---------------------------------
         try:
             ctx = self._stage_market_context()
@@ -892,7 +908,7 @@ class TradingPipeline:
 
         # ---- Stage 2: Data Fetch -------------------------------------
         try:
-            market_data = self._stage_data_fetch(symbols)
+            market_data = self._stage_data_fetch(symbols, regime=ctx.regime)
         except Exception as exc:
             logger.error(f"[Stage 2] fatal: {exc}")
             errors.append(f"stage2_data_fetch: {exc}")
