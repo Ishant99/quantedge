@@ -2,7 +2,7 @@
 
 Algorithmic trading system for Indian equities (NSE) with paper execution, backtesting, signal auditing, and a Streamlit dashboard. Built around a three-layer signal architecture: setup quality → market permission → execution sizing.
 
-**116 Python files · ~30,000 LOC · 45 tests passing**
+**116 Python files · ~30,000 LOC · 162 tests passing**
 
 ---
 
@@ -173,7 +173,7 @@ quantedge/
 │   └── app.py                 # Streamlit dashboard (~4,200 lines)
 │
 ├── scheduler/
-│   └── scheduler.py           # APScheduler daemon — 18 scheduled jobs
+│   └── scheduler.py           # APScheduler daemon — 23 scheduled jobs
 │
 ├── api/
 │   └── server.py              # FastAPI REST webhooks (TradingView alerts)
@@ -188,11 +188,16 @@ quantedge/
 │   └── bot.py                 # Discord bot
 │
 ├── tests/
+│   ├── test_signal_layers.py
 │   ├── test_risk_gate.py
 │   ├── test_abstention.py
-│   ├── test_signal_layers.py
 │   ├── test_pipeline_integration.py
-│   └── ...
+│   ├── test_dynamic_sizing.py
+│   ├── test_execution_planner.py
+│   ├── test_portfolio_memory.py
+│   ├── test_paper_brokers.py
+│   ├── test_confidence_calibrator.py
+│   └── test_drift_analyser.py
 │
 └── logs/                      # Runtime state (not committed)
     ├── trades.db              # SQLite: signals, trades, journals, calibration
@@ -544,22 +549,13 @@ docker compose up --build
 ```
 
 ### Systemd services
-`trading-agent.service` (scheduler daemon) and `trading-dashboard.service` (Streamlit) are configured on the Oracle VM. Service files are not in this repo — create them manually on the server:
+`deploy/trading-agent.service` (scheduler daemon) and `deploy/trading-dashboard.service` (Streamlit) are included in the repo. Install on the server:
 
-```ini
-# /etc/systemd/system/trading-agent.service
-[Unit]
-Description=QuantEdge Trading Scheduler
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /home/ubuntu/quantedge/scheduler/scheduler.py
-WorkingDirectory=/home/ubuntu/quantedge
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp deploy/trading-agent.service /etc/systemd/system/
+sudo cp deploy/trading-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now trading-agent trading-dashboard
 ```
 
 ### Log Rotation
@@ -585,51 +581,23 @@ WantedBy=multi-user.target
 
 ## Known Issues & Audit Findings
 
-The following issues were identified in a full codebase audit (May 2026). Severity: **C** = Critical, **M** = Major.
+Full codebase audit completed May 2026. All actionable items resolved.
 
-### Bugs
-
-| # | Severity | File | Issue |
-|---|----------|------|-------|
-| 1 | **M** | `execution/executor.py:57` | Portfolio dict not protected during `get_portfolio_value()` concurrent reads — may return stale values mid-BUY |
-| 2 | **M** | `pipeline/runner.py` | Silent `except: pass` blocks in 15+ analysis modules hide network timeouts and data errors |
-| 3 | **M** | `analysis/calibration.py:222` | Module with zero votes returns `tp_rate=0.0` instead of `None` — calibration factor may appear valid when no data exists |
-
-### Incomplete Modules
-
-| # | Severity | File | Issue |
-|---|----------|------|-------|
-| 4 | **M** | `execution/executor.py` | `LiveExecutor` Zerodha Kite auth not wired — live trading not functional |
-| 5 | **M** | `analysis/signal_narrator.py` | LLM narrative path untested; `use_llm=False` always used |
-| 6 | **M** | `analysis/ipo_alert.py` | Uses sample/fake data only |
-| 7 | **M** | `api/server.py` | No rate limiting on webhook endpoints; no systemd service |
-| 8 | **M** | `config.py:180` | `GIFT_NIFTY_GAP_STRONG/MILD` defined but no module consumes them |
-
-### Wiring Gaps
-
-| # | Severity | File | Issue |
-|---|----------|------|-------|
-| 9 | **M** | `pipeline/runner.py:623` | `circuit_breaker` not passed to `RiskGate.check()` — circuit breaker never activates |
-| 10 | **M** | `execution/brokers/*` | `ASSET_CLASS_GATES` not checked inside F&O/US/crypto broker execute methods — gate is advisory only at pipeline entry |
-
-### Test Gaps
-
-| Module | Tests |
-|--------|-------|
-| `DynamicPositionSizer` | None |
-| `ExecutionPlanner` | None |
-| `fno_paper_broker`, `us_paper_broker`, `crypto_paper_broker` | None |
-| `PortfolioMemory` | None |
-| `ConfidenceCalibrator` | None |
-| `DriftAnalyser` | None |
-
-### Deployment
-
-| # | Severity | Issue |
-|---|----------|-------|
-| 11 | **M** | No systemd `.service` files in repo — must be created manually on server |
-| 12 | **M** | Kite access token stored as plain text in `logs/kite_access_token.txt` |
-| 13 | **M** | No SQLite backup strategy — corruption loses full trade history |
+| # | File | Issue | Status |
+|---|------|-------|--------|
+| 1 | `execution/executor.py` | Portfolio dict not thread-safe during concurrent reads | ✅ Fixed — snapshot under `_EXECUTE_LOCK` |
+| 2 | `pipeline/runner.py` | Silent `except: pass` blocks hiding network/data errors | ✅ Fixed — `logger.debug()` on all key paths |
+| 3 | `analysis/calibration.py` | Zero-vote module returned `tp_rate=0.0` instead of `None` | ✅ Fixed — zero-vote entries skipped |
+| 4 | `execution/executor.py` | `LiveExecutor` Zerodha Kite auth not wired | ⏭️ N/A — paper trading only |
+| 5 | `analysis/signal_narrator.py` | LLM path always bypassed (`use_llm=False`) | ✅ Fixed — `use_llm=True`, falls back to template if Ollama offline |
+| 6 | `analysis/ipo_alert.py` | Stale NSE API parse, no retry on 403/empty | ✅ Fixed — retry with fresh session, handles both response key formats |
+| 7 | `api/server.py` | No rate limiting on webhook endpoints | ✅ Fixed — token-bucket limiter, 60 req/IP/min |
+| 8 | `config.py` | `GIFT_NIFTY_GAP_STRONG/MILD` defined but never consumed | ✅ Fixed — `gift_nifty.py` imports and uses them |
+| 9 | `pipeline/runner.py` | `CircuitBreaker` not passed to `RiskGate.check()` | ✅ Fixed — wired into Stage 7 |
+| 10 | `execution/brokers/*` | `ASSET_CLASS_GATES` advisory-only at pipeline entry | ✅ Fixed — enforced inside each broker's `open_position()` |
+| 11 | `deploy/` | No systemd service files in repo | ✅ Fixed — `deploy/trading-agent.service` + `deploy/trading-dashboard.service` |
+| 12 | `logs/kite_access_token.txt` | Kite token stored as plain text | ⏭️ N/A — paper trading only |
+| 13 | SQLite | No backup strategy | ✅ Fixed — daily backup job (Job 19), 7-day rolling, online backup API |
 
 ---
 
@@ -648,16 +616,16 @@ All 8 phases of the PHASES.md roadmap are complete:
 | 6 | Meta-Decision Engine | ✅ Complete |
 | 7 | Research vs Production Separation | ✅ Complete |
 
-### Next Steps Before Live Trading
+### Before Going Live
 
-1. Wire Zerodha Kite auth in `LiveExecutor`
-2. Run `backtest/engine.py` against real NSE data to validate strategy edge
-3. Run `PromotionChecker.evaluate("nse_spot_strategy")` — all gates must pass
-4. Set up systemd services on Oracle VM
-5. Enable alerts by setting `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
-6. Paper trade for minimum 30 days, confirm `ReadinessChecker` goes green
+1. Run `backtest/engine.py` against real NSE data to confirm positive edge
+2. Run `PromotionChecker.evaluate("nse_spot_strategy")` — all 5 gates must pass
+3. Install systemd services: `sudo cp deploy/*.service /etc/systemd/system/ && sudo systemctl enable --now trading-agent trading-dashboard`
+4. Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for trade alerts
+5. Paper trade for minimum 30 days — `ReadinessChecker` must go green
+6. Wire Zerodha Kite auth in `LiveExecutor` (`execution/kite_auth.py`)
 7. Set `TRADING_MODE=live` only after readiness report shows all gates passed
 
 ---
 
-*Last updated: 2026-05-14*
+*Last updated: 2026-05-15*
