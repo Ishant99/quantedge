@@ -125,6 +125,42 @@ def _acquire_pid_file() -> bool:
     return ok
 
 
+def run_db_backup():
+    """
+    Daily SQLite backup — copy trades.db to logs/backups/trades_YYYYMMDD.db.
+    Keeps last 7 daily backups; deletes older ones automatically.
+    """
+    _write_scheduler_status("db_backup", "running")
+    try:
+        import sqlite3, shutil, glob
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            _write_scheduler_status("db_backup", "skip", "trades.db not found")
+            return
+        backup_dir = os.path.join(os.path.dirname(SQLITE_DB_FILE), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        dest = os.path.join(backup_dir, f"trades_{datetime.now().strftime('%Y%m%d')}.db")
+        # Use SQLite's online backup API so we don't copy a live-write file
+        src_conn = sqlite3.connect(SQLITE_DB_FILE)
+        dst_conn = sqlite3.connect(dest)
+        src_conn.backup(dst_conn)
+        src_conn.close()
+        dst_conn.close()
+        # Keep only last 7 backups
+        existing = sorted(glob.glob(os.path.join(backup_dir, "trades_*.db")))
+        for old in existing[:-7]:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+        size_mb = round(os.path.getsize(dest) / 1024 / 1024, 2)
+        logger.info(f"DB backup complete → {dest} ({size_mb} MB)")
+        _write_scheduler_status("db_backup", "ok", f"{size_mb} MB → {os.path.basename(dest)}")
+    except Exception as e:
+        _write_scheduler_status("db_backup", "error", str(e))
+        logger.warning(f"DB backup failed: {e}")
+
+
 def run_housekeeping():
     """Trim stale logs/caches so Oracle Free VM storage stays healthy."""
     _write_scheduler_status("housekeeping", "running")
@@ -1425,8 +1461,17 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 19: Daily DB backup at 02:30 IST ---
+    scheduler.add_job(
+        run_db_backup,
+        CronTrigger(hour=2, minute=30, timezone=IST),
+        id="db_backup",
+        name="SQLite DB Backup (02:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  18 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  19 JOBS")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
@@ -1445,6 +1490,7 @@ if __name__ == "__main__":
     logger.info("  Walk-fwd optimizer : Sunday 02:00 IST")
     logger.info("  Drift analysis     : 1st Sunday/month 21:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
+    logger.info("  DB backup          : 02:30 IST (daily, 7-day rolling)")
     logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)
 

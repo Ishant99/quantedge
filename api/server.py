@@ -1,12 +1,34 @@
 import json
 import os
 import sys
+import time
+import threading
+from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+
+# ---------------------------------------------------------------------------
+# Simple token-bucket rate limiter: max 60 requests per IP per minute.
+# ---------------------------------------------------------------------------
+_RATE_LIMIT     = 60          # requests
+_RATE_WINDOW    = 60.0        # seconds
+_rate_lock      = threading.Lock()
+_rate_counters: dict = defaultdict(lambda: {"count": 0, "window_start": 0.0})
+
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    with _rate_lock:
+        rec = _rate_counters[ip]
+        if now - rec["window_start"] >= _RATE_WINDOW:
+            rec["count"] = 0
+            rec["window_start"] = now
+        rec["count"] += 1
+        return rec["count"] > _RATE_LIMIT
 
 # API key auth: set API_SECRET_KEY env var or user_settings.json to enable.
 # If blank, auth is disabled (localhost dev convenience).
@@ -87,6 +109,7 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         """
         POST /webhook/signal — accept an inbound trade signal.
 
+        Rate limited: 60 requests / IP / minute.
         Body (JSON):
           symbol     : str   — e.g. "RELIANCE"
           action     : str   — "BUY" | "SELL" | "HOLD"
@@ -100,6 +123,12 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         """
         parsed = urlparse(self.path)
         path   = parsed.path.rstrip("/")
+
+        # Rate limit (60 req/IP/min) — applied before auth to prevent brute-force
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+        if _is_rate_limited(client_ip):
+            self._send_json(429, {"ok": False, "error": "Rate limit exceeded — 60 req/min per IP"})
+            return
 
         # Kite callback is a Zerodha server redirect — no auth header is sent.
         # Handle it before the auth gate so the OAuth flow isn't blocked.
@@ -256,6 +285,12 @@ class QuantEdgeAPIHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query  = parse_qs(parsed.query)
         path   = parsed.path.rstrip("/") or "/"
+
+        # Rate limit
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+        if _is_rate_limited(client_ip):
+            self._send_json(429, {"ok": False, "error": "Rate limit exceeded — 60 req/min per IP"})
+            return
 
         # Zerodha OAuth redirect — MUST be before auth gate.
         # The browser redirect from Zerodha carries no Authorization header.

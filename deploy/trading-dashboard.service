@@ -1,0 +1,20 @@
+[Unit]
+Description=QuantEdge Streamlit Dashboard
+After=network.target trading-agent.service
+Wants=trading-agent.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/quantedge
+Environment=PYTHONPATH=/home/ubuntu/quantedge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m streamlit run dashboard/app.py --server.port 8501 --server.headless true --server.enableCORS false
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-dashboard
+
+[Install]
+WantedBy=multi-user.target

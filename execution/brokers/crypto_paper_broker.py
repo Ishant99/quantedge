@@ -68,6 +68,15 @@ class CryptoPaperBroker:
         direction: "LONG" | "SHORT"
         usdt_amount: capital in USDT to allocate
         """
+        # Asset class gate (Phase 7)
+        try:
+            from config import ASSET_CLASS_GATES
+            if not ASSET_CLASS_GATES.get("crypto", {}).get("enabled", False):
+                logger.warning("CryptoPaperBroker.open_position blocked: crypto disabled in ASSET_CLASS_GATES")
+                return None
+        except Exception:
+            pass
+
         if entry_price is None:
             entry_price = self.scanner.get_current_price(symbol)
         if not entry_price or entry_price <= 0:

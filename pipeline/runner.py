@@ -615,6 +615,15 @@ class TradingPipeline:
         t0 = time.time()
         logger.info(f"[Stage 7] risk_gate — {len(permission_results)} signals")
         risk_gate = self._get_risk_gate()
+
+        # Wire CircuitBreaker so daily/weekly loss limits can block all BUYs
+        circuit_breaker = None
+        try:
+            from risk.circuit_breaker import CircuitBreaker
+            circuit_breaker = CircuitBreaker()
+        except Exception as _cb_exc:
+            logger.debug(f"[Stage 7] CircuitBreaker unavailable: {_cb_exc}")
+
         results = []
         for sig, perm in permission_results:
             if sig.action in ("BLOCKED",):
@@ -625,6 +634,7 @@ class TradingPipeline:
                     signal=sig,
                     portfolio_state=portfolio_state,
                     open_positions_count=open_positions,
+                    circuit_breaker=circuit_breaker,
                 )
                 if not rg.passed:
                     sig.action = "ABSTAIN"
