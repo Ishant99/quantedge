@@ -219,9 +219,11 @@ class ConfidenceCalibrator:
 
         result = {}
         for module, s in stats.items():
-            n   = s["total_buy_votes"]
-            tp_r = round(s["tp_votes"] / n, 4) if n > 0 else 0.0
-            sl_r = round(s["sl_votes"] / n, 4) if n > 0 else 0.0
+            n = s["total_buy_votes"]
+            if n == 0:
+                continue
+            tp_r = round(s["tp_votes"] / n, 4)
+            sl_r = round(s["sl_votes"] / n, 4)
             result[module] = {
                 "tp_rate": tp_r,
                 "sl_rate": sl_r,

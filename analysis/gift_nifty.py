@@ -15,14 +15,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dataclasses import dataclass
 from utils import get_logger
+from config import GIFT_NIFTY_GAP_STRONG, GIFT_NIFTY_GAP_MILD
 
 logger = get_logger("GiftNifty")
 
 # Gap thresholds
-GAP_STRONG_UP   =  0.5   # > +0.5% → strong positive
-GAP_MILD_UP     =  0.2   # > +0.2% → mild positive
-GAP_MILD_DOWN   = -0.2   # < -0.2% → mild negative
-GAP_STRONG_DOWN = -0.5   # < -0.5% → strong negative
+GAP_STRONG_UP   =  GIFT_NIFTY_GAP_STRONG
+GAP_MILD_UP     =  GIFT_NIFTY_GAP_MILD
+GAP_MILD_DOWN   = -GIFT_NIFTY_GAP_MILD
+GAP_STRONG_DOWN = -GIFT_NIFTY_GAP_STRONG
 
 
 @dataclass

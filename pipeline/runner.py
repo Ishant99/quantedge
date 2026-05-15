@@ -207,7 +207,7 @@ class TradingPipeline:
             self._narrator = None
         if self._narrator is None:
             from analysis.signal_narrator import SignalNarrator
-            self._narrator = SignalNarrator(use_llm=False)
+            self._narrator = SignalNarrator(use_llm=True)
         return self._narrator
 
     def _get_execution_planner(self):
@@ -559,14 +559,14 @@ class TradingPipeline:
                 if earnings_guard is not None:
                     try:
                         earnings_days = earnings_guard.days_to_earnings(sig.symbol)
-                    except Exception:
-                        pass
+                    except Exception as _eg_exc:
+                        logger.debug(f"[Stage 7] earnings_guard failed for {sig.symbol}: {_eg_exc}")
                 fno_banned = False
                 if fno_ban is not None:
                     try:
                         fno_banned = fno_ban.is_banned(sig.symbol)
-                    except Exception:
-                        pass
+                    except Exception as _fb_exc:
+                        logger.debug(f"[Stage 7] fno_ban check failed for {sig.symbol}: {_fb_exc}")
 
                 perm = permission_layer.evaluate(
                     symbol=sig.symbol,
@@ -900,8 +900,8 @@ class TradingPipeline:
                     duration_seconds=0.0,
                     errors=["nse_spot disabled in ASSET_CLASS_GATES"],
                 )
-        except Exception:
-            pass
+        except Exception as _gate_exc:
+            logger.debug(f"[Gate] asset class gate check error: {_gate_exc}")
 
         # ---- Stage 1: Market Context ---------------------------------
         try:
@@ -1084,8 +1084,8 @@ class TradingPipeline:
                 open_syms = list(executor.portfolio.get("positions", {}).keys())
                 if symbol_sectors:
                     open_secs = {symbol_sectors[s] for s in open_syms if s in symbol_sectors}
-            except Exception:
-                pass
+            except Exception as _ep_exc:
+                logger.debug(f"[Stage 8b] could not read open positions for sector dedup: {_ep_exc}")
             # Deployed fraction = open_positions * avg_position_size / portfolio_value
             deployed_pct = min(1.0, (open_positions * 0.02)) if portfolio_value else 0.0
             allocations = self._stage_execution_planning(

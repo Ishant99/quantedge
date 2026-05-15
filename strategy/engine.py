@@ -162,8 +162,8 @@ class StrategyEngine:
                     f"{p_direction_raw:.3f} → {p_direction:.3f} "
                     f"(factor={calibration_factor:.4f})"
                 )
-        except Exception:
-            pass
+        except Exception as _cal_exc:
+            logger.debug(f"calibration factor lookup failed for {ta.symbol}: {_cal_exc}")
 
         # Layer 1 journal votes
         journal.add_vote(1, "technical", "BUY" if ta.signal == "bullish" else

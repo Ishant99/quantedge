@@ -191,31 +191,42 @@ class PaperExecutor:
         return result
 
     def get_portfolio_value(self) -> float:
-        """Cash + mark-to-market value of open positions."""
-        total = self.portfolio["cash"]
-        for sym, pos in self.portfolio["positions"].items():
+        """Cash + mark-to-market value of open positions (snapshot under lock)."""
+        with _EXECUTE_LOCK:
+            cash = self.portfolio["cash"]
+            positions = dict(self.portfolio["positions"])
+        total = cash
+        for sym, pos in positions.items():
             mark = self._get_mark_price(sym) or pos["entry"]
             total += mark * pos["qty"]
         return round(total, 2)
 
     def get_open_positions_count(self) -> int:
-        return len(self.portfolio["positions"])
+        with _EXECUTE_LOCK:
+            return len(self.portfolio["positions"])
 
     def get_portfolio_summary(self) -> dict:
-        total    = self.get_portfolio_value()
-        initial  = VIRTUAL_CAPITAL
-        pnl      = total - initial
-        trades   = self.portfolio["total_trades"]
-        wins     = self.portfolio["wins"]
+        with _EXECUTE_LOCK:
+            cash   = self.portfolio["cash"]
+            positions = dict(self.portfolio["positions"])
+            trades = self.portfolio["total_trades"]
+            wins   = self.portfolio["wins"]
+        mark_total = cash
+        for sym, pos in positions.items():
+            mark = self._get_mark_price(sym) or pos["entry"]
+            mark_total += mark * pos["qty"]
+        total   = round(mark_total, 2)
+        initial = VIRTUAL_CAPITAL
+        pnl     = total - initial
         return {
-            "mode":           "paper",
-            "cash":           round(self.portfolio["cash"], 2),
-            "portfolio_value":total,
-            "pnl":            round(pnl, 2),
-            "pnl_pct":        round((pnl / initial) * 100, 2),
-            "open_positions": self.get_open_positions_count(),
-            "total_trades":   trades,
-            "win_rate":       round((wins / trades * 100) if trades else 0, 1),
+            "mode":            "paper",
+            "cash":            round(cash, 2),
+            "portfolio_value": total,
+            "pnl":             round(pnl, 2),
+            "pnl_pct":         round((pnl / initial) * 100, 2),
+            "open_positions":  len(positions),
+            "total_trades":    trades,
+            "win_rate":        round((wins / trades * 100) if trades else 0, 1),
         }
 
     # ------------------------------------------------------------------

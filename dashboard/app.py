@@ -797,7 +797,7 @@ def _sig_ns(d):
 def _narrator():
     try:
         from analysis.signal_narrator import SignalNarrator
-        return SignalNarrator(use_llm=False)
+        return SignalNarrator(use_llm=True)
     except Exception: return None
 
 def _story(d):
