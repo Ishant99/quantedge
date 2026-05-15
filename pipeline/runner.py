@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,22 @@ from utils import get_logger
 from pipeline.contracts import MarketContext, FeatureSet, Allocation, PipelineResult
 
 logger = get_logger("Pipeline")
+
+_STAGE1_TIMEOUT = 30   # seconds before a Stage 1 network call is abandoned
+
+
+def _call_with_timeout(fn, timeout: int = _STAGE1_TIMEOUT, fallback=None, label: str = ""):
+    """Run fn() in a thread; return fallback if it exceeds timeout or raises."""
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except _FutureTimeout:
+            logger.warning(f"[Stage 1] {label or fn.__name__} timed out after {timeout}s — using fallback")
+            return fallback
+        except Exception as exc:
+            logger.warning(f"[Stage 1] {label or fn.__name__} failed: {exc} — using fallback")
+            return fallback
 
 
 class TradingPipeline:
@@ -185,6 +202,22 @@ class TradingPipeline:
             self._rsi2_scanner = RSI2Scanner()
         return self._rsi2_scanner
 
+    def _get_narrator(self):
+        if not hasattr(self, "_narrator"):
+            self._narrator = None
+        if self._narrator is None:
+            from analysis.signal_narrator import SignalNarrator
+            self._narrator = SignalNarrator(use_llm=True)
+        return self._narrator
+
+    def _get_execution_planner(self):
+        if not hasattr(self, "_execution_planner"):
+            self._execution_planner = None
+        if self._execution_planner is None:
+            from strategy.execution_planner import ExecutionPlanner
+            self._execution_planner = ExecutionPlanner()
+        return self._execution_planner
+
     # ------------------------------------------------------------------
     # Stage helpers
     # ------------------------------------------------------------------
@@ -205,26 +238,24 @@ class TradingPipeline:
         stability = getattr(regime_result, "stability_count", 0)
         nifty_trend = regime_result.nifty_trend
 
-        # PCR
-        try:
-            pcr = self._get_pcr_analyser().get_signal()
-            pcr_signal = pcr.signal
-        except Exception as exc:
-            logger.warning(f"[Stage 1] PCR fetch failed — defaulting to neutral: {exc}")
-            pcr_signal = "neutral"
+        # PCR — timeout-guarded: NSE endpoint can hang on bad network days
+        pcr = _call_with_timeout(
+            self._get_pcr_analyser().get_signal, label="PCR"
+        )
+        pcr_signal = pcr.signal if pcr is not None else "neutral"
 
-        # FII/DII
-        try:
-            fii = self._get_fii_tracker().get_signal()
-            fii_signal = fii.signal
-        except Exception as exc:
-            logger.warning(f"[Stage 1] FII fetch failed — defaulting to neutral: {exc}")
-            fii_signal = "neutral"
+        # FII/DII — timeout-guarded: scrapes live NSE data
+        fii = _call_with_timeout(
+            self._get_fii_tracker().get_signal, label="FII"
+        )
+        fii_signal = fii.signal if fii is not None else "neutral"
 
-        # Market breadth
-        try:
-            breadth = self._get_breadth_analyser().get_breadth()
-            raw_breadth = breadth.breadth_signal  # e.g. strong_bull | bull | neutral | bear
+        # Market breadth — timeout-guarded: batch yfinance download
+        breadth = _call_with_timeout(
+            self._get_breadth_analyser().get_breadth, label="Breadth"
+        )
+        if breadth is not None:
+            raw_breadth = breadth.breadth_signal
             if "strong" in raw_breadth and "bull" in raw_breadth:
                 breadth_signal = "strong"
             elif "bull" in raw_breadth:
@@ -235,18 +266,16 @@ class TradingPipeline:
                 breadth_signal = "weak"
             else:
                 breadth_signal = "moderate"
-        except Exception as exc:
-            logger.warning(f"[Stage 1] Breadth fetch failed — defaulting to moderate: {exc}")
+        else:
             breadth_signal = "moderate"
 
-        # Sector scores
+        # Sector scores — timeout-guarded
         sector_scores: dict = {}
-        try:
-            sector_result = self._get_sector_analyser().analyse()
-            if hasattr(sector_result, "sector_scores"):
-                sector_scores = sector_result.sector_scores
-        except Exception as exc:
-            logger.warning(f"[Stage 1] Sector fetch failed: {exc}")
+        sector_result = _call_with_timeout(
+            self._get_sector_analyser().analyse, label="Sector"
+        )
+        if sector_result is not None and hasattr(sector_result, "sector_scores"):
+            sector_scores = sector_result.sector_scores
 
         ctx = MarketContext(
             regime=regime,
@@ -268,13 +297,13 @@ class TradingPipeline:
     # Stage 2 — Data Fetch
     # ------------------------------------------------------------------
 
-    def _stage_data_fetch(self, symbols: list[str]) -> dict:
+    def _stage_data_fetch(self, symbols: list[str], regime: str = "bull") -> dict:
         """Returns {symbol: pd.DataFrame} with OHLCV data."""
         t0 = time.time()
         logger.info(f"[Stage 2] data_fetch — {len(symbols)} symbols")
         from data.market_scanner import MarketScanner
         scanner = MarketScanner(lookback_days=400)
-        market_data = scanner.run(max_workers=10, regime="bull")
+        market_data = scanner.run(max_workers=10, regime=regime)
         # Only keep requested symbols that were actually fetched
         result = {sym: df for sym, df in market_data.items() if sym in symbols}
         logger.info(f"[Stage 2] done ({self._elapsed(t0)}) — {len(result)}/{len(symbols)} fetched")
@@ -530,14 +559,14 @@ class TradingPipeline:
                 if earnings_guard is not None:
                     try:
                         earnings_days = earnings_guard.days_to_earnings(sig.symbol)
-                    except Exception:
-                        pass
+                    except Exception as _eg_exc:
+                        logger.debug(f"[Stage 7] earnings_guard failed for {sig.symbol}: {_eg_exc}")
                 fno_banned = False
                 if fno_ban is not None:
                     try:
                         fno_banned = fno_ban.is_banned(sig.symbol)
-                    except Exception:
-                        pass
+                    except Exception as _fb_exc:
+                        logger.debug(f"[Stage 7] fno_ban check failed for {sig.symbol}: {_fb_exc}")
 
                 perm = permission_layer.evaluate(
                     symbol=sig.symbol,
@@ -586,6 +615,15 @@ class TradingPipeline:
         t0 = time.time()
         logger.info(f"[Stage 7] risk_gate — {len(permission_results)} signals")
         risk_gate = self._get_risk_gate()
+
+        # Wire CircuitBreaker so daily/weekly loss limits can block all BUYs
+        circuit_breaker = None
+        try:
+            from risk.circuit_breaker import CircuitBreaker
+            circuit_breaker = CircuitBreaker()
+        except Exception as _cb_exc:
+            logger.debug(f"[Stage 7] CircuitBreaker unavailable: {_cb_exc}")
+
         results = []
         for sig, perm in permission_results:
             if sig.action in ("BLOCKED",):
@@ -596,6 +634,7 @@ class TradingPipeline:
                     signal=sig,
                     portfolio_state=portfolio_state,
                     open_positions_count=open_positions,
+                    circuit_breaker=circuit_breaker,
                 )
                 if not rg.passed:
                     sig.action = "ABSTAIN"
@@ -693,6 +732,95 @@ class TradingPipeline:
         return allocations
 
     # ------------------------------------------------------------------
+    # Stage 8b — Execution Planning (candidate competition)
+    # ------------------------------------------------------------------
+
+    def _stage_execution_planning(
+        self,
+        allocations: list,
+        market_data: dict,
+        open_position_sectors: set = None,
+        portfolio_deployed_pct: float = 0.0,
+    ) -> list:
+        """
+        Rank BUY allocations by composite score and prune to MAX_OPEN_POSITIONS
+        available slots via ExecutionPlanner.  Rejected candidates are marked
+        abstained with reason "opportunity_cost: rank N".
+
+        Non-BUY allocations (SELL/HOLD/BLOCKED/ABSTAIN) are passed through unchanged.
+        """
+        t0 = time.time()
+        buy_allocs     = [a for a in allocations if a.signal.action == "BUY" and not a.abstained]
+        non_buy_allocs = [a for a in allocations if not (a.signal.action == "BUY" and not a.abstained)]
+
+        if not buy_allocs:
+            logger.info(f"[Stage 8b] no BUY candidates — skipping ({self._elapsed(t0)})")
+            return allocations
+
+        try:
+            planner = self._get_execution_planner()
+        except Exception as exc:
+            logger.warning(f"[Stage 8b] ExecutionPlanner unavailable: {exc} — skipping")
+            return allocations
+
+        # Executor already opened positions count; remaining slots = cap − open
+        try:
+            executor = self._get_executor()
+            already_open = executor.get_open_positions_count()
+        except Exception:
+            already_open = 0
+        max_slots = max(0, MAX_OPEN_POSITIONS - already_open)
+
+        buy_signals = [a.signal for a in buy_allocs]
+        try:
+            ranked = planner.rank_and_allocate(
+                signals=buy_signals,
+                max_slots=max_slots,
+                open_position_sectors=open_position_sectors or set(),
+                market_data=market_data,
+                portfolio_deployed_pct=portfolio_deployed_pct,
+            )
+        except Exception as exc:
+            logger.warning(f"[Stage 8b] rank_and_allocate failed: {exc} — using original order")
+            return allocations
+
+        # Build a lookup: symbol → (rank_index, slot_allocated, rejection_reason)
+        rank_map: dict[str, tuple[int, bool, str]] = {}
+        for rank_idx, candidate in enumerate(ranked, start=1):
+            sym = getattr(candidate.signal, "symbol", "")
+            rank_map[sym] = (rank_idx, candidate.slot_allocated, candidate.rejection_reason)
+
+        updated_buy: list = []
+        for alloc in buy_allocs:
+            sym = getattr(alloc.signal, "symbol", "")
+            if sym in rank_map:
+                rank_idx, allocated, rejection = rank_map[sym]
+                if not allocated:
+                    alloc.signal.action = "ABSTAIN"
+                    alloc.abstained = True
+                    alloc.abstention_reason = f"opportunity_cost: rank {rank_idx}"
+                    # Persist opportunity cost to decision journal for Task 6.6 tracking
+                    try:
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None:
+                            journal.add_vote(
+                                3, "execution_planner", "ABSTAIN",
+                                raw_score=0.0,
+                                note=f"opportunity_cost: rank {rank_idx} — {rejection}",
+                            )
+                    except Exception:
+                        pass
+            updated_buy.append(alloc)
+
+        allocated_count = sum(1 for a in updated_buy if not a.abstained)
+        rejected_count  = sum(1 for a in updated_buy if a.abstained)
+        logger.info(
+            f"[Stage 8b] done ({self._elapsed(t0)}) — "
+            f"{allocated_count} allocated, {rejected_count} opportunity-cost rejected"
+        )
+        return non_buy_allocs + updated_buy
+
+    # ------------------------------------------------------------------
     # Stage 9 — Execution
     # ------------------------------------------------------------------
 
@@ -710,12 +838,30 @@ class TradingPipeline:
                 if self._memory is not None:
                     try:
                         sig_id = self._memory.save_signal(alloc.signal)
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None and sig_id:
+                            self._memory.save_journal(journal, signal_id=sig_id)
                         if result.get("status") == "filled" and sig_id:
                             self._memory.mark_signal_executed(sig_id)
                     except Exception as mem_exc:
                         logger.warning(f"[Stage 9] memory save failed for {alloc.signal.symbol}: {mem_exc}")
             except Exception as exc:
                 logger.error(f"[Stage 9] execution error for {alloc.signal.symbol}: {exc}")
+        # Persist blocked/abstained signals so the dashboard risk-gate log can display them
+        if self._memory is not None:
+            for alloc in allocations:
+                if alloc.signal.action in ("BLOCKED", "ABSTAIN") or alloc.abstained:
+                    try:
+                        sig_id = self._memory.save_signal(alloc.signal)
+                        journal = getattr(alloc.signal, "journal", None)
+                        if journal is not None and sig_id and sig_id > 0:
+                            self._memory.save_journal(journal, signal_id=sig_id)
+                    except Exception as _mem_exc:
+                        logger.warning(
+                            f"[Stage 9] blocked/abstained save failed for "
+                            f"{alloc.signal.symbol}: {_mem_exc}"
+                        )
+
         logger.info(f"[Stage 9] done ({self._elapsed(t0)})")
         return allocations
 
@@ -741,6 +887,22 @@ class TradingPipeline:
         logger.info(f"  mode={self.mode}  symbols={len(symbols)}")
         logger.info("=" * 60)
 
+        # ---- Asset class gate (Phase 7) — nse_spot must be enabled ----
+        try:
+            from config import ASSET_CLASS_GATES
+            if not ASSET_CLASS_GATES.get("nse_spot", {}).get("enabled", True):
+                logger.error("Pipeline blocked: nse_spot is disabled in ASSET_CLASS_GATES")
+                return PipelineResult(
+                    timestamp=run_ts, regime="unknown",
+                    total_symbols=len(symbols), signals_generated=0,
+                    buys=0, sells=0, holds=0, blocked=0, abstained=0,
+                    allocations=[], market_context=None,
+                    duration_seconds=0.0,
+                    errors=["nse_spot disabled in ASSET_CLASS_GATES"],
+                )
+        except Exception as _gate_exc:
+            logger.debug(f"[Gate] asset class gate check error: {_gate_exc}")
+
         # ---- Stage 1: Market Context ---------------------------------
         try:
             ctx = self._stage_market_context()
@@ -756,7 +918,7 @@ class TradingPipeline:
 
         # ---- Stage 2: Data Fetch -------------------------------------
         try:
-            market_data = self._stage_data_fetch(symbols)
+            market_data = self._stage_data_fetch(symbols, regime=ctx.regime)
         except Exception as exc:
             logger.error(f"[Stage 2] fatal: {exc}")
             errors.append(f"stage2_data_fetch: {exc}")
@@ -845,6 +1007,15 @@ class TradingPipeline:
         except Exception as exc:
             logger.warning(f"[Enrich] signal enrichment failed — using raw signals: {exc}")
 
+        # Narrate BUY/SELL signals — update signal.reasoning with human-readable story
+        try:
+            narrator = self._get_narrator()
+            for sig in signals:
+                if sig.action in ("BUY", "SELL"):
+                    sig.reasoning = narrator.narrate(sig)
+        except Exception as exc:
+            logger.warning(f"[Narrate] signal narration failed — reasoning unchanged: {exc}")
+
         # ---- Auxiliary helpers (earnings guard + F&O ban) ------------
         earnings_guard = None
         fno_ban = None
@@ -903,6 +1074,29 @@ class TradingPipeline:
                            risk_passed=rg.passed if rg else False)
                 for sig, perm, rg in risk_gate_results
             ]
+
+        # ---- Stage 8b: Execution Planning (candidate competition) -------
+        try:
+            # Determine sectors already held in open positions
+            open_secs: set[str] = set()
+            try:
+                executor = self._get_executor()
+                open_syms = list(executor.portfolio.get("positions", {}).keys())
+                if symbol_sectors:
+                    open_secs = {symbol_sectors[s] for s in open_syms if s in symbol_sectors}
+            except Exception as _ep_exc:
+                logger.debug(f"[Stage 8b] could not read open positions for sector dedup: {_ep_exc}")
+            # Deployed fraction = open_positions * avg_position_size / portfolio_value
+            deployed_pct = min(1.0, (open_positions * 0.02)) if portfolio_value else 0.0
+            allocations = self._stage_execution_planning(
+                allocations=allocations,
+                market_data=tradeable_data,
+                open_position_sectors=open_secs,
+                portfolio_deployed_pct=deployed_pct,
+            )
+        except Exception as exc:
+            logger.error(f"[Stage 8b] fatal: {exc}")
+            errors.append(f"stage8b_execution_planning: {exc}")
 
         # ---- Stage 9: Execution --------------------------------------
         try:

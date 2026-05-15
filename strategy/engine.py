@@ -149,6 +149,22 @@ class StrategyEngine:
                            trend_norm * (TREND_WEIGHT / total_l1_weight))
         p_direction = round(min(p_direction, 1.0), 3)
 
+        # Task 6.4 — apply calibration correction if available (>= 30 trades in band)
+        calibration_factor = None
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            calibration_factor = ConfidenceCalibrator.get_correction_factor(p_direction)
+            if calibration_factor is not None:
+                p_direction_raw = p_direction
+                p_direction = round(min(max(p_direction * calibration_factor, 0.0), 1.0), 3)
+                logger.debug(
+                    f"{ta.symbol}: p_direction corrected "
+                    f"{p_direction_raw:.3f} → {p_direction:.3f} "
+                    f"(factor={calibration_factor:.4f})"
+                )
+        except Exception as _cal_exc:
+            logger.debug(f"calibration factor lookup failed for {ta.symbol}: {_cal_exc}")
+
         # Layer 1 journal votes
         journal.add_vote(1, "technical", "BUY" if ta.signal == "bullish" else
                          ("SELL" if ta.signal == "bearish" else "NEUTRAL"),
@@ -160,6 +176,10 @@ class StrategyEngine:
                          raw_score=trend_norm,
                          weight=w_trend / total_w,
                          note=f"52w position {trend_norm:.2f}")
+        if calibration_factor is not None:
+            journal.add_vote(1, "calibration_correction", "NEUTRAL",
+                             raw_score=calibration_factor,
+                             note=f"p_direction scaled by {calibration_factor:.4f}")
 
         # setup_quality: how clean is the setup (1.0 = perfect, 0 = noisy)
         setup_quality = round(

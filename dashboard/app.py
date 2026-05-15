@@ -653,6 +653,78 @@ def _get_recent_signals(limit=100):
     return PortfolioMemory().get_recent_signals(limit=limit)
 
 @st.cache_data(ttl=60, show_spinner=False)
+def _get_risk_gate_log(limit=50):
+    """Today's BLOCKED signals from the signals table."""
+    try:
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            return []
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            rows = conn.execute("""
+                SELECT s.symbol, s.action, s.timestamp, s.reasoning,
+                       dj.json_blob
+                FROM signals s
+                LEFT JOIN decision_journals dj ON dj.signal_id = s.id
+                WHERE s.action IN ('BLOCKED', 'ABSTAIN')
+                  AND DATE(s.timestamp) = DATE('now', 'localtime')
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        result = []
+        for sym, action, ts, reasoning, json_blob in rows:
+            blocks = []
+            if json_blob:
+                try:
+                    jdata = json.loads(json_blob)
+                    blocks = [b.get("reason", b.get("check", "")) for b in
+                              (jdata.get("risk_gate_blocks") or [])]
+                except Exception:
+                    pass
+            result.append({
+                "Symbol": sym, "Action": action,
+                "Time": ts[:16] if ts else "",
+                "Blocks / Reason": "; ".join(blocks) if blocks else (reasoning or "")[:80],
+            })
+        return result
+    except Exception:
+        return []
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_abstention_log(limit=50):
+    """Today's ABSTAIN signals and session abstention rate."""
+    try:
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            return [], 0.0
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            today_rows = conn.execute("""
+                SELECT action FROM signals
+                WHERE DATE(timestamp) = DATE('now', 'localtime')
+            """).fetchall()
+            abstain_rows = [r for r in today_rows if r[0] in ("ABSTAIN",)]
+            executed_rows = [r for r in today_rows if r[0] in ("BUY", "SELL")]
+            denom = len(executed_rows) + len(abstain_rows)
+            rate = len(abstain_rows) / denom if denom else 0.0
+
+            rows = conn.execute("""
+                SELECT s.symbol, s.timestamp, s.reasoning,
+                       COALESCE(s.confidence, 0) as conf,
+                       COALESCE(s.quality_score, 0) as qscore
+                FROM signals s
+                WHERE s.action = 'ABSTAIN'
+                  AND DATE(s.timestamp) = DATE('now', 'localtime')
+                ORDER BY s.timestamp DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        result = [{"Symbol": sym, "Time": ts[:16] if ts else "",
+                   "Confidence": f"{conf:.0%}", "Quality": f"{qscore:.2f}",
+                   "Reason": (reasoning or "")[:80]}
+                  for sym, ts, reasoning, conf, qscore in rows]
+        return result, rate
+    except Exception:
+        return [], 0.0
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _load_review_report_json():
     if os.path.exists(REVIEW_REPORT_JSON):
         try:
@@ -725,7 +797,7 @@ def _sig_ns(d):
 def _narrator():
     try:
         from analysis.signal_narrator import SignalNarrator
-        return SignalNarrator(use_llm=False)
+        return SignalNarrator(use_llm=True)
     except Exception: return None
 
 def _story(d):
@@ -1592,6 +1664,35 @@ if page == "TODAY":
                 st.dataframe(latest_outcomes, use_container_width=True, hide_index=True, height=220)
             else:
                 st.info("No resolved outcomes yet.")
+
+        # ── Risk Gate Log + Abstention Log ────────────────────────────────────
+        gate_left, gate_right = st.columns(2)
+        with gate_left:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">RISK GATE — BLOCKED TODAY</div>',
+                        unsafe_allow_html=True)
+            rg_rows = _get_risk_gate_log(limit=30)
+            if rg_rows:
+                rg_df = pd.DataFrame(rg_rows)
+                st.dataframe(rg_df, use_container_width=True, hide_index=True, height=240)
+            else:
+                st.info("No signals blocked today.")
+
+        with gate_right:
+            st.markdown('<div class="bb-header" style="margin-top:10px;">ABSTENTION LOG — TODAY</div>',
+                        unsafe_allow_html=True)
+            ab_rows, ab_rate = _get_abstention_log(limit=30)
+            if ab_rate > 0.70:
+                st.warning(
+                    f"Abstention rate {ab_rate:.0%} — system may be over-cautious. "
+                    "Review thresholds in Settings."
+                )
+            elif ab_rows:
+                st.caption(f"Session abstention rate: {ab_rate:.0%}")
+            if ab_rows:
+                ab_df = pd.DataFrame(ab_rows)
+                st.dataframe(ab_df, use_container_width=True, hide_index=True, height=240)
+            else:
+                st.info("No abstentions today.")
 
     with tab_health:
         st.markdown('<div class="bb-header">SYSTEM HEALTH</div>', unsafe_allow_html=True)
@@ -3396,6 +3497,256 @@ elif page == "HISTORY":
         except Exception as _ae:
             st.info(f"Module attribution not available: {_ae}")
 
+        # ── Section 4: Module Calibration Heatmap ────────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:18px;">MODULE CALIBRATION HEATMAP</div>',
+                    unsafe_allow_html=True)
+        st.caption("Regime × module win-rate grid. Green > 50%, Red < 45%, Yellow = insufficient data (< 30 trades).")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            _cal = ConfidenceCalibrator()
+            _report = _cal.compute_module_calibration(min_trades=30)
+            if _report and _report.module_stats:
+                # Collect all regimes and modules across the report
+                _all_regimes = sorted(_report.module_stats.keys())
+                _all_modules = sorted({
+                    m for reg_data in _report.module_stats.values()
+                    for m in reg_data.keys()
+                })
+                if _all_regimes and _all_modules:
+                    z_vals, text_vals = [], []
+                    for module in _all_modules:
+                        z_row, t_row = [], []
+                        for regime in _all_regimes:
+                            cell = _report.module_stats.get(regime, {}).get(module)
+                            if cell:
+                                wr = cell["win_rate"]
+                                n  = cell["n_trades"]
+                                z_row.append(round(wr * 100, 1))
+                                t_row.append(f"{wr*100:.1f}%<br>n={n}")
+                            else:
+                                z_row.append(None)
+                                t_row.append("< 30 trades")
+                        z_vals.append(z_row)
+                        text_vals.append(t_row)
+
+                    fig_hm = go.Figure(go.Heatmap(
+                        z=z_vals,
+                        x=[r.upper() for r in _all_regimes],
+                        y=_all_modules,
+                        text=text_vals,
+                        texttemplate="%{text}",
+                        textfont=dict(size=9, family="JetBrains Mono"),
+                        colorscale=[
+                            [0.0,  "#FF3B3B"],   # red  — underperforming
+                            [0.45, "#FF3B3B"],
+                            [0.45, "#FFB800"],   # yellow — borderline
+                            [0.50, "#FFB800"],
+                            [0.50, "#00C805"],   # green — well-calibrated
+                            [1.0,  "#00C805"],
+                        ],
+                        zmin=30, zmax=80,
+                        showscale=True,
+                        colorbar=dict(
+                            title="Win %",
+                            tickfont=dict(color="#555", size=9, family="JetBrains Mono"),
+                            titlefont=dict(color="#555", size=9),
+                        ),
+                    ))
+                    fig_hm.update_layout(**_plotly_cfg(
+                        max(220, len(_all_modules) * 28),
+                        xaxis=dict(color="#555", side="top"),
+                        yaxis=dict(color="#555", autorange="reversed"),
+                        margin=dict(l=120, r=20, t=40, b=10),
+                    ))
+                    st.plotly_chart(fig_hm, use_container_width=True)
+
+                    # Overconfident pairs warning
+                    if _report.overconfident_pairs:
+                        _oc_lines = [f"• {r.upper()} / {s}" for r, s in _report.overconfident_pairs[:5]]
+                        st.warning(
+                            "**Overconfident segments** (stated confidence > actual win rate by > 10%):\n"
+                            + "\n".join(_oc_lines)
+                        )
+            else:
+                st.info("Module calibration heatmap needs ≥ 30 resolved trades per module. Check back later.")
+        except Exception as _hm_e:
+            st.info(f"Module calibration heatmap not available: {_hm_e}")
+
+        # ── Section 5: Confidence Calibration by Band ────────────────────────
+        st.markdown('<div class="bb-header" style="margin-top:14px;">CONFIDENCE CALIBRATION BY BAND</div>',
+                    unsafe_allow_html=True)
+        st.caption("Stated p_direction band vs actual win rate from realized exit returns. Well-calibrated = bars on the diagonal.")
+        try:
+            from analysis.calibration import ConfidenceCalibrator
+            _bands = ConfidenceCalibrator().compute_confidence_calibration()
+            _band_rows = [
+                (band, d) for band, d in _bands.items()
+                if d.get("n_trades", 0) > 0
+            ]
+            if _band_rows:
+                fig_band = go.Figure()
+                fig_band.add_trace(go.Bar(
+                    x=[b for b, _ in _band_rows],
+                    y=[round(d["actual_win_rate"] * 100, 1) if d["actual_win_rate"] is not None else 0
+                       for _, d in _band_rows],
+                    name="Actual Win Rate",
+                    marker_color=[
+                        "#00C805" if (d["actual_win_rate"] or 0) >= d["stated_p"]
+                        else "#FF6B00"
+                        for _, d in _band_rows
+                    ],
+                    text=[f"n={d['n_trades']}" for _, d in _band_rows],
+                    textposition="outside",
+                    textfont=dict(family="JetBrains Mono", size=9, color="#888"),
+                ))
+                fig_band.add_trace(go.Scatter(
+                    x=[b for b, _ in _band_rows],
+                    y=[round(d["stated_p"] * 100, 1) for _, d in _band_rows],
+                    mode="lines+markers",
+                    name="Stated Confidence",
+                    line=dict(color="#FF3B3B", width=2, dash="dot"),
+                    marker=dict(size=7),
+                ))
+                fig_band.update_layout(**_plotly_cfg(
+                    220,
+                    yaxis=dict(title="Win Rate %", range=[0, 110], color="#555", gridcolor="#1a1a1a"),
+                    xaxis=dict(color="#555"),
+                    showlegend=True,
+                    legend=dict(orientation="h", font=dict(color="#666", size=9, family="JetBrains Mono")),
+                ))
+                st.plotly_chart(fig_band, use_container_width=True)
+            else:
+                st.info("Confidence band calibration needs resolved trades with journal exit outcomes.")
+        except Exception as _be:
+            st.info(f"Confidence calibration by band not available: {_be}")
+
+        # ── Section 6: Regime Weight Viewer ──────────────────────────────────
+        st.markdown("---")
+        st.subheader("Regime Weight Viewer")
+        try:
+            from strategy.regime_weights import REGIME_WEIGHTS, RegimeWeightManager
+            _rwm = RegimeWeightManager()
+            _regimes_view = ["bull", "bear", "sideways", "recovery"]
+            _col_regime = st.selectbox("Regime", _regimes_view, key="rw_regime_sel")
+            _weights_prior  = REGIME_WEIGHTS.get(_col_regime, {})
+            _weights_cal    = _rwm.get_weights(_col_regime)
+            _using_cal = _weights_cal != _weights_prior
+
+            if _using_cal:
+                st.success("Using calibration-derived weights (≥ 50 resolved trades per module)")
+            else:
+                st.info("Using prior weights — calibration data insufficient (< 50 trades per module)")
+
+            _all_modules = sorted(set(list(_weights_prior.keys()) + list(_weights_cal.keys())))
+            _layer_tags  = {
+                "technical": "L1", "trend_strength": "L1", "momentum": "L1",
+                "pattern": "L1", "volume_profile": "L1",
+                "market_regime": "L2", "fii_dii": "L2", "market_breadth": "L2",
+                "sector_rotation": "L2", "earnings_guard": "L2",
+                "confidence": "L3", "kelly": "L3", "vix": "L3",
+                "regime": "L3", "sector": "L3", "sentiment": "L3",
+            }
+            _rw_rows = []
+            for _m in _all_modules:
+                _pw = _weights_prior.get(_m, 0.0)
+                _cw = _weights_cal.get(_m, 0.0)
+                _rw_rows.append({
+                    "Layer": _layer_tags.get(_m, "—"),
+                    "Module": _m,
+                    "Prior Weight": f"{_pw:.4f}",
+                    "Active Weight": f"{_cw:.4f}" if _using_cal else f"{_pw:.4f}",
+                    "Zero?": "⚠ zero" if ((_cw if _using_cal else _pw) == 0.0) else "",
+                })
+            import pandas as _pd_rw
+            st.dataframe(
+                _pd_rw.DataFrame(_rw_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+        except Exception as _rwe:
+            st.info(f"Regime weight viewer unavailable: {_rwe}")
+
+        # ── Section 7: Redundancy Monitor ────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Module Redundancy Monitor")
+        try:
+            from strategy.regime_weights import RedundancyDetector
+            _rd = RedundancyDetector()
+            _agreements = _rd.compute(days=90)
+            if _agreements:
+                import pandas as _pd_rd
+                _rd_rows = [
+                    {
+                        "Module A": ma,
+                        "Module B": mb,
+                        "Agreement Rate": f"{rate:.1%}",
+                        "Redundant?": "⚠ YES" if rate >= RedundancyDetector.REDUNDANCY_THRESHOLD else "",
+                    }
+                    for (ma, mb), rate in list(_agreements.items())[:20]
+                ]
+                st.dataframe(_pd_rd.DataFrame(_rd_rows), use_container_width=True, hide_index=True)
+                _redundant = _rd.get_redundant_pairs(days=90)
+                if _redundant:
+                    st.warning(
+                        f"**{len(_redundant)} redundant pair(s)** with agreement > "
+                        f"{RedundancyDetector.REDUNDANCY_THRESHOLD:.0%}: "
+                        + ", ".join(f"{a}↔{b}" for a, b in _redundant[:5])
+                    )
+                else:
+                    st.success("No redundant module pairs detected (last 90 days)")
+            else:
+                st.info("Redundancy monitor needs ≥ 10 signals per module pair (last 90 days).")
+        except Exception as _rde:
+            st.info(f"Redundancy monitor unavailable: {_rde}")
+
+        # ── Section 8: Candidate Competition Table ────────────────────────────
+        st.markdown("---")
+        st.subheader("Candidate Competition (Latest Run)")
+        try:
+            import sqlite3 as _sq8
+            from config import SQLITE_DB_FILE as _DB8
+            import pandas as _pd8
+            import os as _os8
+            if _os8.path.exists(_DB8):
+                with _sq8.connect(_DB8) as _conn8:
+                    _comp_rows = _conn8.execute("""
+                        SELECT s.symbol, s.action, s.confidence,
+                               dj.final_action,
+                               json_extract(dj.json_blob, '$.layer3_votes') AS l3
+                        FROM signals s
+                        JOIN decision_journals dj ON dj.signal_id = s.id
+                        WHERE s.timestamp >= datetime('now', '-1 day')
+                        ORDER BY s.id DESC
+                        LIMIT 50
+                    """).fetchall()
+                if _comp_rows:
+                    _comp_data = []
+                    for _sym, _act, _conf, _final, _l3_raw in _comp_rows:
+                        import json as _json8
+                        _opp_note = ""
+                        try:
+                            _l3 = _json8.loads(_l3_raw or "[]")
+                            for _v in _l3:
+                                if isinstance(_v, dict) and "execution_planner" in str(_v.get("module", "")):
+                                    _opp_note = _v.get("note", "")
+                                    break
+                        except Exception:
+                            pass
+                        _comp_data.append({
+                            "Symbol": _sym,
+                            "Signal": _act,
+                            "p_direction": f"{(_conf or 0):.2%}",
+                            "Final": _final or _act,
+                            "Competition Result": _opp_note if _opp_note else ("✓ allocated" if _act == "BUY" else "—"),
+                        })
+                    st.dataframe(_pd8.DataFrame(_comp_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No signals from the last 24 hours yet.")
+            else:
+                st.info("Database not initialised.")
+        except Exception as _ce8:
+            st.info(f"Candidate competition table unavailable: {_ce8}")
+
     with tab_rd:
         if st.button("RUN READINESS CHECK", type="primary"):
             with st.spinner("Checking gates..."):
@@ -3433,6 +3784,70 @@ elif page == "HISTORY":
                 </div>
                 """, unsafe_allow_html=True)
             st.info(r.get("recommendation",""))
+
+        # ── System Status (Phase 7) ───────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("System Status")
+
+        try:
+            from config import ASSET_CLASS_GATES as _ACG
+            import os as _os7
+
+            # Production vs Research activity
+            _col_prod, _col_res = st.columns(2)
+
+            with _col_prod:
+                st.markdown("**Production**")
+                _active_classes = [c for c, g in _ACG.items() if g.get("enabled")]
+                st.markdown(f"Active asset classes: `{', '.join(_active_classes)}`")
+                st.markdown("Current phase: **Phase 6** (Meta-Decision Engine — complete)")
+                _rd_file = "logs/readiness_report.json"
+                if _os7.path.exists(_rd_file):
+                    _rd = _load_json(_rd_file)
+                    _rd_ts = _rd.get("timestamp", "never") if _rd else "never"
+                    st.markdown(f"Last readiness check: `{_rd_ts}`")
+                else:
+                    st.markdown("Last readiness check: `never`")
+
+            with _col_res:
+                st.markdown("**Research**")
+                _res_dir = "research"
+                _exp_dir = os.path.join(_res_dir, "experiments")
+                _abl_dir = os.path.join(_res_dir, "ablations")
+                _exp_count = len([f for f in os.listdir(_exp_dir) if not f.startswith("__")]) if os.path.exists(_exp_dir) else 0
+                _abl_count = len([f for f in os.listdir(_abl_dir) if f.endswith(".json")]) if os.path.exists(_abl_dir) else 0
+                st.markdown(f"Experiments in `research/experiments/`: **{_exp_count}**")
+                st.markdown(f"Ablation results in `research/ablations/`: **{_abl_count}**")
+                _approvals_file = os.path.join(_res_dir, "approvals.json")
+                if _os7.path.exists(_approvals_file):
+                    import json as _json7
+                    try:
+                        _approvals = _json7.load(open(_approvals_file))
+                        _pending = [m for m in _approvals if not _approvals[m].get("promoted")]
+                        st.markdown(f"Modules awaiting promotion: **{len(_pending)}**")
+                    except Exception:
+                        st.markdown("Approvals file unreadable")
+                else:
+                    st.markdown("Modules awaiting promotion: **0**")
+
+            # Asset class gate table
+            st.markdown("**Asset Class Gates**")
+            import pandas as _pd7
+            _gate_rows = []
+            for _cls, _gate in _ACG.items():
+                _enabled  = _gate.get("enabled", False)
+                _phase_r  = _gate.get("phase_required", 0)
+                _status   = "ENABLED" if _enabled else "GATED"
+                _gate_rows.append({
+                    "Asset Class":      _cls,
+                    "Status":           _status,
+                    "Phase Required":   _phase_r,
+                    "Phase Complete?":  "Yes" if _phase_r <= 6 else "No",
+                })
+            st.dataframe(_pd7.DataFrame(_gate_rows), use_container_width=True, hide_index=True)
+
+        except Exception as _sys_exc:
+            st.info(f"System status unavailable: {_sys_exc}")
 
 
 # =============================================================================

@@ -1,0 +1,19 @@
+[Unit]
+Description=QuantEdge Trading Scheduler (APScheduler daemon)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/quantedge
+Environment=PYTHONPATH=/home/ubuntu/quantedge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 scheduler/scheduler.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-agent
+
+[Install]
+WantedBy=multi-user.target

@@ -169,6 +169,13 @@ VIX_EXTREME_THRESHOLD = float(_S("VIX_EXTREME_THRESHOLD", default=30.0))  # redu
 RISK_GATE_MIN_CONFIDENCE     = float(_S("RISK_GATE_MIN_CONFIDENCE",     default=0.55))
 ABSTENTION_MIN_P_DIRECTION   = float(_S("ABSTENTION_MIN_P_DIRECTION",   default=0.60))
 ABSTENTION_MIN_SETUP_QUALITY = float(_S("ABSTENTION_MIN_SETUP_QUALITY", default=0.55))
+MIN_EDGE_THRESHOLD           = float(_S("MIN_EDGE_THRESHOLD",           default=0.0))
+MAX_PORTFOLIO_HEAT           = float(_S("MAX_PORTFOLIO_HEAT",           default=0.08))
+REGIME_STABILITY_GATE        = int(_S("REGIME_STABILITY_GATE",          default=2))
+MAX_EXECUTION_RISK           = float(_S("MAX_EXECUTION_RISK",           default=0.85))
+MIN_DIRECTIONAL_CONVICTION   = float(_S("MIN_DIRECTIONAL_CONVICTION",   default=0.54))
+MIN_RISK_REWARD              = float(_S("MIN_RISK_REWARD",              default=1.5))
+MIN_SETUP_QUALITY            = float(_S("MIN_SETUP_QUALITY",            default=0.45))
 
 # GIFT Nifty gap thresholds for pre-market signal
 GIFT_NIFTY_GAP_STRONG = float(_S("GIFT_NIFTY_GAP_STRONG", default=0.5))   # ±0.5% = strong
@@ -263,6 +270,9 @@ US_DEDUP_PRICE_PCT = float(_S("US_DEDUP_PRICE_PCT", default=0.03))
 CRYPTO_DEDUP_HOURS     = int(  _S("CRYPTO_DEDUP_HOURS",     default=24))
 CRYPTO_DEDUP_PRICE_PCT = float(_S("CRYPTO_DEDUP_PRICE_PCT", default=0.03))
 
+# VIX cache TTL — how long (seconds) the cached VIX reading is reused
+VIX_CACHE_TTL = int(_S("PCR_VIX_CACHE_TTL", default=900))
+
 # INR conversion rate for combined P&L display
 INR_PER_USD  = float(_S("INR_PER_USD",  default=83.0))
 INR_PER_USDT = float(_S("INR_PER_USDT", default=83.0))
@@ -300,6 +310,18 @@ INTRADAY_MIN_CRITERIA  = int(  _S("INTRADAY_MIN_CRITERIA",  default=3))     # mu
 # -----------------------------------------------------------------------------
 MTF_COUNTER_PENALTY    = float(_S("MTF_COUNTER_PENALTY",    default=0.08))  # penalty for counter-trend MTF
 SR_SELL_ZONE_PENALTY   = float(_S("SR_SELL_ZONE_PENALTY",   default=0.10))  # penalty for S/R sell zone
+
+# -----------------------------------------------------------------------------
+# ASSET CLASS GATES (Phase 7 — research vs production separation)
+# F&O, crypto, and US equities are gated until NSE spot completes Phase 6.
+# Set the "enabled" flag to True in user_settings.json once Phase 6 is done.
+# -----------------------------------------------------------------------------
+ASSET_CLASS_GATES: dict = {
+    "nse_spot":    {"enabled": bool(_S("ASSET_NSE_SPOT_ENABLED",  default="true")  != "false"), "phase_required": 0},
+    "fno":         {"enabled": bool(_S("ASSET_FNO_ENABLED",       default="false") != "false"), "phase_required": 6},
+    "crypto":      {"enabled": bool(_S("ASSET_CRYPTO_ENABLED",    default="false") != "false"), "phase_required": 6},
+    "us_equities": {"enabled": bool(_S("ASSET_US_ENABLED",        default="false") != "false"), "phase_required": 6},
+}
 
 # -----------------------------------------------------------------------------
 # ALERTS — Telegram

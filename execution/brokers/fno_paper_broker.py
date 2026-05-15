@@ -344,6 +344,15 @@ class FNOPaperBroker:
         direction: "CALL" or "PUT"  → maps to CE/PE
         Returns trade_id or None if premium unavailable or position limit reached.
         """
+        # Asset class gate (Phase 7)
+        try:
+            from config import ASSET_CLASS_GATES
+            if not ASSET_CLASS_GATES.get("fno", {}).get("enabled", False):
+                logger.warning("FNOPaperBroker.open_position blocked: fno disabled in ASSET_CLASS_GATES")
+                return None
+        except Exception:
+            pass
+
         # Enforce position limit
         ok, reason = self._within_position_cap(1)
         if not ok:

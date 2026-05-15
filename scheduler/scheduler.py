@@ -125,6 +125,42 @@ def _acquire_pid_file() -> bool:
     return ok
 
 
+def run_db_backup():
+    """
+    Daily SQLite backup — copy trades.db to logs/backups/trades_YYYYMMDD.db.
+    Keeps last 7 daily backups; deletes older ones automatically.
+    """
+    _write_scheduler_status("db_backup", "running")
+    try:
+        import sqlite3, shutil, glob
+        from config import SQLITE_DB_FILE
+        if not os.path.exists(SQLITE_DB_FILE):
+            _write_scheduler_status("db_backup", "skip", "trades.db not found")
+            return
+        backup_dir = os.path.join(os.path.dirname(SQLITE_DB_FILE), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        dest = os.path.join(backup_dir, f"trades_{datetime.now().strftime('%Y%m%d')}.db")
+        # Use SQLite's online backup API so we don't copy a live-write file
+        src_conn = sqlite3.connect(SQLITE_DB_FILE)
+        dst_conn = sqlite3.connect(dest)
+        src_conn.backup(dst_conn)
+        src_conn.close()
+        dst_conn.close()
+        # Keep only last 7 backups
+        existing = sorted(glob.glob(os.path.join(backup_dir, "trades_*.db")))
+        for old in existing[:-7]:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+        size_mb = round(os.path.getsize(dest) / 1024 / 1024, 2)
+        logger.info(f"DB backup complete → {dest} ({size_mb} MB)")
+        _write_scheduler_status("db_backup", "ok", f"{size_mb} MB → {os.path.basename(dest)}")
+    except Exception as e:
+        _write_scheduler_status("db_backup", "error", str(e))
+        logger.warning(f"DB backup failed: {e}")
+
+
 def run_housekeeping():
     """Trim stale logs/caches so Oracle Free VM storage stays healthy."""
     _write_scheduler_status("housekeeping", "running")
@@ -223,12 +259,12 @@ def run_daily_scan():
         send_telegram_message("*Pre-flight FAILED* — skipping scan (network issue?)")
         return
     try:
-        from main import run_agent
+        from pipeline.legacy import run_pipeline
         from memory.portfolio_memory import PortfolioMemory
 
         # dry_run=False: paper mode simulates trades virtually (correct behavior)
         # dry_run=True is only for: python main.py --dry-run (manual override)
-        signals = run_agent(dry_run=False)  # main.py saves signals + sends Telegram internally
+        signals = run_pipeline(dry_run=False)  # tries TradingPipeline, falls back to run_agent
 
         # Options signals — Nifty/BankNifty weekly CE/PE ideas
         _run_options_signals()
@@ -248,8 +284,8 @@ def run_daily_scan():
         import time as _time
         _time.sleep(60)
         try:
-            from main import run_agent
-            signals = run_agent(dry_run=False)
+            from pipeline.legacy import run_pipeline
+            signals = run_pipeline(dry_run=False)
             _run_options_signals()
             _run_futures_signals()
             _run_selling_signals()
@@ -996,6 +1032,31 @@ def run_weekly_summary():
         send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
 
 
+def run_drift_analysis():
+    """
+    Monthly drift analysis: compare live paper outcomes to backtest predictions.
+    Sends Telegram alert if drift_score >= 0.40 (HALT) or >= 0.20 (RECALIBRATE).
+    Scheduled for the first Sunday of each month at 21:00 IST.
+    """
+    _write_scheduler_status("drift_analysis", "running")
+    logger.info(
+        f"Drift analysis triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}"
+    )
+    try:
+        from backtest.drift_analysis import DriftAnalyser
+        report = DriftAnalyser().analyse(lookback_days=90)
+        status = report.get("recommendation", "OK")
+        score  = report.get("drift_score", 0.0)
+        _write_scheduler_status(
+            "drift_analysis", "ok",
+            f"drift={score:.3f} recommendation={status}"
+        )
+        logger.info(f"Drift analysis complete: drift={score:.3f} → {status}")
+    except Exception as e:
+        _write_scheduler_status("drift_analysis", "error", str(e))
+        logger.error(f"Drift analysis failed: {e}")
+
+
 def run_weekly_optimizer():
     """
     Run the walk-forward strategy optimizer on Sunday at 02:00 IST.
@@ -1383,6 +1444,15 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 12: Monthly drift analysis (first Sunday of month, 21:00 IST) ---
+    scheduler.add_job(
+        run_drift_analysis,
+        CronTrigger(day_of_week="sun", day="1-7", hour=21, minute=0, timezone=IST),
+        id="drift_analysis",
+        name="Drift Analysis (1st Sun/month 21:00 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     scheduler.add_job(
         run_housekeeping,
         CronTrigger(hour=6, minute=5, timezone=IST),
@@ -1391,8 +1461,17 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 19: Daily DB backup at 02:30 IST ---
+    scheduler.add_job(
+        run_db_backup,
+        CronTrigger(hour=2, minute=30, timezone=IST),
+        id="db_backup",
+        name="SQLite DB Backup (02:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  17 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  19 JOBS")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
@@ -1409,7 +1488,9 @@ if __name__ == "__main__":
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
     logger.info("  Walk-fwd optimizer : Sunday 02:00 IST")
+    logger.info("  Drift analysis     : 1st Sunday/month 21:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
+    logger.info("  DB backup          : 02:30 IST (daily, 7-day rolling)")
     logger.info("  Telegram bot       : always-on (command listener)")
     logger.info("=" * 60)
 

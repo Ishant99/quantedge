@@ -49,25 +49,34 @@ class IPOAlertSystem:
     """
 
     def check(self) -> list[IPOInfo]:
-        """Fetch and analyse IPO data."""
-        ipos = []
-        try:
-            session = requests.Session()
-            session.get("https://www.nseindia.com", headers=HEADERS, timeout=10)
-            resp = session.get(NSE_IPO_URL, headers=HEADERS, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                ipos = self._parse(data)
-        except Exception as e:
-            logger.debug(f"IPO fetch failed: {e}")
-            ipos = self._get_sample_ipos()
-
-        # Send alerts for watchable IPOs
+        """Fetch and analyse IPO data. Retries once with a fresh session on failure."""
+        ipos = self._fetch_ipo_data()
         watchable = [i for i in ipos if i.watchable]
         if watchable:
             self._send_alert(watchable)
-
         return ipos
+
+    def _fetch_ipo_data(self) -> list["IPOInfo"]:
+        """Try NSE API; retry once with a fresh session on 403 / empty result."""
+        for attempt in range(2):
+            try:
+                session = requests.Session()
+                # Seed session cookies
+                session.get("https://www.nseindia.com", headers=HEADERS, timeout=10)
+                resp = session.get(NSE_IPO_URL, headers=HEADERS, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    parsed = self._parse(data)
+                    if parsed:
+                        return parsed
+                    if attempt == 0:
+                        logger.debug("IPO fetch: empty result on attempt 1, retrying")
+                        continue
+                else:
+                    logger.debug(f"IPO fetch: HTTP {resp.status_code} on attempt {attempt + 1}")
+            except Exception as e:
+                logger.debug(f"IPO fetch error (attempt {attempt + 1}): {e}")
+        return self._get_sample_ipos()
 
     def get_watchable_symbols(self) -> list[str]:
         """Return symbols ready to be added to scan universe."""
@@ -78,7 +87,9 @@ class IPOAlertSystem:
         results = []
         try:
             import yfinance as yf
-            for item in data.get("ipoList", [])[:20]:
+            # NSE API uses 'ipoList' for mainboard and 'data' for some endpoints
+            items = data.get("ipoList") or data.get("data") or []
+            for item in items[:20]:
                 try:
                     symbol       = item.get("symbol", "")
                     company      = item.get("companyName", "")

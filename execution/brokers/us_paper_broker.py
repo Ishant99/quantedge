@@ -68,6 +68,15 @@ class USPaperBroker:
                       entry_price: float = None,
                       usd_amount: float = 500.0,
                       reasoning: str = "") -> int | None:
+        # Asset class gate (Phase 7)
+        try:
+            from config import ASSET_CLASS_GATES
+            if not ASSET_CLASS_GATES.get("us_equities", {}).get("enabled", False):
+                logger.warning("USPaperBroker.open_position blocked: us_equities disabled in ASSET_CLASS_GATES")
+                return None
+        except Exception:
+            pass
+
         if entry_price is None:
             entry_price = self.scanner.get_current_price(symbol)
         if not entry_price or entry_price <= 0:

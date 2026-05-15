@@ -31,7 +31,7 @@ import pandas as pd
 
 from config import (
     SQLITE_DB_FILE, BACKTEST_RESULTS_DIR,
-    VIRTUAL_CAPITAL, TRADING_MODE
+    VIRTUAL_CAPITAL, TRADING_MODE, ASSET_CLASS_GATES
 )
 from utils import get_logger
 
@@ -96,6 +96,11 @@ class ReadinessChecker:
         metrics = self._get_metrics()
         gates   = self._evaluate_gates(metrics)
 
+        # Phase 7: enforce asset class gate check (appended, non-blocking for nse_spot)
+        asset_gate = self._check_asset_class_gates()
+        if asset_gate is not None:
+            gates.append(asset_gate)
+
         passed        = sum(1 for g in gates if g.passed)
         total         = len(gates)
         is_ready      = passed == total
@@ -116,6 +121,32 @@ class ReadinessChecker:
 
         self._save_report(report)
         return report
+
+    def check_asset_class(self, asset_class: str) -> bool:
+        """
+        Return True if *asset_class* is enabled in ASSET_CLASS_GATES.
+        Raises RuntimeError if enabled but phase_required > current phase (6).
+
+        Used by execution paths to hard-gate non-spot markets:
+            if not ReadinessChecker().check_asset_class("fno"):
+                raise RuntimeError("F&O not enabled")
+        """
+        gate = ASSET_CLASS_GATES.get(asset_class)
+        if gate is None:
+            logger.warning(f"Unknown asset class '{asset_class}' — defaulting to BLOCKED")
+            return False
+        if not gate.get("enabled", False):
+            return False
+        # Phase guard: if phase_required > 0, ensure we are at least on that phase
+        # (We treat Phase 6 completion as the current baseline per PHASES.md.)
+        phase_req = gate.get("phase_required", 0)
+        current_phase = 6  # Phase 6 is complete as of today
+        if phase_req > current_phase:
+            raise RuntimeError(
+                f"Asset class '{asset_class}' requires Phase {phase_req} "
+                f"but current phase is {current_phase}"
+            )
+        return True
 
     def print_report(self, report: ReadinessReport):
         """Print a rich formatted report to console."""
@@ -443,6 +474,31 @@ class ReadinessChecker:
             steps.append("[x] Run: python scheduler\\scheduler.py to automate")
 
         return steps
+
+    def _check_asset_class_gates(self) -> Optional[GateResult]:
+        """
+        Phase 7 gate: warn if any asset class that requires Phase 6 is enabled
+        before Phase 6 is complete.  Returns a GateResult or None.
+        """
+        violations = []
+        current_phase = 6  # Phase 6 complete
+        for cls, gate in ASSET_CLASS_GATES.items():
+            if gate.get("enabled") and gate.get("phase_required", 0) > current_phase:
+                violations.append(cls)
+        passed = len(violations) == 0
+        if passed:
+            enabled_classes = [c for c, g in ASSET_CLASS_GATES.items() if g.get("enabled")]
+            msg = "Asset class gates: " + (", ".join(enabled_classes) or "nse_spot only")
+        else:
+            msg = f"Asset classes enabled before phase requirement: {', '.join(violations)}"
+        return GateResult(
+            name="asset_class_gates",
+            label="Asset class phase gates (Phase 7)",
+            required=0.0,
+            actual=float(len(violations)),
+            passed=passed,
+            message=msg,
+        )
 
     def _save_report(self, report: ReadinessReport):
         """Save report as JSON for dashboard to read."""

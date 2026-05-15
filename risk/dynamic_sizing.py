@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sqlite3
 import yfinance as yf
 from dataclasses import dataclass
-from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD, MAX_POSITION_VALUE_PCT
+from config import RISK_PER_TRADE_PCT, REWARD_RISK_RATIO, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD, MAX_POSITION_VALUE_PCT, VIX_CACHE_TTL
 from utils import get_logger
 
 logger = get_logger("DynamicSizing")
@@ -28,7 +28,7 @@ _vix_cache: dict = {}
 def _get_india_vix() -> float:
     """Fetch India VIX. Cached for 15 minutes — reduces stale values during intraday moves."""
     import time
-    if _vix_cache.get("ts", 0) and time.time() - _vix_cache["ts"] < 900:
+    if _vix_cache.get("ts", 0) and time.time() - _vix_cache["ts"] < VIX_CACHE_TTL:
         return _vix_cache["value"]
     try:
         hist = yf.Ticker("^INDIAVIX").history(period="2d", interval="1d")

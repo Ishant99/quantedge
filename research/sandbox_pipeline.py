@@ -429,7 +429,7 @@ class SandboxPipeline:
     def _stage_data_fetch(self, symbols: list[str]) -> dict:
         from data.market_scanner import MarketScanner
         scanner = MarketScanner(lookback_days=400)
-        market_data = scanner.run(max_workers=10, regime="bull")
+        market_data = scanner.run(max_workers=10, regime=ctx.regime)
         return {sym: df for sym, df in market_data.items() if sym in symbols}
 
     def _stage_technical(self, market_data: dict, ctx) -> dict:
