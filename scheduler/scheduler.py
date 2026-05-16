@@ -307,6 +307,11 @@ def run_daily_scan():
 def _run_options_signals():
     """Generate Nifty/BankNifty options signals, open paper positions, send Telegram."""
     try:
+        from config import ASSET_CLASS_GATES
+        if not ASSET_CLASS_GATES.get("fno", {}).get("enabled", False):
+            logger.info("Options signals: F&O gate disabled — skipping")
+            return
+
         from analysis.options_signals import OptionsSignalGenerator
         from execution.brokers.fno_paper_broker import FNOPaperBroker
 
@@ -315,11 +320,11 @@ def _run_options_signals():
             logger.info("Options signals: no clear directional bias today")
             return
 
-        broker = FNOPaperBroker()
-        lines  = ["*Nifty/BankNifty Options — Paper Trade Opened*", ""]
+        broker   = FNOPaperBroker()
+        lines    = []
+        any_opened = False
 
         for s in opt_signals:
-            # Open paper position with live premium if available
             trade_id = broker.open_position(
                 index         = s.index,
                 direction     = s.direction,
@@ -329,6 +334,9 @@ def _run_options_signals():
                 entry_premium = s.entry_premium if s.entry_premium > 0 else None,
                 reasoning     = s.reasoning,
             )
+
+            if trade_id:
+                any_opened = True
 
             arrow = "▲" if s.direction == "CALL" else "▼"
             status = f"Paper #{trade_id}" if trade_id else "Skipped (cap/DTE/dup — see logs)"
@@ -341,7 +349,12 @@ def _run_options_signals():
                 "",
             ]
 
-        lines.append("_SL=50% premium loss | TP=100% premium gain_")
+        if not any_opened:
+            logger.info(f"Options signals: {len(opt_signals)} analysed, all skipped (cap/DTE/dup)")
+            return
+
+        header = ["*Nifty/BankNifty Options — Paper Trade Opened*", ""]
+        lines  = header + lines + ["_SL=50% premium loss | TP=100% premium gain_"]
         send_telegram_message("\n".join(lines))
         logger.info(f"Options signals: {len(opt_signals)} processed")
     except Exception as e:
@@ -352,6 +365,10 @@ def run_fno_monitor():
     """Check all open F&O paper positions (options + futures) for TP/SL/expiry."""
     if _is_nse_holiday():
         return
+    with _SCAN_STATE_LOCK:
+        if _SCAN_ACTIVE:
+            logger.debug("F&O monitor: scan lock held — skipping this tick")
+            return
     _write_scheduler_status("fno_monitor", "running")
     try:
         from execution.brokers.fno_paper_broker import FNOPaperBroker

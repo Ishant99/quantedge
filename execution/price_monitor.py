@@ -299,7 +299,7 @@ class PriceMonitor:
                             VALUES (?,?,?,?,?,?,?,?,?,?)
                         """, (result.symbol, result.action, result.qty,
                               round(result.entry_price, 2), round(exit_price, 2),
-                              datetime.now().strftime("%Y-%m-%d"),
+                              datetime.now().isoformat(),
                               datetime.now().isoformat(),
                               pnl, pnl_pct, "closed"))
                         logger.debug(f"SQLite: inserted synthetic closed trade for {result.symbol} "

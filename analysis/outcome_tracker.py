@@ -52,6 +52,7 @@ class OutcomeTracker:
             outcome, outcome_price, outcome_date, days = self._evaluate(sig)
             if outcome != "OPEN":
                 self._write_outcome(sig["id"], outcome, outcome_price, outcome_date, days)
+                self._close_trade_row(sig["symbol"], outcome_price)
                 counts[outcome.lower()] += 1
                 resolved_today.append({
                     "symbol":        sig["symbol"],
@@ -271,6 +272,33 @@ class OutcomeTracker:
                 SET outcome=?, outcome_price=?, outcome_date=?, days_to_outcome=?
                 WHERE id=?
             """, (outcome, price, date, days, signal_id))
+
+    def _close_trade_row(self, symbol: str, outcome_price: float):
+        """Close the matching open trades row when a signal outcome is resolved."""
+        if not outcome_price:
+            return
+        try:
+            with sqlite3.connect(SQLITE_DB_FILE) as conn:
+                row = conn.execute(
+                    "SELECT id, entry_price, qty FROM trades "
+                    "WHERE symbol=? AND status='open' ORDER BY id DESC LIMIT 1",
+                    (symbol,)
+                ).fetchone()
+                if row:
+                    trade_id, entry_px, qty = row
+                    qty = qty or 1
+                    pnl = round((outcome_price - entry_px) * qty, 2) if entry_px else 0
+                    pnl_pct = round(pnl / (entry_px * qty) * 100, 2) if (entry_px and qty) else 0
+                    conn.execute(
+                        "UPDATE trades SET status='closed', exit_price=?, exit_time=?, "
+                        "pnl=?, pnl_pct=? WHERE id=?",
+                        (round(outcome_price, 2), datetime.now().isoformat(),
+                         pnl, pnl_pct, trade_id)
+                    )
+                    logger.debug(f"_close_trade_row: closed trade #{trade_id} for {symbol} "
+                                 f"P&L Rs.{pnl:+,.0f}")
+        except Exception as e:
+            logger.debug(f"_close_trade_row failed for {symbol}: {e}")
 
     def _latest_price(self, symbol: str) -> float:
         hist = yf.Ticker(f"{symbol}.NS").history(period="2d", interval="1d", auto_adjust=True)

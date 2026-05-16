@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dataclasses import dataclass
 from utils import get_logger
+from config import REGIME_STABILITY_GATE
 
 logger = get_logger("MarketPermission")
 
@@ -66,6 +67,11 @@ class MarketPermission:
             blocks.append("regime_bear_blocks_buy")
             _vote("market_regime", "BLOCK", 0.0, f"regime={regime} blocks new BUYs")
 
+        if action == "BUY" and regime == "sideways":
+            blocks.append("regime_sideways_blocks_buy")
+            _vote("market_regime", "BLOCK", 0.0,
+                  "sideways market — no new BUY positions")
+
         if earnings_days <= 3:
             blocks.append(f"earnings_in_{earnings_days}d")
             _vote("earnings_guard", "BLOCK", 0.0,
@@ -83,11 +89,6 @@ class MarketPermission:
             reductions.append(("regime_recovery", 0.80))
             _vote("market_regime", "REDUCE", 0.5,
                   "recovery phase — 80% size. Selective buys only.")
-
-        if regime == "sideways" and action == "BUY":
-            reductions.append(("regime_sideways", 0.70))
-            _vote("market_regime", "REDUCE", 0.4,
-                  "sideways market — 70% size")
 
         # FII + PCR double bearish
         fii_bearish = fii_signal in ("sell", "strong_sell")
@@ -116,10 +117,10 @@ class MarketPermission:
                   f"sector rotation bearish")
 
         # Regime transition uncertainty
-        if regime_stability == 1 and action == "BUY":
+        if 0 < regime_stability < REGIME_STABILITY_GATE and action == "BUY":
             reductions.append(("regime_transition", 0.80))
             _vote("market_regime", "REDUCE", 0.5,
-                  "regime transition in progress (1/2 scans)")
+                  f"regime transition in progress ({regime_stability}/{REGIME_STABILITY_GATE} scans)")
 
         # Allow votes when clear
         if not blocks and not reductions:
