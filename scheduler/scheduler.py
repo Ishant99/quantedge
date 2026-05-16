@@ -45,6 +45,9 @@ from services.state_sync import sync_unified_state
 logger = get_logger("Scheduler")
 IST = pytz.timezone("Asia/Kolkata")
 
+# Track previous BTC dominance state so we only alert on state *changes*
+_btc_blue_chip_last: bool | None = None
+
 # =============================================================================
 # NSE Holiday Calendar 2025–2026
 # Source: NSE India official trading calendar
@@ -827,12 +830,19 @@ def run_crypto_scan():
         allowed_symbols  = dominance_filter.filter_symbols(list(market_data.keys()), dominance)
         market_data      = {s: df for s, df in market_data.items() if s in allowed_symbols}
 
-        if dominance.blue_chip_only:
+        global _btc_blue_chip_last
+        if dominance.blue_chip_only and _btc_blue_chip_last is not True:
             send_telegram_message(
                 f"📊 *BTC Dominance Alert*\n"
                 f"BTC.D = {dominance.btc_dominance:.1f}% — altcoins suppressed.\n"
                 f"Crypto scan restricted to BTCUSDT + ETHUSDT only."
             )
+        elif not dominance.blue_chip_only and _btc_blue_chip_last is True:
+            send_telegram_message(
+                f"✅ *BTC Dominance Cleared*\n"
+                f"BTC.D = {dominance.btc_dominance:.1f}% — altcoin scans resumed."
+            )
+        _btc_blue_chip_last = dominance.blue_chip_only
 
         ta_results  = TechnicalAgent().analyse_all(market_data)
         broker      = CryptoPaperBroker()

@@ -89,7 +89,8 @@ class StrategyOptimiser:
         # Find best by Sharpe ratio
         df          = pd.DataFrame(results)
         best_row    = df.loc[df["sharpe"].idxmax()]
-        best_params = {k: best_row[k] for k in keys}
+        # .item() converts numpy scalars → Python natives (avoids np.float64 repr)
+        best_params = {k: best_row[k].item() for k in keys}
 
         result = OptimiserResult(
             best_params         = best_params,
@@ -182,11 +183,12 @@ class StrategyOptimiser:
             print(f"    {k:20s} = {v}")
         print(f"{'='*55}\n")
 
+        param_str = " | ".join(f"{k}={v}" for k, v in result.best_params.items())
         send(f"*Weekly Optimiser Results*\n"
              f"Best Sharpe: `{result.best_sharpe:.2f}`\n"
              f"Best Return: `{result.best_return:.1f}%`\n"
              f"Win Rate: `{result.best_win_rate:.0f}%`\n"
-             f"Best params: `{result.best_params}`")
+             f"Best params: `{param_str}`")
 
     def _default(self) -> OptimiserResult:
         return OptimiserResult(
