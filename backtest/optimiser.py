@@ -30,7 +30,11 @@ PARAM_GRID = {
     "reward_risk":   [1.5, 2.0, 2.5],
 }
 
-TEST_SYMBOLS = ["BRITANNIA", "TITAN", "BAJFINANCE", "HDFCBANK", "RELIANCE"]
+TEST_SYMBOLS = [
+    "RELIANCE", "HDFCBANK", "BAJFINANCE",   # large-cap liquid
+    "TITAN", "DIXON",                        # mid-cap momentum
+    "POLYCAB", "LTIM",                       # quality growth
+]
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPTIMISER_RESULTS_FILE = os.path.join(_ROOT, "logs", "optimiser_results.json")
 
