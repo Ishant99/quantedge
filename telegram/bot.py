@@ -63,7 +63,7 @@ def _send(token: str, chat_id: str, text: str):
 def _cmd_start(token, chat_id):
     _send(token, chat_id, """*QuantEdge Pro — Bot Commands*
 
-/status    — Portfolio + combined P&L
+/status    — Portfolio + combined P&L + VIX + regime
 /pnl       — Today's P&L by market
 /signals   — Latest buy signals
 /positions — Open NSE positions
@@ -71,6 +71,7 @@ def _cmd_start(token, chat_id):
 /us        — Open US stock positions
 /fno       — Open F&O positions
 /regime    — Market regime + RSI + PCR + FII
+/vix       — India VIX level + position sizing impact
 /run       — Run NSE scan now
 /help      — Show this list
 """)
@@ -110,18 +111,49 @@ def _cmd_status(token, chat_id):
         combined = nse_pnl + fno_pnl + cry_pnl + us_pnl
         sign = lambda v: "+" if v >= 0 else ""
 
-        _send(token, chat_id, f"""*Portfolio Status*
-_Updated: {datetime.now().strftime('%d %b %Y %H:%M IST')}_
+        # VIX + regime (best-effort — don't fail status if unavailable)
+        vix_line = ""
+        regime_line = ""
+        try:
+            from risk.dynamic_sizing import _get_india_vix, VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD
+            vix = _get_india_vix()
+            if vix >= VIX_EXTREME_THRESHOLD:
+                vix_tag = "🔴 EXTREME — position sizes halved"
+            elif vix >= VIX_HIGH_THRESHOLD:
+                vix_tag = "🟡 HIGH — 75% position sizes"
+            else:
+                vix_tag = "🟢 NORMAL — full position sizes"
+            vix_line = f"📊 India VIX: `{vix:.1f}` — {vix_tag}"
+        except Exception:
+            pass
+        try:
+            reg = _load_json(os.path.join(_LOGS, "market_regime.json"))
+            if reg:
+                rg = reg.get("regime", "unknown").upper()
+                allow = reg.get("allow_buys", True)
+                icon = {"BULL": "🐂", "RECOVERY": "🔄", "SIDEWAYS": "↔️", "BEAR": "🐻"}.get(rg, "📊")
+                trade_str = "✅ BUYs allowed" if allow else "🚫 BUYs blocked"
+                regime_line = f"{icon} Regime: `{rg}` — {trade_str}"
+        except Exception:
+            pass
 
-💼 *NSE Equity:* Rs.{portfolio_value:,.0f}
-Cash: Rs.{cash:,.0f} | Deployed: Rs.{deployed:,.0f}
-📈 NSE P&L:    Rs.{sign(nse_pnl)}{nse_pnl:,.0f}
-📊 F&O P&L:    Rs.{sign(fno_pnl)}{fno_pnl:,.0f}
-₿  Crypto P&L: Rs.{sign(cry_pnl)}{cry_pnl:,.0f}
-🇺🇸 US P&L:    Rs.{sign(us_pnl)}{us_pnl:,.0f}
-
-*Combined P&L: Rs.{sign(combined)}{combined:,.0f}*
-Open positions: {open_positions} NSE""")
+        body = (
+            f"*Portfolio Status*\n"
+            f"_Updated: {datetime.now().strftime('%d %b %Y %H:%M IST')}_\n\n"
+            f"💼 *NSE Equity:* Rs.{portfolio_value:,.0f}\n"
+            f"Cash: Rs.{cash:,.0f} | Deployed: Rs.{deployed:,.0f}\n"
+            f"📈 NSE P&L:    Rs.{sign(nse_pnl)}{nse_pnl:,.0f}\n"
+            f"📊 F&O P&L:    Rs.{sign(fno_pnl)}{fno_pnl:,.0f}\n"
+            f"₿  Crypto P&L: Rs.{sign(cry_pnl)}{cry_pnl:,.0f}\n"
+            f"🇺🇸 US P&L:    Rs.{sign(us_pnl)}{us_pnl:,.0f}\n\n"
+            f"*Combined P&L: Rs.{sign(combined)}{combined:,.0f}*\n"
+            f"Open positions: {open_positions} NSE"
+        )
+        if vix_line:
+            body += f"\n\n{vix_line}"
+        if regime_line:
+            body += f"\n{regime_line}"
+        _send(token, chat_id, body)
     except Exception as e:
         _send(token, chat_id, f"Error fetching status: `{e}`")
 
@@ -346,6 +378,32 @@ FII: `Rs.{fii_net:+,.0f}Cr` — {fii_sig}""")
         _send(token, chat_id, f"Error: `{e}`")
 
 
+def _cmd_vix(token, chat_id):
+    try:
+        from risk.dynamic_sizing import _get_india_vix
+        from config import VIX_HIGH_THRESHOLD, VIX_EXTREME_THRESHOLD
+        vix = _get_india_vix()
+
+        if vix >= VIX_EXTREME_THRESHOLD:
+            level = "🔴 *EXTREME*"
+            impact = f"Position sizes *halved* (×0.50)\nSL distance widened — avoid new entries"
+        elif vix >= VIX_HIGH_THRESHOLD:
+            level = "🟡 *HIGH*"
+            impact = f"Position sizes *reduced to 75%* (×0.75)\nSL widened proportionally"
+        else:
+            level = "🟢 *NORMAL*"
+            impact = f"Full position sizes (×1.00)\nNo VIX-based restrictions"
+
+        _send(token, chat_id,
+              f"*India VIX — Volatility Dashboard*\n\n"
+              f"Current VIX: `{vix:.2f}`\n"
+              f"Level: {level}\n\n"
+              f"*Position Sizing Impact:*\n{impact}\n\n"
+              f"_Thresholds: HIGH ≥ {VIX_HIGH_THRESHOLD} | EXTREME ≥ {VIX_EXTREME_THRESHOLD}_")
+    except Exception as e:
+        _send(token, chat_id, f"Error fetching VIX: `{e}`")
+
+
 def _cmd_run(token, chat_id):
     _send(token, chat_id, "⚙️ Running NSE scan... please wait ~30 seconds.")
     try:
@@ -372,6 +430,7 @@ COMMANDS = {
     "/us":        _cmd_us,
     "/fno":       _cmd_fno,
     "/regime":    _cmd_regime,
+    "/vix":       _cmd_vix,
     "/run":       _cmd_run,
 }
 

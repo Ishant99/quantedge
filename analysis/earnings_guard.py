@@ -27,6 +27,17 @@ class EarningsGuard:
         os.makedirs(os.path.join(_PROJECT_ROOT, "logs"), exist_ok=True)
         self.calendar = self._load_or_fetch()
 
+    def days_to_earnings(self, symbol: str) -> int:
+        """Return number of days until next earnings. 999 if not found."""
+        result_date = self.calendar.get(symbol.upper())
+        if not result_date:
+            return 999
+        try:
+            rd = datetime.strptime(result_date, "%Y-%m-%d")
+            return max(-1, (rd - datetime.today()).days)
+        except Exception:
+            return 999
+
     def is_safe(self, symbol: str) -> tuple[bool, str]:
         """
         Returns (True, "") if safe to trade.

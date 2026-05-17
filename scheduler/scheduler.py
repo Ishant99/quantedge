@@ -1012,6 +1012,7 @@ def run_morning_digest():
         lines += [
             "",
             f"_Full scan starts at 09:15 IST  |  {len(market_data)} symbols loaded_",
+            f"_Data is based on previous session close (T-1)_",
         ]
 
         send_telegram_message("\n".join(lines))
@@ -1026,6 +1027,42 @@ def run_morning_digest():
     except Exception as e:
         _write_scheduler_status("morning_digest", "error", str(e))
         logger.error(f"Morning digest failed: {e}")
+
+
+def run_earnings_refresh():
+    """
+    Refresh the earnings calendar cache from NSE before the morning scan.
+    Runs daily at 7:30 AM so EarningsGuard has fresh data for the 9:15 scan.
+    """
+    if _is_nse_holiday():
+        return
+    _write_scheduler_status("earnings_refresh", "running")
+    try:
+        from analysis.earnings_guard import EarningsGuard, EARNINGS_CACHE
+        import json, os
+        # Force a fresh fetch by temporarily removing the cache
+        if os.path.exists(EARNINGS_CACHE):
+            try:
+                with open(EARNINGS_CACHE) as f:
+                    data = json.load(f)
+                # Only re-fetch if cache is older than 20 hours
+                from datetime import datetime
+                cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
+                if (datetime.now() - cached_at).total_seconds() < 72000:
+                    count = len(data.get("calendar", {}))
+                    _write_scheduler_status("earnings_refresh", "ok", f"Cache fresh — {count} entries")
+                    logger.info(f"Earnings calendar: cache still fresh ({count} entries)")
+                    return
+            except Exception:
+                pass
+
+        guard = EarningsGuard()
+        count = len(guard.calendar)
+        _write_scheduler_status("earnings_refresh", "ok", f"Refreshed — {count} entries")
+        logger.info(f"Earnings calendar refreshed: {count} upcoming results")
+    except Exception as e:
+        _write_scheduler_status("earnings_refresh", "error", str(e))
+        logger.warning(f"Earnings refresh failed: {e}")
 
 
 def run_ohlcv_update():
@@ -1281,7 +1318,16 @@ if __name__ == "__main__":
 
     scheduler = BlockingScheduler(timezone=IST)
 
-    # --- Job 0: GIFT Nifty pre-market check at 8:30 AM ---
+    # --- Job 0a: Earnings calendar refresh at 7:30 AM ---
+    scheduler.add_job(
+        run_earnings_refresh,
+        CronTrigger(hour=7, minute=30, day_of_week="mon-fri", timezone=IST),
+        id="earnings_refresh",
+        name="Earnings Calendar Refresh (07:30 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
+    # --- Job 0b: GIFT Nifty pre-market check at 8:30 AM ---
     scheduler.add_job(
         run_gift_nifty_check,
         CronTrigger(hour=8, minute=30, day_of_week="mon-fri", timezone=IST),
@@ -1498,7 +1544,8 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  19 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  20 JOBS")
+    logger.info("  Earnings refresh   : 07:30 IST (Mon-Fri)")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
     logger.info(f"  NSE morning scan   : {SCAN_TIME_1} IST (Mon-Fri)")
