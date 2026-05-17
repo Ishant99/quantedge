@@ -2,7 +2,7 @@
 
 Algorithmic trading system for Indian equities (NSE) with paper execution, backtesting, signal auditing, and a Streamlit dashboard. Built around a three-layer signal architecture: setup quality → market permission → execution sizing.
 
-**116 Python files · ~30,000 LOC · 162 tests passing**
+**116 Python files · ~30,000 LOC · 191 tests passing**
 
 ---
 
@@ -173,7 +173,7 @@ quantedge/
 │   └── app.py                 # Streamlit dashboard (~4,200 lines)
 │
 ├── scheduler/
-│   └── scheduler.py           # APScheduler daemon — 23 scheduled jobs
+│   └── scheduler.py           # APScheduler daemon — 24 scheduled jobs
 │
 ├── api/
 │   └── server.py              # FastAPI REST webhooks (TradingView alerts)
@@ -182,7 +182,7 @@ quantedge/
 │   └── manager.py             # Runtime config overrides from user_settings.json
 │
 ├── telegram/
-│   └── bot.py                 # Telegram bot (mirrors to Discord)
+│   └── bot.py                 # Telegram bot: /status /pnl /signals /positions /crypto /us /fno /regime /vix /run
 │
 ├── discord_bot/
 │   └── bot.py                 # Discord bot
@@ -197,7 +197,8 @@ quantedge/
 │   ├── test_portfolio_memory.py
 │   ├── test_paper_brokers.py
 │   ├── test_confidence_calibrator.py
-│   └── test_drift_analyser.py
+│   ├── test_drift_analyser.py
+│   └── test_market_permission.py
 │
 └── logs/                      # Runtime state (not committed)
     ├── trades.db              # SQLite: signals, trades, journals, calibration
@@ -292,16 +293,24 @@ Key scheduled jobs (IST, Mon–Fri):
 
 | Time | Job |
 |------|-----|
+| 07:30 | Earnings calendar refresh (NSE board meetings) |
+| 08:30 | GIFT Nifty pre-market gap check |
+| 09:00 | Morning digest — regime + top candidates (T-1 OHLCV) |
 | 09:15 | Morning NSE scan |
-| Every 15 min 09:15–15:00 | Price monitor (SL/TP check) |
+| Every 15 min 09:15–15:25 | Price monitor (SL/TP check) + F&O monitor |
+| 13:00 | Thesis re-evaluation (exit degraded positions) |
 | 15:00 | Afternoon NSE scan |
 | 15:25 | EOD force-close intraday |
-| 15:30 | Outcome tracker (mark TP_HIT / SL_HIT) |
+| 15:30 | Outcome tracker (mark TP_HIT / SL_HIT / EXPIRED) |
+| 15:45 | OHLCV store update |
 | 18:00 | EOD digest → Telegram + Discord |
 | 19:00 | US equities scan |
 | Every 4h | Crypto scan |
+| Sun 02:00 | Walk-forward strategy optimizer |
 | Sun 20:00 | Weekly summary |
 | 1st Sun of month 21:00 | Drift analysis |
+| Daily 02:30 | SQLite backup (7-day rolling) |
+| Daily 06:05 | Housekeeping (log trim, cache cleanup) |
 
 ### REST API (TradingView webhooks)
 
@@ -346,6 +355,10 @@ RSS feeds from MoneyControl, Economic Times, NSE announcements → Ollama llama3
 
 ### Stage 6: Layer 2 Permission
 `MarketPermission.evaluate()` checks regime, PCR, FII, sector signal, breadth, earnings window, F&O ban. Returns ALLOW / REDUCE / BLOCK. BLOCK → `signal.action = "BLOCKED"`.
+
+**BLOCK conditions:** bear regime + BUY, sideways regime + BUY (BUYs fully blocked in ranging markets), earnings ≤ 3 days, F&O ban.
+**REDUCE conditions:** recovery regime (×0.80), FII bearish (×0.85), FII+PCR double-bearish (×0.70), weak/very-weak breadth (×0.85/×0.75), bearish sector (×0.85), regime in transition (×0.80). Reductions are multiplicative.
+**REGIME_STABILITY_GATE** (config, default 2): regime must be confirmed for this many consecutive scans before the transition reduction is lifted.
 
 ### Stage 7: Risk Gate
 `RiskGate.check()` hard-blocks on: negative EV, confidence < 0.55, position size = 0, portfolio at max positions, PCR extreme. Blocked signals become `"ABSTAIN"`.
@@ -408,7 +421,7 @@ Capital allocation enforced by `services/paper_treasury.py`. All markets write t
 ## Memory & Calibration Feedback Loop
 
 ### Outcome Tracking
-`OutcomeTracker` (called by scheduler at 15:30) marks each signal `TP_HIT`, `SL_HIT`, or `EXPIRED`. Updates `outcome_exit` in `signals` table and `outcome_exit` / `outcome_5d` in `decision_journals`.
+`OutcomeTracker` (called by scheduler at 15:30) marks each signal `TP_HIT`, `SL_HIT`, or `EXPIRED`. Updates `signals` table with outcome fields **and** closes the matching `trades` row (`status='closed'`, `exit_price`, `pnl`) so the EOD digest P&L is accurate.
 
 ### Confidence Calibration
 `ConfidenceCalibrator.compute_confidence_calibration()` buckets resolved BUY signals by `p_direction` band (0.50–0.59, 0.60–0.69, 0.70–0.79, 0.80+) and computes:
@@ -581,7 +594,9 @@ sudo systemctl enable --now trading-agent trading-dashboard
 
 ## Known Issues & Audit Findings
 
-Full codebase audit completed May 2026. All actionable items resolved.
+Two full codebase audits completed May 2026. All actionable items resolved.
+
+### Audit 1 — Architecture & Configuration
 
 | # | File | Issue | Status |
 |---|------|-------|--------|
@@ -597,7 +612,25 @@ Full codebase audit completed May 2026. All actionable items resolved.
 | 10 | `execution/brokers/*` | `ASSET_CLASS_GATES` advisory-only at pipeline entry | ✅ Fixed — enforced inside each broker's `open_position()` |
 | 11 | `deploy/` | No systemd service files in repo | ✅ Fixed — `deploy/trading-agent.service` + `deploy/trading-dashboard.service` |
 | 12 | `logs/kite_access_token.txt` | Kite token stored as plain text | ⏭️ N/A — paper trading only |
-| 13 | SQLite | No backup strategy | ✅ Fixed — daily backup job (Job 19), 7-day rolling, online backup API |
+| 13 | SQLite | No backup strategy | ✅ Fixed — daily backup job, 7-day rolling, online backup API |
+
+### Audit 2 — Runtime Behaviour (Discord alert review, May 2026)
+
+| # | File | Issue | Status |
+|---|------|-------|--------|
+| A | `analysis/outcome_tracker.py` | `_write_outcome()` only updated `signals` table — `trades` rows stayed `status='open'`, causing Daily Summary to always show 0 trades / Rs.0 P&L | ✅ Fixed — `_close_trade_row()` now closes matching `trades` row on TP/SL/EXPIRED |
+| B | `scheduler/scheduler.py` | Options signals Telegram header sent unconditionally even if all positions skipped | ✅ Fixed — header only built and sent when `any_opened=True` |
+| C | `scheduler/scheduler.py` | Morning digest showed live-price candidates but used T-1 OHLCV data — confusing to read | ✅ Fixed — footer note `_Data is based on previous session close (T-1)_` added |
+| D | `strategy/market_permission.py` | SIDEWAYS regime only applied REDUCE ×0.70 — new BUY entries still placed in ranging markets | ✅ Fixed — SIDEWAYS BUY is now a hard BLOCK |
+| F | `strategy/market_permission.py` | Regime stability check used hardcoded `== 1` instead of `REGIME_STABILITY_GATE` config | ✅ Fixed — uses `0 < stability < REGIME_STABILITY_GATE` |
+| G | `scheduler/scheduler.py` | Options signals: Telegram sent even when all signals were skipped | ✅ Fixed — guarded by `any_opened` flag |
+| H | `execution/price_monitor.py` | Synthetic trade `entry_time` written as date-only string — EOD digest queries `LIKE '2026-05-17%'` on full isoformat column | ✅ Fixed — `datetime.now().isoformat()` |
+| I | `scheduler/scheduler.py` | `run_fno_monitor()` lacked scan lock check — ran concurrently with full scans | ✅ Fixed — skips when `_SCAN_ACTIVE` |
+| J | `scheduler/scheduler.py` | `_run_options_signals()` had no F&O gate check | ✅ Fixed — returns early if `ASSET_CLASS_GATES["fno"]["enabled"]` is false |
+| — | `analysis/earnings_guard.py` | `days_to_earnings()` called by pipeline runner but method was missing — silently fell back to 999 | ✅ Fixed — method added |
+| — | `scheduler/scheduler.py` | Earnings calendar only refreshed on first `EarningsGuard()` init per process — stale after midnight | ✅ Fixed — daily refresh job at 07:30 IST |
+| — | `backtest/optimiser.py` | `best_params` values were `np.float64` — displayed as `np.float64(14)` in Telegram | ✅ Fixed — `.item()` converts to Python native types |
+| — | `scheduler/scheduler.py` | BTC dominance alert fired every 4-hour crypto scan regardless of state change | ✅ Fixed — state-transition tracking via `_btc_blue_chip_last` |
 
 ---
 
@@ -628,4 +661,4 @@ All 8 phases of the PHASES.md roadmap are complete:
 
 ---
 
-*Last updated: 2026-05-15*
+*Last updated: 2026-05-17*

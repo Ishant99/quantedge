@@ -1544,7 +1544,7 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  20 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  24 JOBS")
     logger.info("  Earnings refresh   : 07:30 IST (Mon-Fri)")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
