@@ -1103,6 +1103,7 @@ with st.sidebar:
         "PORTFOLIO",
         "RESEARCH",
         "HISTORY",
+        "PAPER JOURNEY",
         "CONFIG",
     ], label_visibility="collapsed")
 
