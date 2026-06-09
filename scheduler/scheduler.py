@@ -1096,18 +1096,86 @@ def run_weekly_summary():
         send_telegram_message(f"*Agent ERROR (weekly summary)*\n`{e}`")
 
 
+def _auto_recalibrate(drift_score: float) -> None:
+    """
+    Called when drift_score >= DRIFT_HALT (0.40).
+    1. Runs confidence calibration to capture latest actual win rates.
+    2. Tightens MIN_TA_SCORE by +0.5 (capped at 7.0).
+    3. If overall win rate is below 2:1 breakeven (33.3%), raises MIN_CONFIDENCE to 0.65.
+    4. Sends a Telegram alert describing every change made.
+    """
+    import settings.manager as _S
+    from analysis.calibration import ConfidenceCalibrator
+
+    changes = []
+
+    # --- 1. Run calibration ---
+    try:
+        bands = ConfidenceCalibrator().compute_confidence_calibration()
+        total_wins   = sum(int(v.get("n_trades", 0) * (v.get("actual_win_rate") or 0))
+                           for v in bands.values() if v.get("actual_win_rate") is not None)
+        total_trades = sum(v.get("n_trades", 0) for v in bands.values())
+        overall_wr   = total_wins / total_trades if total_trades > 0 else None
+        changes.append(
+            f"Calibration re-run: {total_trades} resolved signals"
+            + (f", win rate {overall_wr*100:.1f}%" if overall_wr is not None else "")
+        )
+    except Exception as ce:
+        logger.warning(f"Auto-recalibrate: calibration step failed: {ce}")
+        overall_wr = None
+
+    # --- 2. Tighten MIN_TA_SCORE ---
+    try:
+        current_score = float(_S.get("MIN_TA_SCORE", 5.0) or 5.0)
+        new_score     = min(round(current_score + 0.5, 1), 7.0)
+        if new_score != current_score:
+            _S.set_value("MIN_TA_SCORE", new_score)
+            changes.append(f"MIN_TA_SCORE: {current_score} → {new_score}")
+        else:
+            changes.append(f"MIN_TA_SCORE already at cap ({current_score}), unchanged")
+    except Exception as se:
+        logger.warning(f"Auto-recalibrate: MIN_TA_SCORE update failed: {se}")
+
+    # --- 3. Raise MIN_CONFIDENCE if below breakeven ---
+    BREAKEVEN_WR = 1 / 3  # 33.3% for 2:1 R:R
+    try:
+        if overall_wr is not None and overall_wr < BREAKEVEN_WR:
+            current_conf = float(_S.get("MIN_CONFIDENCE", 0.60) or 0.60)
+            if current_conf < 0.65:
+                _S.set_value("MIN_CONFIDENCE", 0.65)
+                changes.append(f"MIN_CONFIDENCE: {current_conf:.2f} → 0.65 (win rate {overall_wr*100:.1f}% < breakeven)")
+    except Exception as ce:
+        logger.warning(f"Auto-recalibrate: MIN_CONFIDENCE update failed: {ce}")
+
+    # --- 4. Telegram alert ---
+    try:
+        change_lines = "\n".join(f"  • {c}" for c in changes)
+        msg = (
+            f"*⚠ Auto-Recalibration Triggered*\n"
+            f"Drift score: `{drift_score:.3f}` ≥ HALT threshold (0.40)\n\n"
+            f"*Changes applied:*\n{change_lines}\n\n"
+            f"_Review with: `python scripts/fno_breakdown.py --days 90`_"
+        )
+        send_telegram_message(msg)
+    except Exception as te:
+        logger.warning(f"Auto-recalibrate: Telegram alert failed: {te}")
+
+    logger.info(f"Auto-recalibrate complete: drift={drift_score:.3f} — {len(changes)} change(s)")
+
+
 def run_drift_analysis():
     """
     Monthly drift analysis: compare live paper outcomes to backtest predictions.
     Sends Telegram alert if drift_score >= 0.40 (HALT) or >= 0.20 (RECALIBRATE).
     Scheduled for the first Sunday of each month at 21:00 IST.
+    When drift >= HALT, also triggers auto-recalibration.
     """
     _write_scheduler_status("drift_analysis", "running")
     logger.info(
         f"Drift analysis triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}"
     )
     try:
-        from backtest.drift_analysis import DriftAnalyser
+        from backtest.drift_analysis import DriftAnalyser, DRIFT_HALT
         report = DriftAnalyser().analyse(lookback_days=90)
         status = report.get("recommendation", "OK")
         score  = report.get("drift_score", 0.0)
@@ -1116,6 +1184,11 @@ def run_drift_analysis():
             f"drift={score:.3f} recommendation={status}"
         )
         logger.info(f"Drift analysis complete: drift={score:.3f} → {status}")
+
+        if score >= DRIFT_HALT:
+            logger.warning(f"Drift HALT detected (score={score:.3f}) — triggering auto-recalibration")
+            _auto_recalibrate(score)
+
     except Exception as e:
         _write_scheduler_status("drift_analysis", "error", str(e))
         logger.error(f"Drift analysis failed: {e}")

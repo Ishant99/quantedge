@@ -63,18 +63,19 @@ def _send(token: str, chat_id: str, text: str):
 def _cmd_start(token, chat_id):
     _send(token, chat_id, """*QuantEdge Pro — Bot Commands*
 
-/status    — Portfolio + combined P&L + VIX + regime
-/pnl       — Today's P&L by market
-/review    — 30-day performance review
-/signals   — Latest buy signals
-/positions — Open NSE positions
-/crypto    — Open crypto positions
-/us        — Open US stock positions
-/fno       — Open F&O positions
-/regime    — Market regime + RSI + PCR + FII
-/vix       — India VIX level + position sizing impact
-/run       — Run NSE scan now
-/help      — Show this list
+/status     — Portfolio + combined P&L + VIX + regime
+/pnl        — Today's P&L by market
+/review     — 30-day performance review
+/breakdown  — F&O per-trade breakdown (last 90 days)
+/signals    — Latest buy signals
+/positions  — Open NSE positions
+/crypto     — Open crypto positions
+/us         — Open US stock positions
+/fno        — Open F&O positions
+/regime     — Market regime + RSI + PCR + FII
+/vix        — India VIX level + position sizing impact
+/run        — Run NSE scan now
+/help       — Show this list
 """)
 
 
@@ -546,22 +547,40 @@ def _cmd_review(token, chat_id, days: int = 30):
         _send(token, chat_id, f"❌ Review failed: `{e}`")
 
 
+def _cmd_breakdown(token, chat_id):
+    """F&O per-trade breakdown for the last 90 days."""
+    _send(token, chat_id, "⏳ Building F&O breakdown (last 90 days)...")
+    try:
+        from scripts.fno_breakdown import build_report, fetch_trades
+        from datetime import datetime as _dt, timedelta as _td
+        start = (_dt.now() - _td(days=90)).strftime("%Y-%m-%d")
+        end   = _dt.now().strftime("%Y-%m-%d")
+        lines, trades = build_report(start, end)
+        text = "\n".join(lines)
+        chunk_size = 4000
+        for i in range(0, len(text), chunk_size):
+            _send(token, chat_id, text[i:i + chunk_size])
+    except Exception as e:
+        _send(token, chat_id, f"❌ Breakdown failed: `{e}`")
+
+
 # ── Command dispatcher ────────────────────────────────────────────────────────
 
 COMMANDS = {
-    "/start":     _cmd_start,
-    "/help":      _cmd_start,
-    "/status":    _cmd_status,
-    "/pnl":       _cmd_pnl,
-    "/signals":   _cmd_signals,
-    "/positions": _cmd_positions,
-    "/crypto":    _cmd_crypto,
-    "/us":        _cmd_us,
-    "/fno":       _cmd_fno,
-    "/regime":    _cmd_regime,
-    "/vix":       _cmd_vix,
-    "/run":       _cmd_run,
-    "/review":    _cmd_review,
+    "/start":      _cmd_start,
+    "/help":       _cmd_start,
+    "/status":     _cmd_status,
+    "/pnl":        _cmd_pnl,
+    "/signals":    _cmd_signals,
+    "/positions":  _cmd_positions,
+    "/crypto":     _cmd_crypto,
+    "/us":         _cmd_us,
+    "/fno":        _cmd_fno,
+    "/regime":     _cmd_regime,
+    "/vix":        _cmd_vix,
+    "/run":        _cmd_run,
+    "/review":     _cmd_review,
+    "/breakdown":  _cmd_breakdown,
 }
 
 
