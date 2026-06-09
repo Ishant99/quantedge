@@ -19,13 +19,30 @@ from datetime import datetime, timedelta
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser(description="QuantEdge performance review")
-parser.add_argument("--days", type=int, default=21, help="Lookback window in days")
+parser.add_argument("--days",  type=int, default=30, help="Lookback window in days (default 30)")
+parser.add_argument("--month", type=str, default="",
+                    help="Calendar month, e.g. 2026-05 — overrides --days")
 parser.add_argument("--send",  action="store_true",  help="Send report to Telegram/Discord")
 args = parser.parse_args()
 
-DAYS    = args.days
-CUTOFF  = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d")
-TODAY   = datetime.now().strftime("%Y-%m-%d")
+if args.month:
+    try:
+        from calendar import monthrange
+        y, m   = int(args.month.split("-")[0]), int(args.month.split("-")[1])
+        CUTOFF = f"{y:04d}-{m:02d}-01"
+        last_d = monthrange(y, m)[1]
+        TODAY  = f"{y:04d}-{m:02d}-{last_d:02d}"
+        DAYS   = last_d
+        _MONTH_LABEL = args.month
+    except Exception:
+        print(f"[ERROR] --month must be YYYY-MM, got: {args.month}")
+        sys.exit(1)
+else:
+    DAYS  = args.days
+    TODAY = datetime.now().strftime("%Y-%m-%d")
+    _MONTH_LABEL = ""
+if not args.month:
+    CUTOFF = (datetime.now() - timedelta(days=DAYS)).strftime("%Y-%m-%d")
 _ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGS   = os.path.join(_ROOT, "logs")
 
@@ -89,8 +106,9 @@ conn = sqlite3.connect(SQLITE_DB_FILE)
 # HEADER
 # ─────────────────────────────────────────────────────────────────────────────
 
+_period_label = _MONTH_LABEL if _MONTH_LABEL else f"{DAYS} days"
 _p(SEP)
-_p(f"  QUANTEDGE — {DAYS}-DAY PERFORMANCE REVIEW")
+_p(f"  QUANTEDGE — PERFORMANCE REVIEW  ({_period_label.upper()})")
 _p(f"  Period : {CUTOFF}  →  {TODAY}")
 _p(f"  Report : {datetime.now().strftime('%d %b %Y  %H:%M IST')}")
 _p(SEP)
