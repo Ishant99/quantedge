@@ -63,17 +63,19 @@ def _send(token: str, chat_id: str, text: str):
 def _cmd_start(token, chat_id):
     _send(token, chat_id, """*QuantEdge Pro — Bot Commands*
 
-/status    — Portfolio + combined P&L + VIX + regime
-/pnl       — Today's P&L by market
-/signals   — Latest buy signals
-/positions — Open NSE positions
-/crypto    — Open crypto positions
-/us        — Open US stock positions
-/fno       — Open F&O positions
-/regime    — Market regime + RSI + PCR + FII
-/vix       — India VIX level + position sizing impact
-/run       — Run NSE scan now
-/help      — Show this list
+/status     — Portfolio + combined P&L + VIX + regime
+/pnl        — Today's P&L by market
+/review     — 30-day performance review
+/breakdown  — F&O per-trade breakdown (last 90 days)
+/signals    — Latest buy signals
+/positions  — Open NSE positions
+/crypto     — Open crypto positions
+/us         — Open US stock positions
+/fno        — Open F&O positions
+/regime     — Market regime + RSI + PCR + FII
+/vix        — India VIX level + position sizing impact
+/run        — Run NSE scan now
+/help       — Show this list
 """)
 
 
@@ -417,21 +419,168 @@ def _cmd_run(token, chat_id):
         _send(token, chat_id, f"❌ Scan failed: `{e}`")
 
 
+def _cmd_review(token, chat_id, days: int = 30):
+    """Performance review — key metrics for the last N days sent to Telegram."""
+    _send(token, chat_id, f"⏳ Building {days}-day review... please wait.")
+    try:
+        import sqlite3 as _sq
+        from datetime import datetime as _dt, timedelta as _td
+        from config import SQLITE_DB_FILE, VIRTUAL_CAPITAL, INR_PER_USD, INR_PER_USDT
+
+        CUTOFF = (_dt.now() - _td(days=days)).strftime("%Y-%m-%d")
+        TODAY  = _dt.now().strftime("%Y-%m-%d")
+
+        if not os.path.exists(SQLITE_DB_FILE):
+            _send(token, chat_id, "❌ Database not found")
+            return
+
+        conn = _sq.connect(SQLITE_DB_FILE)
+
+        def _q1(sql, p=()):
+            try:
+                return conn.execute(sql, p).fetchone()
+            except Exception:
+                return None
+
+        def _q(sql, p=()):
+            try:
+                return conn.execute(sql, p).fetchall()
+            except Exception:
+                return []
+
+        # NSE
+        sig_total = (_q1("SELECT COUNT(*) FROM signals WHERE timestamp>=? AND action='BUY'",
+                         (CUTOFF,)) or [0])[0]
+        sig_exec  = (_q1("SELECT COUNT(*) FROM signals WHERE timestamp>=? AND action='BUY' AND executed=1",
+                         (CUTOFF,)) or [0])[0]
+        nse       = _q1("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades "
+                        "WHERE status='closed' AND exit_time>=?", (CUTOFF,))
+        nse_count, nse_pnl = (nse[0], nse[1]) if nse else (0, 0.0)
+        nse_wins  = (_q1("SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl>0 AND exit_time>=?",
+                         (CUTOFF,)) or [0])[0]
+
+        # Other markets
+        fno = _q1("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM fno_trades WHERE status='closed' AND exit_time>=?", (CUTOFF,))
+        cry = _q1("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM crypto_trades WHERE status='closed' AND exit_time>=?", (CUTOFF,))
+        us  = _q1("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM us_trades WHERE status='closed' AND exit_time>=?", (CUTOFF,))
+        fno_pnl = fno[1] if fno else 0.0
+        cry_pnl = cry[1] if cry else 0.0
+        us_pnl  = us[1] if us else 0.0
+
+        # All-time signal outcomes
+        outcomes  = _q("SELECT outcome, COUNT(*) FROM signals WHERE outcome IS NOT NULL GROUP BY outcome")
+        total_res = sum(r[1] for r in outcomes)
+        tp_count  = next((r[1] for r in outcomes if r[0] == "TP_HIT"),  0)
+        sl_count  = next((r[1] for r in outcomes if r[0] == "SL_HIT"),  0)
+        exp_count = next((r[1] for r in outcomes if r[0] == "EXPIRED"), 0)
+
+        # Calibration
+        calib_ready = sum(
+            1 for lo, hi in [(0.50, 0.60), (0.60, 0.70), (0.70, 0.80), (0.80, 1.01)]
+            if ((_q1("SELECT COUNT(*) FROM signals WHERE outcome IS NOT NULL "
+                     "AND confidence>=? AND confidence<?", (lo, hi)) or [0])[0]) >= 10
+        )
+
+        # Regime activity this window
+        regime_rows = _q("SELECT regime_tag, COUNT(*) FROM signals "
+                         "WHERE timestamp>=? AND action='BUY' AND regime_tag!='' "
+                         "GROUP BY regime_tag ORDER BY COUNT(*) DESC", (CUTOFF,))
+        regime_str = "  ".join(f"{r}:{n}" for r, n in regime_rows) if regime_rows else "—"
+
+        # Top symbol
+        top_sym = _q1("SELECT symbol, SUM(pnl) FROM trades WHERE status='closed' AND exit_time>=? "
+                      "GROUP BY symbol ORDER BY SUM(pnl) DESC LIMIT 1", (CUTOFF,))
+
+        # Portfolio value
+        pf_data = _load_json(os.path.join(_LOGS, "virtual_portfolio.json"))
+        pf_val  = pf_data.get("cash", VIRTUAL_CAPITAL)
+        for pos in pf_data.get("positions", {}).values():
+            pf_val += pos.get("entry", 0) * pos.get("qty", 0)
+
+        combined = nse_pnl + fno_pnl + cry_pnl * INR_PER_USDT + us_pnl * INR_PER_USD
+        conn.close()
+
+        # Drift
+        drift_score, drift_rec = 0.0, "—"
+        try:
+            from backtest.drift_analysis import DriftAnalyser
+            dr = DriftAnalyser().analyse(lookback_days=days)
+            drift_score = dr.get("drift_score", 0.0)
+            drift_rec   = dr.get("recommendation", "OK")
+        except Exception:
+            pass
+
+        wr_str  = f"{nse_wins/nse_count*100:.0f}%" if nse_count else "—"
+        dr_icon = "🔴" if drift_rec == "HALT" else "🟡" if drift_rec == "RECALIBRATE" else "🟢"
+        pf_ret  = (pf_val - VIRTUAL_CAPITAL) / VIRTUAL_CAPITAL * 100
+
+        outcome_line = (
+            f"TP:{tp_count} | SL:{sl_count} | EXP:{exp_count} — WR:{tp_count/total_res*100:.1f}%"
+            if total_res else "no resolved signals yet"
+        )
+        top_line = f"🏆 Best symbol: *{top_sym[0]}*  Rs.{top_sym[1]:+,.0f}" if top_sym and top_sym[1] else ""
+
+        msg = (
+            f"*📊 {days}-Day Review  ({CUTOFF} → {TODAY})*\n\n"
+            f"*NSE Equity*\n"
+            f"Signals: {sig_total} gen | {sig_exec} executed\n"
+            f"Trades:  {nse_count} closed | WR: {wr_str}\n"
+            f"P&L: `Rs.{nse_pnl:+,.0f}`\n\n"
+            f"*Other Markets*\n"
+            f"F&O:    {fno[0] if fno else 0} trades | `Rs.{fno_pnl:+,.0f}`\n"
+            f"Crypto: {cry[0] if cry else 0} trades | `{cry_pnl:+.2f} USDT`\n"
+            f"US:     {us[0] if us else 0} trades | `${us_pnl:+.2f}`\n\n"
+            f"*Combined P&L: `Rs.{combined:+,.0f}`*\n"
+            f"Portfolio: `Rs.{pf_val:,.0f}` ({pf_ret:+.2f}%)\n\n"
+            f"🎯 *All-time signal outcomes*\n{outcome_line}\n"
+        )
+        if top_line:
+            msg += f"\n{top_line}\n"
+        msg += (
+            f"\n🌦 Regimes (this window): {regime_str}\n"
+            f"{dr_icon} Drift: `{drift_score:.3f}` → {drift_rec}\n"
+            f"📐 Calibration: {calib_ready}/4 bands active\n\n"
+            f"_Full report: `python scripts/review.py --days {days}`_"
+        )
+        _send(token, chat_id, msg)
+    except Exception as e:
+        _send(token, chat_id, f"❌ Review failed: `{e}`")
+
+
+def _cmd_breakdown(token, chat_id):
+    """F&O per-trade breakdown for the last 90 days."""
+    _send(token, chat_id, "⏳ Building F&O breakdown (last 90 days)...")
+    try:
+        from scripts.fno_breakdown import build_report, fetch_trades
+        from datetime import datetime as _dt, timedelta as _td
+        start = (_dt.now() - _td(days=90)).strftime("%Y-%m-%d")
+        end   = _dt.now().strftime("%Y-%m-%d")
+        lines, trades = build_report(start, end)
+        text = "\n".join(lines)
+        chunk_size = 4000
+        for i in range(0, len(text), chunk_size):
+            _send(token, chat_id, text[i:i + chunk_size])
+    except Exception as e:
+        _send(token, chat_id, f"❌ Breakdown failed: `{e}`")
+
+
 # ── Command dispatcher ────────────────────────────────────────────────────────
 
 COMMANDS = {
-    "/start":     _cmd_start,
-    "/help":      _cmd_start,
-    "/status":    _cmd_status,
-    "/pnl":       _cmd_pnl,
-    "/signals":   _cmd_signals,
-    "/positions": _cmd_positions,
-    "/crypto":    _cmd_crypto,
-    "/us":        _cmd_us,
-    "/fno":       _cmd_fno,
-    "/regime":    _cmd_regime,
-    "/vix":       _cmd_vix,
-    "/run":       _cmd_run,
+    "/start":      _cmd_start,
+    "/help":       _cmd_start,
+    "/status":     _cmd_status,
+    "/pnl":        _cmd_pnl,
+    "/signals":    _cmd_signals,
+    "/positions":  _cmd_positions,
+    "/crypto":     _cmd_crypto,
+    "/us":         _cmd_us,
+    "/fno":        _cmd_fno,
+    "/regime":     _cmd_regime,
+    "/vix":        _cmd_vix,
+    "/run":        _cmd_run,
+    "/review":     _cmd_review,
+    "/breakdown":  _cmd_breakdown,
 }
 
 
