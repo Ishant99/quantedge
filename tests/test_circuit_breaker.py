@@ -137,3 +137,111 @@ class TestDailyGateStillWorks:
                 assert key in status
         finally:
             _stop(patches)
+
+
+class TestConsecutiveLossCooldown:
+    def test_no_cooldown_after_two_loss_days(self, tmp_path):
+        cb, patches = _make_cb(tmp_path)
+        try:
+            cb.check(1_000_000)
+            # Simulate two loss days via manual state resets
+            cb.state["opening_value"] = 1_000_000
+            cb.state["current_value"] = 950_000   # loss day 1
+            cb.state["date"] = "2000-01-01"
+            cb._save_state()
+            cb.check(950_000)   # triggers _reset: loss day 2
+            cb.state["date"] = "2000-01-02"
+            cb._save_state()
+            cb.check(900_000)   # triggers _reset: loss day 2 (becomes day 2 counter)
+            status = cb.get_status()
+            # Cooldown should NOT be active yet (need 3 consecutive)
+            assert not status.get("cooldown_active", False)
+        finally:
+            _stop(patches)
+
+    def test_cooldown_activates_after_three_loss_days(self, tmp_path):
+        cb, patches = _make_cb(tmp_path)
+        try:
+            # Seed day 0: set state that looks like end-of-loss-day
+            cb.state = {
+                "date": "2000-01-01",
+                "opening_value": 1_000_000,
+                "current_value": 950_000,
+                "consecutive_loss_days": 2,  # already 2 in a row
+                "cooldown_active": False,
+                "cooldown_alert_sent": False,
+                "high_water_mark": 1_000_000,
+                "drawdown_alert_sent": False,
+                "month": "2000-01",
+                "month_opening_value": 1_000_000,
+                "monthly_alert_sent": False,
+            }
+            cb._save_state()
+            # Next check on a new day with lower value → 3rd consecutive loss
+            cb.check(900_000)   # triggers _reset → consecutive_loss_days = 3 → cooldown
+            status = cb.get_status()
+            assert status.get("cooldown_active", False)
+        finally:
+            _stop(patches)
+
+    def test_cooldown_clears_on_win_day(self, tmp_path):
+        cb, patches = _make_cb(tmp_path)
+        try:
+            # Start with cooldown already active
+            cb.state = {
+                "date": "2000-01-05",
+                "opening_value": 900_000,
+                "current_value": 950_000,  # end of day UP (win day)
+                "consecutive_loss_days": 3,
+                "cooldown_active": True,
+                "cooldown_alert_sent": True,
+                "high_water_mark": 1_000_000,
+                "drawdown_alert_sent": False,
+                "month": "2000-01",
+                "month_opening_value": 1_000_000,
+                "monthly_alert_sent": False,
+            }
+            cb._save_state()
+            # New day with higher value → win day → cooldown should clear
+            cb.check(1_000_000)
+            status = cb.get_status()
+            assert not status.get("cooldown_active", True)
+            assert status.get("consecutive_loss_days", 99) == 0
+        finally:
+            _stop(patches)
+
+    def test_status_includes_cooldown_fields(self, tmp_path):
+        cb, patches = _make_cb(tmp_path)
+        try:
+            cb.check(1_000_000)
+            status = cb.get_status()
+            assert "cooldown_active" in status
+            assert "consecutive_loss_days" in status
+        finally:
+            _stop(patches)
+
+    def test_cooldown_does_not_block_trading(self, tmp_path):
+        cb, patches = _make_cb(tmp_path, MAX_DAILY_LOSS_PCT=0.99,
+                               MAX_DRAWDOWN_PCT=0.99, MAX_WEEKLY_LOSS_PCT=0.99,
+                               MAX_MONTHLY_LOSS_PCT=0.99)
+        try:
+            # Force cooldown active
+            cb.state = {
+                "date": str(date.today()),
+                "opening_value": 1_000_000,
+                "current_value": 1_000_000,
+                "consecutive_loss_days": 3,
+                "cooldown_active": True,
+                "cooldown_alert_sent": True,
+                "high_water_mark": 1_000_000,
+                "drawdown_alert_sent": False,
+                "month": str(date.today())[:7],
+                "month_opening_value": 1_000_000,
+                "monthly_alert_sent": False,
+            }
+            cb._save_state()
+            # Trading should still be ALLOWED — cooldown only halves sizes, not blocks
+            allowed, _ = cb.check(1_000_000)
+            assert allowed
+        finally:
+            _stop(patches)

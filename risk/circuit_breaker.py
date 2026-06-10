@@ -147,22 +147,26 @@ class CircuitBreaker:
         logger.info(f"Circuit breaker OK — "
                     f"daily: {daily_loss_pct:+.1f}% | "
                     f"weekly: {weekly_loss_pct:+.1f}%")
+        if self.state.get("cooldown_active"):
+            logger.info("Consecutive-loss cooldown active — position sizes halved")
         return True, "OK"
 
     def get_status(self) -> dict:
         return {
-            "date":              self.state.get("date"),
-            "opening_value":     self.state.get("opening_value", 0),
-            "current_value":     self.state.get("current_value", 0),
-            "daily_loss_pct":    self.state.get("daily_loss_pct", 0),
-            "weekly_loss_pct":   self.state.get("weekly_loss_pct", 0),
-            "monthly_loss_pct":  self.state.get("monthly_loss_pct", 0),
-            "drawdown_pct":      self.state.get("drawdown_pct", 0),
-            "high_water_mark":   self.state.get("high_water_mark", 0),
-            "max_daily_pct":     MAX_DAILY_LOSS_PCT * 100,
-            "max_weekly_pct":    MAX_WEEKLY_LOSS_PCT * 100,
-            "max_monthly_pct":   MAX_MONTHLY_LOSS_PCT * 100,
-            "max_drawdown_pct":  MAX_DRAWDOWN_PCT * 100,
+            "date":                  self.state.get("date"),
+            "opening_value":         self.state.get("opening_value", 0),
+            "current_value":         self.state.get("current_value", 0),
+            "daily_loss_pct":        self.state.get("daily_loss_pct", 0),
+            "weekly_loss_pct":       self.state.get("weekly_loss_pct", 0),
+            "monthly_loss_pct":      self.state.get("monthly_loss_pct", 0),
+            "drawdown_pct":          self.state.get("drawdown_pct", 0),
+            "high_water_mark":       self.state.get("high_water_mark", 0),
+            "max_daily_pct":         MAX_DAILY_LOSS_PCT * 100,
+            "max_weekly_pct":        MAX_WEEKLY_LOSS_PCT * 100,
+            "max_monthly_pct":       MAX_MONTHLY_LOSS_PCT * 100,
+            "max_drawdown_pct":      MAX_DRAWDOWN_PCT * 100,
+            "consecutive_loss_days": self.state.get("consecutive_loss_days", 0),
+            "cooldown_active":       self.state.get("cooldown_active", False),
         }
 
     # ------------------------------------------------------------------
@@ -181,6 +185,36 @@ class CircuitBreaker:
             )
         except Exception:
             same_week = False
+
+        # ---- Consecutive-loss day tracking --------------------------------
+        prev_opening = self.state.get("opening_value", 0)
+        prev_current = self.state.get("current_value", 0)
+        yesterday_was_loss = (prev_opening > 0) and (prev_current < prev_opening)
+
+        consecutive_loss_days = self.state.get("consecutive_loss_days", 0)
+        cooldown_active       = self.state.get("cooldown_active", False)
+        cooldown_alert_sent   = self.state.get("cooldown_alert_sent", False)
+
+        if yesterday_was_loss:
+            consecutive_loss_days += 1
+        else:
+            # Win or flat day — reset streak and lift cooldown
+            consecutive_loss_days = 0
+            cooldown_active       = False
+            cooldown_alert_sent   = False
+
+        if consecutive_loss_days >= 3 and not cooldown_active:
+            cooldown_active = True
+
+        if cooldown_active and not cooldown_alert_sent:
+            send(
+                f"⚠️ *Consecutive-Loss Cooldown Active*\n"
+                f"3 consecutive losing days detected.\n"
+                f"Position sizes halved for today."
+            )
+            cooldown_alert_sent = True
+        # -------------------------------------------------------------------
+
         self.state = {
             "date":              today,
             "opening_value":     current_value,
@@ -190,11 +224,15 @@ class CircuitBreaker:
             "daily_alert_sent":  False,
             "weekly_alert_sent": self.state.get("weekly_alert_sent", False) if same_week else False,
             # Persist across daily resets — these track longer horizons
-            "high_water_mark":     self.state.get("high_water_mark", 0),
-            "drawdown_alert_sent": self.state.get("drawdown_alert_sent", False),
-            "month":               self.state.get("month", ""),
-            "month_opening_value": self.state.get("month_opening_value", 0),
-            "monthly_alert_sent":  self.state.get("monthly_alert_sent", False),
+            "high_water_mark":       self.state.get("high_water_mark", 0),
+            "drawdown_alert_sent":   self.state.get("drawdown_alert_sent", False),
+            "month":                 self.state.get("month", ""),
+            "month_opening_value":   self.state.get("month_opening_value", 0),
+            "monthly_alert_sent":    self.state.get("monthly_alert_sent", False),
+            # Consecutive-loss tracking
+            "consecutive_loss_days": consecutive_loss_days,
+            "cooldown_active":       cooldown_active,
+            "cooldown_alert_sent":   cooldown_alert_sent,
         }
         self._save_state()
 
