@@ -59,6 +59,9 @@ resolved-trades-per-week per setup, not for simulated P&L.
 
 ### Phase 0 — Stop and reset (Day 1)
 
+> **Implemented.** On the VM run: `python scripts/phase0_reset.py` then
+> `sudo systemctl restart trading-agent`.
+
 | Action | Detail |
 |--------|--------|
 | **Disable F&O entirely** | Set the asset-class gate off. No new F&O entries until an equity edge is proven AND spreads replace naked buys. F&O is 99% of losses and 0% of learning. |
@@ -66,6 +69,9 @@ resolved-trades-per-week per setup, not for simulated P&L.
 | **Apply GAP_ANALYSIS Phase-1 safety fixes** | Drawdown breaker, calibration threshold 10→5, WAL/indices/backups. |
 
 ### Phase 1 — Honest revalidation (Week 1-2)
+
+> **Implemented.** On the VM run overnight: `python scripts/validate_setups.py --years 3`.
+> Results print to console, save to `logs/setup_validation.json`, and summarize to Telegram.
 
 Re-run the research loop the system was designed for but never executed:
 

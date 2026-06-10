@@ -164,6 +164,37 @@ def run_db_backup():
         logger.warning(f"DB backup failed: {e}")
 
 
+def init_db_safety():
+    """
+    One-time DB hardening at scheduler startup:
+    - WAL journal mode (persistent once set) so 24 jobs + bot threads can
+      read while one writes, instead of hitting 'database is locked'.
+    - Indices on hot query paths (idempotent CREATE INDEX IF NOT EXISTS).
+    """
+    try:
+        import sqlite3
+        from config import SQLITE_DB_FILE
+        os.makedirs(os.path.dirname(SQLITE_DB_FILE), exist_ok=True)
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            conn.execute("PRAGMA busy_timeout=10000")
+            for ddl in (
+                "CREATE INDEX IF NOT EXISTS idx_trades_symbol_status ON trades(symbol, status)",
+                "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time)",
+                "CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts ON signals(symbol, timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_signals_outcome ON signals(outcome)",
+                "CREATE INDEX IF NOT EXISTS idx_fno_instrument_entry ON fno_trades(instrument, entry_time)",
+                "CREATE INDEX IF NOT EXISTS idx_fno_status_exit ON fno_trades(status, exit_time)",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # table may not exist yet on a fresh install
+        logger.info(f"DB safety init complete — journal_mode={mode}, hot indices ensured")
+    except Exception as e:
+        logger.warning(f"DB safety init failed (non-fatal): {e}")
+
+
 def run_housekeeping():
     """Trim stale logs/caches so Oracle Free VM storage stays healthy."""
     _write_scheduler_status("housekeeping", "running")
@@ -1354,6 +1385,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     _write_scheduler_status("scheduler", "booting", "Scheduler process started")
+
+    init_db_safety()
 
     # Ollama availability check — sentiment quality depends on this
     try:

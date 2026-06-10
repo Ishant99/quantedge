@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 from datetime import datetime, date
-from config import VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE, MAX_DAILY_LOSS_PCT, MAX_WEEKLY_LOSS_PCT
+from config import (VIRTUAL_CAPITAL, VIRTUAL_PORTFOLIO_FILE, MAX_DAILY_LOSS_PCT,
+                    MAX_WEEKLY_LOSS_PCT, MAX_MONTHLY_LOSS_PCT, MAX_DRAWDOWN_PCT)
 from utils import get_logger
 from utils.telegram import send
 
@@ -47,10 +48,63 @@ class CircuitBreaker:
         daily_loss_pct  = (opening_value - current_portfolio_value) / opening_value * 100
         weekly_loss_pct = self._weekly_loss(current_portfolio_value)
 
-        self.state["current_value"]   = current_portfolio_value
-        self.state["daily_loss_pct"]  = round(daily_loss_pct, 2)
-        self.state["weekly_loss_pct"] = round(weekly_loss_pct, 2)
+        # High-water mark for max-drawdown check (persists across days)
+        hwm = max(self.state.get("high_water_mark", 0) or 0, current_portfolio_value)
+        self.state["high_water_mark"] = hwm
+        drawdown_pct = (hwm - current_portfolio_value) / hwm * 100 if hwm > 0 else 0.0
+
+        # Month opening value for monthly loss limit (resets on month change)
+        this_month = today[:7]  # YYYY-MM
+        if self.state.get("month") != this_month:
+            self.state["month"] = this_month
+            self.state["month_opening_value"] = current_portfolio_value
+            self.state["monthly_alert_sent"] = False
+        month_open = self.state.get("month_opening_value") or current_portfolio_value
+        monthly_loss_pct = (month_open - current_portfolio_value) / month_open * 100 if month_open > 0 else 0.0
+
+        self.state["current_value"]    = current_portfolio_value
+        self.state["daily_loss_pct"]   = round(daily_loss_pct, 2)
+        self.state["weekly_loss_pct"]  = round(weekly_loss_pct, 2)
+        self.state["monthly_loss_pct"] = round(monthly_loss_pct, 2)
+        self.state["drawdown_pct"]     = round(drawdown_pct, 2)
         self._save_state()
+
+        # Max drawdown from high-water mark — hardest stop, checked first
+        if drawdown_pct >= MAX_DRAWDOWN_PCT * 100:
+            reason = (f"Max drawdown circuit breaker triggered — "
+                      f"portfolio down {drawdown_pct:.1f}% from peak ₹{hwm:,.0f} "
+                      f"(limit: {MAX_DRAWDOWN_PCT*100:.0f}%)")
+            if not self.state.get("drawdown_alert_sent"):
+                send(
+                    f"🛑 *Trading HALTED — Max Drawdown Hit*\n"
+                    f"Portfolio is down *{drawdown_pct:.1f}%* from its peak of "
+                    f"`₹{hwm:,.0f}` (limit is {MAX_DRAWDOWN_PCT*100:.0f}%).\n"
+                    f"No new trades until the drawdown is reviewed.\n"
+                    f"_This gate does NOT auto-reset — review the strategy, then "
+                    f"reset the high-water mark in logs/circuit\\_breaker.json._"
+                )
+                self.state["drawdown_alert_sent"] = True
+                self._save_state()
+            logger.warning(reason)
+            return False, reason
+
+        # Monthly loss limit
+        if monthly_loss_pct >= MAX_MONTHLY_LOSS_PCT * 100:
+            reason = (f"Monthly circuit breaker triggered — "
+                      f"portfolio down {monthly_loss_pct:.1f}% this month "
+                      f"(limit: {MAX_MONTHLY_LOSS_PCT*100:.0f}%)")
+            if not self.state.get("monthly_alert_sent"):
+                send(
+                    f"🚨 *Trading Paused — Monthly Loss Limit Hit*\n"
+                    f"Portfolio is down *{monthly_loss_pct:.1f}%* this month "
+                    f"(limit is {MAX_MONTHLY_LOSS_PCT*100:.0f}%).\n"
+                    f"No new trades until next month.\n"
+                    f"_Existing positions are still being monitored._"
+                )
+                self.state["monthly_alert_sent"] = True
+                self._save_state()
+            logger.warning(reason)
+            return False, reason
 
         if daily_loss_pct >= MAX_DAILY_LOSS_PCT * 100:
             reason = (f"Daily circuit breaker triggered — "
@@ -97,13 +151,18 @@ class CircuitBreaker:
 
     def get_status(self) -> dict:
         return {
-            "date":             self.state.get("date"),
-            "opening_value":    self.state.get("opening_value", 0),
-            "current_value":    self.state.get("current_value", 0),
-            "daily_loss_pct":   self.state.get("daily_loss_pct", 0),
-            "weekly_loss_pct":  self.state.get("weekly_loss_pct", 0),
-            "max_daily_pct":    MAX_DAILY_LOSS_PCT * 100,
-            "max_weekly_pct":   MAX_WEEKLY_LOSS_PCT * 100,
+            "date":              self.state.get("date"),
+            "opening_value":     self.state.get("opening_value", 0),
+            "current_value":     self.state.get("current_value", 0),
+            "daily_loss_pct":    self.state.get("daily_loss_pct", 0),
+            "weekly_loss_pct":   self.state.get("weekly_loss_pct", 0),
+            "monthly_loss_pct":  self.state.get("monthly_loss_pct", 0),
+            "drawdown_pct":      self.state.get("drawdown_pct", 0),
+            "high_water_mark":   self.state.get("high_water_mark", 0),
+            "max_daily_pct":     MAX_DAILY_LOSS_PCT * 100,
+            "max_weekly_pct":    MAX_WEEKLY_LOSS_PCT * 100,
+            "max_monthly_pct":   MAX_MONTHLY_LOSS_PCT * 100,
+            "max_drawdown_pct":  MAX_DRAWDOWN_PCT * 100,
         }
 
     # ------------------------------------------------------------------
@@ -130,6 +189,12 @@ class CircuitBreaker:
             "weekly_loss_pct":   0.0,
             "daily_alert_sent":  False,
             "weekly_alert_sent": self.state.get("weekly_alert_sent", False) if same_week else False,
+            # Persist across daily resets — these track longer horizons
+            "high_water_mark":     self.state.get("high_water_mark", 0),
+            "drawdown_alert_sent": self.state.get("drawdown_alert_sent", False),
+            "month":               self.state.get("month", ""),
+            "month_opening_value": self.state.get("month_opening_value", 0),
+            "monthly_alert_sent":  self.state.get("monthly_alert_sent", False),
         }
         self._save_state()
 

@@ -147,10 +147,11 @@ STRATEGY_QUALITY_MAX_BOOST = float(_S("STRATEGY_QUALITY_MAX_BOOST", default=0.12
 RISK_PER_TRADE_PCT   = float(_S("RISK_PER_TRADE_PCT",   default=0.02))
 MAX_OPEN_POSITIONS   = int(  _S("MAX_OPEN_POSITIONS",   default=5))
 REWARD_RISK_RATIO    = float(_S("REWARD_RISK_RATIO",    default=2.0))
-MAX_DRAWDOWN_PCT     = 0.10
+MAX_DRAWDOWN_PCT     = float(_S("MAX_DRAWDOWN_PCT",     default=0.10))  # from equity high-water mark
 ATR_SL_MULTIPLIER    = float(_S("ATR_SL_MULTIPLIER",   default=1.5))
 MAX_DAILY_LOSS_PCT   = float(_S("MAX_DAILY_LOSS_PCT",   default=0.03))
 MAX_WEEKLY_LOSS_PCT  = float(_S("MAX_WEEKLY_LOSS_PCT",  default=0.07))
+MAX_MONTHLY_LOSS_PCT = float(_S("MAX_MONTHLY_LOSS_PCT", default=0.15))  # halt month if breached
 TRAIL_PCT            = float(_S("TRAIL_PCT",            default=0.02))
 CORRELATION_THRESHOLD= float(_S("CORRELATION_THRESHOLD",default=0.75))
 MAX_SAME_SECTOR      = int(  _S("MAX_SAME_SECTOR",      default=2))
@@ -229,6 +230,7 @@ FNO_LOT_SIZES      = {"NIFTY": NIFTY_LOT_SIZE, "BANKNIFTY": BANKNIFTY_LOT_SIZE}
 # F&O exit rules
 FNO_TP_MULT        = float(_S("FNO_TP_MULT", default=2.0))   # exit when premium 2x
 FNO_SL_MULT        = float(_S("FNO_SL_MULT", default=0.70))  # exit when premium -30% (was 0.50 → -50%, too wide)
+FNO_RISK_PCT       = float(_S("FNO_RISK_PCT", default=0.005)) # max capital at risk per F&O trade (worst-case SL loss)
 FNO_MAX_POSITIONS  = int(  _S("FNO_MAX_POSITIONS",    default=6))  # max concurrent F&O positions
 US_MAX_POSITIONS   = int(  _S("US_MAX_POSITIONS",     default=3))  # max concurrent US positions
 CRYPTO_MAX_POSITIONS=int(  _S("CRYPTO_MAX_POSITIONS", default=2))  # max concurrent crypto positions
@@ -317,10 +319,10 @@ SR_SELL_ZONE_PENALTY   = float(_S("SR_SELL_ZONE_PENALTY",   default=0.10))  # pe
 # Set the "enabled" flag to True in user_settings.json once Phase 6 is done.
 # -----------------------------------------------------------------------------
 ASSET_CLASS_GATES: dict = {
-    "nse_spot":    {"enabled": bool(_S("ASSET_NSE_SPOT_ENABLED",  default="true")  != "false"), "phase_required": 0},
-    "fno":         {"enabled": bool(_S("ASSET_FNO_ENABLED",       default="false") != "false"), "phase_required": 6},
-    "crypto":      {"enabled": bool(_S("ASSET_CRYPTO_ENABLED",    default="false") != "false"), "phase_required": 6},
-    "us_equities": {"enabled": bool(_S("ASSET_US_ENABLED",        default="false") != "false"), "phase_required": 6},
+    "nse_spot":    {"enabled": _bool("ASSET_NSE_SPOT_ENABLED", default=True),  "phase_required": 0},
+    "fno":         {"enabled": _bool("ASSET_FNO_ENABLED",      default=False), "phase_required": 6},
+    "crypto":      {"enabled": _bool("ASSET_CRYPTO_ENABLED",   default=False), "phase_required": 6},
+    "us_equities": {"enabled": _bool("ASSET_US_ENABLED",       default=False), "phase_required": 6},
 }
 
 # -----------------------------------------------------------------------------
