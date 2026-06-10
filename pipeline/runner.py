@@ -677,6 +677,21 @@ class TradingPipeline:
             abstention_reason = ""
 
             if sig.action == "BUY" and rg is not None and rg.passed:
+                # Check if this setup has been auto-disabled by Phase-3 gates
+                _setup_name = (getattr(sig, "setup_type", "") or "").upper()
+                if _setup_name:
+                    try:
+                        import settings.manager as _sm
+                        if str(_sm.get(f"SETUP_{_setup_name}_DISABLED") or "").lower() == "true":
+                            sig.action = "ABSTAIN"
+                            sizing = None
+                            abstained = True
+                            abstention_reason = f"setup {_setup_name} disabled by Phase-3 KILL gate"
+                            logger.info(f"[Stage 8] {sig.symbol}: setup {_setup_name} disabled — skipping")
+                    except Exception:
+                        pass
+
+            if sig.action == "BUY" and rg is not None and rg.passed:
                 try:
                     sent_result = sent_results.get(sig.symbol) if sent_results else None
                     sentiment_modifier = 0.0
@@ -688,6 +703,32 @@ class TradingPipeline:
                     sector_multiplier = 1.2 if sector_score >= 7.0 else 0.8 if sector_score <= 3.0 else 1.0
 
                     reduction = perm.reduction_factor if perm else 1.0
+
+                    # Consecutive-loss cooldown: halve sizes after 3 losing days
+                    try:
+                        from risk.circuit_breaker import CircuitBreaker as _CB
+                        _cb_status = _CB().get_status()
+                        if _cb_status.get("cooldown_active"):
+                            reduction *= 0.5
+                            logger.debug(
+                                f"[Stage 8] {sig.symbol}: consecutive-loss cooldown active — size ×0.5"
+                            )
+                    except Exception:
+                        pass
+
+                    # Per-setup size multiplier from Phase-3 SCALE/PROBATION gates
+                    _setup_key = (getattr(sig, "setup_type", "") or "").upper()
+                    if _setup_key:
+                        try:
+                            import settings.manager as _sm2
+                            _smult = float(_sm2.get(f"SETUP_{_setup_key}_SIZE_MULT") or 1.0)
+                            if _smult != 1.0:
+                                reduction *= _smult
+                                logger.debug(
+                                    f"[Stage 8] {sig.symbol}: setup size mult ×{_smult:.2f}"
+                                )
+                        except Exception:
+                            pass
 
                     _REGIME_MULT = {"bull": 1.0, "recovery": 0.85, "sideways": 0.70, "bear": 0.50}
                     regime_multiplier = _REGIME_MULT.get(ctx.regime, 1.0)
@@ -909,7 +950,7 @@ class TradingPipeline:
         except Exception as exc:
             logger.error(f"[Stage 1] fatal: {exc}")
             ctx = MarketContext(
-                regime="bull", regime_stability=0,
+                regime="sideways", regime_stability=0,
                 pcr_signal="neutral", fii_signal="neutral",
                 breadth_signal="moderate", nifty_trend="flat",
                 sector_scores={}, timestamp=run_ts,

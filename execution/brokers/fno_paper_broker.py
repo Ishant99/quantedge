@@ -389,6 +389,28 @@ class FNOPaperBroker:
                 logger.warning(f"Cannot fetch premium for {index} {strike} {opt_type} — position not opened")
                 return None
 
+        # Risk budget gate: worst-case loss at SL must fit FNO_RISK_PCT of capital.
+        # Sizes lots down to fit; rejects the trade when even 1 lot exceeds it.
+        from config import VIRTUAL_CAPITAL, FNO_RISK_PCT
+        sl_mult = float(self._cfg("FNO_SL_MULT", SL_MULT) or SL_MULT)
+        risk_per_lot = entry_premium * lot_size * (1 - sl_mult)
+        risk_budget  = float(VIRTUAL_CAPITAL) * FNO_RISK_PCT
+        if risk_per_lot > 0:
+            max_lots = int(risk_budget // risk_per_lot)
+            if max_lots < 1:
+                logger.warning(
+                    f"F&O risk gate: {index} {strike}{opt_type} blocked — 1 lot risks "
+                    f"Rs.{risk_per_lot:,.0f} at SL, budget is Rs.{risk_budget:,.0f} "
+                    f"({FNO_RISK_PCT*100:.2f}% of capital). Premium too expensive."
+                )
+                return None
+            if lots > max_lots:
+                logger.info(
+                    f"F&O risk gate: {index} {strike}{opt_type} lots reduced "
+                    f"{lots} → {max_lots} to fit Rs.{risk_budget:,.0f} risk budget"
+                )
+                lots = max_lots
+
         qty = lots * lot_size
         capital_used = round(entry_premium * qty, 2)
         reserve_inr = reserve_for_fno_order(index, opt_type, entry_premium, qty)

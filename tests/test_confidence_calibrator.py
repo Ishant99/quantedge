@@ -415,7 +415,7 @@ class TestGetCorrectionFactor:
             confidence_bands={
                 "0.70-0.79": {
                     "stated_p": 0.745, "actual_win_rate": 0.60,
-                    "correction_factor": 0.806, "n_trades": 5  # < 10
+                    "correction_factor": 0.806, "n_trades": 4  # < 5 minimum
                 }
             }
         )
@@ -424,3 +424,21 @@ class TestGetCorrectionFactor:
             c.save_calibration_report(report)
             factor = ConfidenceCalibrator.get_correction_factor(0.72)
         assert factor is None
+
+    def test_returns_factor_at_five_trades(self, tmp_path):
+        """5 resolved trades is the new minimum — corrections activate sooner."""
+        db = _make_db(tmp_path)
+        from analysis.calibration import CalibrationReport, ConfidenceCalibrator
+        report = CalibrationReport(
+            confidence_bands={
+                "0.70-0.79": {
+                    "stated_p": 0.745, "actual_win_rate": 0.60,
+                    "correction_factor": 0.806, "n_trades": 5
+                }
+            }
+        )
+        c = ConfidenceCalibrator()
+        with patch("analysis.calibration.SQLITE_DB_FILE", db):
+            c.save_calibration_report(report)
+            factor = ConfidenceCalibrator.get_correction_factor(0.72)
+        assert factor == pytest.approx(0.806, abs=0.001)

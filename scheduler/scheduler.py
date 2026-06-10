@@ -164,6 +164,37 @@ def run_db_backup():
         logger.warning(f"DB backup failed: {e}")
 
 
+def init_db_safety():
+    """
+    One-time DB hardening at scheduler startup:
+    - WAL journal mode (persistent once set) so 24 jobs + bot threads can
+      read while one writes, instead of hitting 'database is locked'.
+    - Indices on hot query paths (idempotent CREATE INDEX IF NOT EXISTS).
+    """
+    try:
+        import sqlite3
+        from config import SQLITE_DB_FILE
+        os.makedirs(os.path.dirname(SQLITE_DB_FILE), exist_ok=True)
+        with sqlite3.connect(SQLITE_DB_FILE) as conn:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            conn.execute("PRAGMA busy_timeout=10000")
+            for ddl in (
+                "CREATE INDEX IF NOT EXISTS idx_trades_symbol_status ON trades(symbol, status)",
+                "CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time)",
+                "CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts ON signals(symbol, timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_signals_outcome ON signals(outcome)",
+                "CREATE INDEX IF NOT EXISTS idx_fno_instrument_entry ON fno_trades(instrument, entry_time)",
+                "CREATE INDEX IF NOT EXISTS idx_fno_status_exit ON fno_trades(status, exit_time)",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # table may not exist yet on a fresh install
+        logger.info(f"DB safety init complete — journal_mode={mode}, hot indices ensured")
+    except Exception as e:
+        logger.warning(f"DB safety init failed (non-fatal): {e}")
+
+
 def run_housekeeping():
     """Trim stale logs/caches so Oracle Free VM storage stays healthy."""
     _write_scheduler_status("housekeeping", "running")
@@ -1241,6 +1272,112 @@ def run_weekly_optimizer():
         send_telegram_message(f"*Agent ERROR (optimizer)*\n`{e}`")
 
 
+def run_setup_gates():
+    """
+    Phase-3 statistical kill/scale/promote gates (TURNAROUND_PLAN.md).
+
+    Run every Sunday at 19:00 IST. Evaluates each setup's Wilson 95% lower
+    bound against its breakeven win rate and takes pre-committed actions:
+
+      KILL      → auto-disable setup via SETUP_<NAME>_DISABLED setting
+      PROBATION → halve the setup's size multiplier (SETUP_<NAME>_SIZE_MULT)
+      SCALE     → increase size multiplier by +0.5 step; check PromotionChecklist
+      OK / INSUFFICIENT_DATA → report only, no size change
+    """
+    _write_scheduler_status("setup_gates", "running")
+    logger.info(
+        f"Setup gates check triggered at {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}"
+    )
+    try:
+        import settings.manager as _S
+        from analysis.setup_tracker import SetupTracker, KNOWN_SETUPS
+        from research.promotion_checklist import PromotionChecker
+
+        tracker   = SetupTracker()
+        all_stats = tracker.evaluate_all()
+        checker   = PromotionChecker()
+
+        actions_taken: list[str] = []
+
+        for setup, stats in all_stats.items():
+            verdict = stats.verdict
+
+            if verdict == "KILL":
+                disabled_key = f"SETUP_{setup.upper()}_DISABLED"
+                _S.set_value(disabled_key, "true")
+                actions_taken.append(
+                    f"🛑 *{setup}* KILLED — auto-disabled\n"
+                    f"   {stats.verdict_reason}"
+                )
+                logger.warning(f"Setup gate KILL: {setup} — {stats.verdict_reason}")
+
+            elif verdict == "PROBATION":
+                size_key = f"SETUP_{setup.upper()}_SIZE_MULT"
+                current  = float(_S.get(size_key) or 1.0)
+                new_mult = max(0.25, round(current * 0.5, 2))
+                _S.set_value(size_key, new_mult)
+                actions_taken.append(
+                    f"⚠️ *{setup}* PROBATION — size ×{current:.2f} → ×{new_mult:.2f}\n"
+                    f"   {stats.verdict_reason}"
+                )
+                logger.warning(
+                    f"Setup gate PROBATION: {setup} — size halved to {new_mult}"
+                )
+
+            elif verdict == "SCALE":
+                size_key = f"SETUP_{setup.upper()}_SIZE_MULT"
+                current  = float(_S.get(size_key) or 1.0)
+                new_mult = min(2.0, round(current + 0.5, 2))
+                _S.set_value(size_key, new_mult)
+                actions_taken.append(
+                    f"📈 *{setup}* SCALING — size ×{current:.2f} → ×{new_mult:.2f}\n"
+                    f"   {stats.verdict_reason}"
+                )
+                logger.info(
+                    f"Setup gate SCALE: {setup} — size increased to {new_mult}"
+                )
+                # Check promotion eligibility
+                try:
+                    report = checker.evaluate(setup)
+                    if report.overall_pass:
+                        actions_taken.append(
+                            f"🏆 *{setup}* PROMOTE candidate — all PromotionChecklist gates passed!"
+                        )
+                        logger.info(
+                            f"Setup gate: {setup} is a promotion candidate"
+                        )
+                except Exception as _pe:
+                    logger.debug(f"Setup gate: PromotionChecker failed for {setup}: {_pe}")
+
+        date_str = datetime.now(IST).strftime("%Y-%m-%d")
+        if actions_taken:
+            msg = (
+                f"*Setup Gates — {date_str}*\n\n"
+                + "\n\n".join(actions_taken)
+            )
+        else:
+            summary_lines = "\n".join(
+                f"  • {s}: {st.verdict} (n={st.n_trades}, LB={st.wilson_lb_95:.1%})"
+                for s, st in all_stats.items()
+            )
+            msg = (
+                f"*Setup Gates — {date_str}*\n"
+                f"All setups within normal bounds — no action taken.\n"
+                f"{summary_lines}"
+            )
+        send_telegram_message(msg)
+
+        _write_scheduler_status(
+            "setup_gates", "ok",
+            f"{len(actions_taken)} gate action(s) taken"
+        )
+
+    except Exception as e:
+        _write_scheduler_status("setup_gates", "error", str(e))
+        logger.error(f"Setup gates check failed: {e}")
+        send_telegram_message(f"*Agent ERROR (setup gates)*\n`{e}`")
+
+
 # =============================================================================
 # Alert deduplication — prevents the same (symbol, action) from firing
 # multiple times in one trading day (e.g., intraday + daily scan overlap).
@@ -1354,6 +1491,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     _write_scheduler_status("scheduler", "booting", "Scheduler process started")
+
+    init_db_safety()
 
     # Ollama availability check — sentiment quality depends on this
     try:
@@ -1599,6 +1738,15 @@ if __name__ == "__main__":
         misfire_grace_time=_GRACE,
     )
 
+    # --- Job 13: Phase-3 setup gates every Sunday 19:00 IST ---
+    scheduler.add_job(
+        run_setup_gates,
+        CronTrigger(day_of_week="sun", hour=19, minute=0, timezone=IST),
+        id="setup_gates",
+        name="Setup Gates (Sun 19:00 IST)",
+        misfire_grace_time=_GRACE,
+    )
+
     scheduler.add_job(
         run_housekeeping,
         CronTrigger(hour=6, minute=5, timezone=IST),
@@ -1617,7 +1765,7 @@ if __name__ == "__main__":
     )
 
     logger.info("=" * 60)
-    logger.info("  QUANTEDGE SCHEDULER STARTED  -  24 JOBS")
+    logger.info("  QUANTEDGE SCHEDULER STARTED  -  25 JOBS")
     logger.info("  Earnings refresh   : 07:30 IST (Mon-Fri)")
     logger.info("  GIFT Nifty check   : 08:30 IST (Mon-Fri)")
     logger.info("  Morning digest     : 09:00 IST (Mon-Fri) — regime + top candidates")
@@ -1635,6 +1783,7 @@ if __name__ == "__main__":
     logger.info("  Crypto scan        : every 4h (24/7)")
     logger.info("  Weekly report      : Sunday 20:00 IST")
     logger.info("  Walk-fwd optimizer : Sunday 02:00 IST")
+    logger.info("  Setup gates (Ph-3) : Sunday 19:00 IST — kill/scale/promote")
     logger.info("  Drift analysis     : 1st Sunday/month 21:00 IST")
     logger.info("  Housekeeping       : 06:05 IST (daily)")
     logger.info("  DB backup          : 02:30 IST (daily, 7-day rolling)")

@@ -478,7 +478,7 @@ class ConfidenceCalibrator:
         """
         Return the correction factor for *p_direction* from the latest saved
         CalibrationReport.  Returns None when no report exists or the band
-        has fewer than 10 trades (insufficient to trust).
+        has fewer than 5 trades (insufficient to trust).
 
         The corrected p_direction is: p_direction × correction_factor.
         A factor < 1.0 means the system is overconfident in that band.
@@ -495,8 +495,16 @@ class ConfidenceCalibrator:
         for label, lo, hi in BANDS:
             if lo <= p_direction < hi:
                 band = report.confidence_bands.get(label, {})
-                if band.get("n_trades", 0) >= 10:
-                    return band.get("correction_factor")
+                # 5+ trades is enough to act on — waiting for 10 left most
+                # bands uncorrected while the system ran 35-40% overconfident
+                if band.get("n_trades", 0) >= 5:
+                    cf = band.get("correction_factor")
+                    if cf is not None and cf < 0.70:
+                        logger.warning(
+                            f"Calibration band {label}: severe overconfidence "
+                            f"(correction_factor={cf:.2f}, n={band.get('n_trades')})"
+                        )
+                    return cf
         return None
 
     @staticmethod
