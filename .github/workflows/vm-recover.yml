@@ -1,0 +1,108 @@
+# =============================================================================
+# .github/workflows/vm-recover.yml — One-off VM access + data recovery
+#
+# Manual, workflow_dispatch only. Runs on the existing self-hosted runner
+# (already installed on the Oracle VM, see deploy.yml), so it needs no SSH
+# credentials of its own — it IS the local shell on that box.
+#
+# What it does:
+#   1. Appends a given SSH public key to the ubuntu user's authorized_keys
+#      (does not remove or touch any existing keys).
+#   2. Prints the VM's public IP so you know where to `ssh ubuntu@<ip>`.
+#   3. Backs up .env, the Kite access token, crontab, and the named Docker
+#      volumes (trading_logs, trading_data) into a downloadable artifact.
+#
+# Delete this workflow file once access is restored and the backup has
+# been downloaded and verified — it's a one-time recovery tool, not part
+# of normal operations.
+# =============================================================================
+
+name: Recover Oracle VM Access
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_public_key:
+        description: "SSH public key to authorize for the ubuntu user (paste the full line, e.g. 'ssh-ed25519 AAAA... comment'). Leave blank to skip and only run the backup."
+        required: false
+        default: ""
+
+jobs:
+  recover:
+    name: Recover access + back up data
+    runs-on: [self-hosted, linux, oracle-vm]
+
+    steps:
+      - name: Authorize SSH key
+        if: ${{ inputs.ssh_public_key != '' }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          touch ~/.ssh/authorized_keys
+          echo "${{ inputs.ssh_public_key }}" >> ~/.ssh/authorized_keys
+          sort -u -o ~/.ssh/authorized_keys ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          echo "SSH key installed for user: $(whoami)"
+
+      - name: Show connection info
+        run: |
+          echo "Runner user : $(whoami)"
+          echo "Home dir    : $HOME"
+          echo -n "Public IP   : "
+          curl -s -4 --max-time 5 ifconfig.me || echo "(could not determine)"
+          echo ""
+          echo ""
+          echo "Once the key step above ran, connect with:"
+          echo "  ssh -i <path-to-private-key> $(whoami)@<public-ip-above>"
+
+      - name: Back up critical data
+        run: |
+          set -uo pipefail
+          BK=/tmp/quantedge-vm-backup
+          rm -rf "$BK" && mkdir -p "$BK"
+          DEPLOY_DIR="/home/ubuntu/quantedge"
+
+          echo "--- App secrets/state ---"
+          if [ -f "$DEPLOY_DIR/.env" ]; then
+            cp "$DEPLOY_DIR/.env" "$BK/env.backup"
+            echo "captured .env"
+          else
+            echo "no .env found at $DEPLOY_DIR/.env"
+          fi
+
+          if [ -f "$DEPLOY_DIR/logs/kite_access_token.txt" ]; then
+            cp "$DEPLOY_DIR/logs/kite_access_token.txt" "$BK/"
+            echo "captured logs/kite_access_token.txt"
+          else
+            echo "no logs/kite_access_token.txt found"
+          fi
+
+          echo ""
+          echo "--- Docker volumes ---"
+          docker volume ls --format '{{.Name}}' || true
+          for VOL in $(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -Ei 'trading|quantedge' || true); do
+            echo "Backing up volume: $VOL"
+            docker run --rm -v "$VOL":/from -v "$BK":/to alpine \
+              sh -c "cd /from && tar czf /to/volume-${VOL}.tar.gz ." \
+              && echo "  ok: $VOL" || echo "  FAILED: $VOL"
+          done
+
+          echo ""
+          echo "--- crontab (ubuntu user) ---"
+          crontab -l > "$BK/crontab.txt" 2>/dev/null && echo "captured crontab" || echo "no crontab"
+
+          echo ""
+          echo "--- docker compose state (for reference) ---"
+          (cd "$DEPLOY_DIR" && docker compose ps) > "$BK/docker-compose-ps.txt" 2>&1 || true
+
+          tar czf /tmp/quantedge-vm-backup.tar.gz -C "$BK" .
+          echo ""
+          echo "Backup archive:"
+          ls -la /tmp/quantedge-vm-backup.tar.gz
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantedge-vm-backup
+          path: /tmp/quantedge-vm-backup.tar.gz
+          retention-days: 7
