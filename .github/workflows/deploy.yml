@@ -1,7 +1,7 @@
 # =============================================================================
 # .github/workflows/deploy.yml — CI/CD for QuantEdge Trading Agent
 #
-# Runs on: self-hosted runner installed on Oracle VM (zero GitHub minutes)
+# Runs on: self-hosted runner installed on an Oracle VM (zero GitHub minutes)
 #
 # Trigger: push to main or codex-v2-phase-rollout
 # Pipeline:
@@ -9,15 +9,22 @@
 #   2. Deploy — checkout → docker compose up --build → health check
 #   3. Notify — Telegram success/failure alert
 #
-# Setup self-hosted runner on Oracle VM:
+# Setup self-hosted runner on an Oracle VM:
 #   mkdir ~/actions-runner && cd ~/actions-runner
 #   # Download latest from: github.com/actions/runner/releases
 #   curl -o runner.tar.gz -L <runner-url>
 #   tar xzf runner.tar.gz
 #   ./config.sh --url https://github.com/Ishant99/quantedge \
 #               --token <token-from-Settings→Actions→Runners> \
-#               --name oracle-vm --labels oracle-vm,linux --unattended
+#               --name <unique-per-box, e.g. oracle-vm-2> --labels oracle-vm,linux --unattended
 #   sudo ./svc.sh install && sudo ./svc.sh start
+#
+# NOTE: job routing below (runs-on: [self-hosted, linux, oracle-vm]) matches
+# on --labels, not --name. --name only needs to be unique per registered
+# runner; --labels must stay exactly "oracle-vm,linux" on every box that
+# should receive deploys. If more than one runner carries these labels,
+# GitHub picks whichever is idle — keep only one active at a time by
+# removing retired runners from Settings → Actions → Runners.
 #
 # Required GitHub Secrets (Settings → Secrets):
 #   TELEGRAM_BOT_TOKEN — Telegram bot token for deploy notifications
